@@ -1,0 +1,53 @@
+name: Deploy client to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allow manual trigger from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only allow one deployment at a time
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install client dependencies
+        run: npm install
+
+      - name: Build client
+        # VITE_SERVER_URL must be set in repo Settings → Secrets and variables → Actions
+        # as a repository secret named VITE_SERVER_URL.
+        # Example value: wss://your-shmup-server.onrender.com
+        run: npm run client:build
+        env:
+          VITE_SERVER_URL: ${{ secrets.VITE_SERVER_URL }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

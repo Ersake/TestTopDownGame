@@ -1,0 +1,19 @@
+{
+  "name": "shmup-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "client:dev": "vite",
+    "client:build": "vite build",
+    "client:preview": "vite preview",
+    "server:dev": "npm run server:dev --prefix server",
+    "server:start": "npm run server:start --prefix server"
+  },
+  "dependencies": {
+    "colyseus.js": "^0.15.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+server/node_modules/
+
+# build outputs
+docs/
+server/dist/
+
+# env (contains secrets — never commit)
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
