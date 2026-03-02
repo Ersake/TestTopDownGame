@@ -16,32 +16,67 @@ class RoomClient {
     /** @type {Client | null} */
     _client = null;
 
-    /**
-     * Connect to the Colyseus server and join (or create) the "shmup_room".
-     * @returns {Promise<import("colyseus.js").Room>}
-     */
-    async connect() {
-        // Leave the existing room before joining a new one so the old session
-        // is properly closed and doesn't linger as a second player.
+    /** @private Initialise the Colyseus Client if not already done. */
+    _ensureClient() {
+        if (!this._client) {
+            const serverUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
+            this._client = new Client(serverUrl);
+        }
+    }
+
+    /** @private Leave the current room if one is open. */
+    async _leaveCurrentRoom() {
         if (this.room) {
             try { await this.room.leave(); } catch (e) { console.warn("[RoomClient] error leaving previous room:", e); }
             this.room = null;
             this.sessionId = null;
         }
+    }
 
-        const serverUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
-        this._client = new Client(serverUrl);
-
+    /**
+     * Create a new shmup_room on the server. The server assigns a 4-letter
+     * alpha room code as the room ID which callers can read from `room.id`.
+     * @returns {Promise<import("colyseus.js").Room>}
+     */
+    async createRoom() {
+        await this._leaveCurrentRoom();
+        this._ensureClient();
         try {
-            this.room = await this._client.joinOrCreate("shmup_room");
+            this.room = await this._client.create("shmup_room");
+            this.sessionId = this.room.sessionId;
+            console.log("[RoomClient] created room:", this.room.id, "session:", this.sessionId);
+        } catch (err) {
+            console.error("[RoomClient] failed to create room:", err);
+            throw err;
+        }
+        return this.room;
+    }
+
+    /**
+     * Join an existing room by its 4-letter code.
+     * @param {string} code - 4-letter alpha room code (case-insensitive)
+     * @returns {Promise<import("colyseus.js").Room>}
+     */
+    async joinRoom(code) {
+        await this._leaveCurrentRoom();
+        this._ensureClient();
+        try {
+            this.room = await this._client.joinById(code.toUpperCase());
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] joined room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
             console.error("[RoomClient] failed to join room:", err);
             throw err;
         }
-
         return this.room;
+    }
+
+    /**
+     * Leave the current room and reset the connection state.
+     * Call this when navigating away from the game (e.g., back to lobby).
+     */
+    async disconnect() {
+        await this._leaveCurrentRoom();
     }
 
     /**
