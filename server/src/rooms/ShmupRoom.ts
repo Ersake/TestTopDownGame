@@ -79,7 +79,9 @@ const nextId  = () => String(++_id);
 const rndInt  = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 const rndReal = (min: number, max: number) => Math.random() * (max - min) + min;
 
-// ─── Room ─────────────────────────────────────────────────────────────────────
+const INITIAL_SPAWN_DELAY = 500; // ms before the first enemy wave
+
+
 export class ShmupRoom extends Room<GameRoomState> {
     maxClients = 8;
 
@@ -106,6 +108,12 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     onJoin(client: Client) {
+        // When the previous game ended, reset everything so the rejoining
+        // player (or a fresh page-load) starts a clean new game.
+        if (this.state.gameOver) {
+            this.resetGame();
+        }
+
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
         ps.x = GAME_WIDTH / 2;
@@ -122,8 +130,24 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (!this.state.gameStarted) {
             this.state.gameStarted = true;
-            this.spawnTimer = 500; // first wave shortly after start
+            this.spawnTimer = INITIAL_SPAWN_DELAY; // first wave shortly after start
         }
+    }
+
+    // ─── Reset game state (called when a player rejoins after game over) ──────
+    private resetGame() {
+        this.state.players.clear();
+        this.serverPlayers.clear();
+        this.state.enemies.clear();
+        this.serverEnemies.clear();
+        this.state.playerBullets.clear();
+        this.serverPlayerBullets.clear();
+        this.state.enemyBullets.clear();
+        this.serverEnemyBullets.clear();
+
+        this.state.teamScore = 0;
+        this.state.gameOver  = false;
+        this.spawnTimer      = INITIAL_SPAWN_DELAY;
     }
 
     onLeave(client: Client) {
