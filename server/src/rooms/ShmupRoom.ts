@@ -82,6 +82,10 @@ const rndReal = (min: number, max: number) => Math.random() * (max - min) + min;
 const INITIAL_SPAWN_DELAY = 500; // ms before the first enemy wave
 
 
+// ─── Room code registry (process-local) ──────────────────────────────────────
+// Tracks codes in use to avoid collisions within the same server process.
+const _usedCodes = new Set<string>();
+
 export class ShmupRoom extends Room<GameRoomState> {
     maxClients = 8;
 
@@ -91,7 +95,18 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverEnemyBullets  = new Map<string, ServerBullet>();
     private spawnTimer          = 0; // ms until next enemy wave
 
+    private generateRoomCode(): string {
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let code: string;
+        do {
+            code = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * 26)]).join("");
+        } while (_usedCodes.has(code));
+        _usedCodes.add(code);
+        return code;
+    }
+
     onCreate() {
+        this.roomId = this.generateRoomCode();
         this.setState(new GameRoomState());
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
@@ -154,6 +169,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
         this.checkAllDead();
+    }
+
+    onDispose() {
+        _usedCodes.delete(this.roomId);
     }
 
     // ─── Main tick ────────────────────────────────────────────────────────────

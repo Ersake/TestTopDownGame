@@ -1,19 +1,11 @@
 import { Boot } from './scenes/Boot.js';
 import { Preloader } from './scenes/Preloader.js';
+import { Lobby } from './scenes/Lobby.js';
 import { Start } from './scenes/Start.js';
 import { Game } from './scenes/Game.js';
 import { GameOver } from './scenes/GameOver.js';
-import RoomClient from './network/RoomClient.js';
 
-async function launch() {
-    // Connect to the Colyseus server before Phaser starts so the Game scene
-    // can access RoomClient.room immediately on create().
-    try {
-        await RoomClient.connect();
-    } catch (err) {
-        console.error('Could not connect to game server. Running in offline mode.', err);
-    }
-
+function launch() {
     const config = {
         type: Phaser.AUTO,
         title: 'Shmup',
@@ -35,6 +27,7 @@ async function launch() {
         scene: [
             Boot,
             Preloader,
+            Lobby,
             Start,
             Game,
             GameOver,

@@ -89,10 +89,16 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(1, 0).setDepth(100);
 
-        this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nPress Space to Rejoin', {
+        this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nPress Space for Lobby', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
         }).setOrigin(0.5).setDepth(100).setVisible(false);
+
+        const roomCode = RoomClient.room ? RoomClient.room.id : '';
+        this.roomCodeText = this.add.text(this.centreX, 20, `Room: ${roomCode}`, {
+            fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
+            stroke: '#000000', strokeThickness: 6,
+        }).setOrigin(0.5, 0).setDepth(100);
     }
 
     // ─── Animations ───────────────────────────────────────────────────────────
@@ -235,12 +241,8 @@ export class Game extends Phaser.Scene {
                 this.cursors.space.once('down', async () => {
                     this.gameOverText.setVisible(false);
                     this.clearAllSprites();
-                    try {
-                        await RoomClient.connect();
-                        this.initNetworking();
-                    } catch (e) {
-                        console.error('Rejoin failed:', e);
-                    }
+                    await RoomClient.disconnect();
+                    this.scene.start('Lobby');
                 });
             }
         });
