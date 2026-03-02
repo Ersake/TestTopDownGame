@@ -21,6 +21,14 @@ class RoomClient {
      * @returns {Promise<import("colyseus.js").Room>}
      */
     async connect() {
+        // Leave the existing room before joining a new one so the old session
+        // is properly closed and doesn't linger as a second player.
+        if (this.room) {
+            try { await this.room.leave(); } catch (e) { console.warn("[RoomClient] error leaving previous room:", e); }
+            this.room = null;
+            this.sessionId = null;
+        }
+
         const serverUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
         this._client = new Client(serverUrl);
 
