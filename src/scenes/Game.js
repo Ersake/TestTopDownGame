@@ -52,8 +52,8 @@ export class Game extends Phaser.Scene {
         this.tileSize   = 32;
         this.mapOffset  = 10;
         this.mapTop     = -this.mapOffset * this.tileSize;
-        this.mapHeight  = Math.ceil(this.scale.height / this.tileSize) + this.mapOffset + 1;
-        this.mapWidth   = Math.ceil(this.scale.width  / this.tileSize);
+        this.mapHeight  = Math.ceil((this.scale.height * 2) / this.tileSize) + this.mapOffset + 1;
+        this.mapWidth   = Math.ceil((this.scale.width  * 2) / this.tileSize);
         this.scrollSpeed    = 1;
         this.scrollMovement = 0;
 
@@ -311,8 +311,7 @@ export class Game extends Phaser.Scene {
         }
         this.map = this.make.tilemap({ data: mapData, tileWidth: this.tileSize, tileHeight: this.tileSize });
         const tileset    = this.map.addTilesetImage(ASSETS.spritesheet.tiles.key);
-        this.groundLayer = this.map.createLayer(0, tileset, 0, this.mapTop);
-        this.groundLayer.setScrollFactor(0);
+        this.groundLayer = this.map.createLayer(0, tileset, -this.centreX, this.mapTop - this.centreY);
     }
 
     updateMap() {
