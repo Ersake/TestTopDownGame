@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "client:dev": "vite",
-    "client:build": "vite build",
+    "client:build": "vite build && npm run copy:static",
+    "copy:static": "mkdir -p docs/assets && cp phaser.js docs/phaser.js && cp assets/* docs/assets/",
     "client:preview": "vite preview",
     "server:dev": "npm run server:dev --prefix server",
     "server:start": "npm run server:start --prefix server"
