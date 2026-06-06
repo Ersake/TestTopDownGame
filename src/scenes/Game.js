@@ -7,7 +7,7 @@
  *   1. Listens for state changes on RoomClient.room
  *   2. Creates / destroys sprites to mirror server state
  *   3. Sends keyboard input to the server every frame (on change)
- *   4. Handles the scrolling tilemap background (purely visual)
+ *   4. Renders the server-owned deterministic tilemap background
  */
 import ASSETS from '../assets.js';
 import ANIMATION from '../animation.js';
@@ -19,6 +19,11 @@ const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
+const DEFAULT_WORLD_WIDTH = 1280;
+const DEFAULT_WORLD_HEIGHT = 720;
+const DEFAULT_TILE_SIZE = 32;
+const DEFAULT_MAP_SEED = 1337;
+const DEFAULT_TILE_PALETTE = '50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84';
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -47,15 +52,16 @@ export class Game extends Phaser.Scene {
         this.centreX = this.scale.width  * 0.5;
         this.centreY = this.scale.height * 0.5;
 
-        // Tilemap config
-        this.tiles      = [50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84];
-        this.tileSize   = 32;
-        this.mapOffset  = 10;
-        this.mapTop     = -this.mapOffset * this.tileSize;
-        this.mapHeight  = Math.ceil((this.scale.height * 2) / this.tileSize) + this.mapOffset + 1;
-        this.mapWidth   = Math.ceil((this.scale.width  * 2) / this.tileSize);
-        this.scrollSpeed    = 1;
-        this.scrollMovement = 0;
+        const state = RoomClient.room?.state;
+
+        // Server-owned map config. The client only renders this deterministic map.
+        this.worldWidth  = state?.worldWidth  || DEFAULT_WORLD_WIDTH;
+        this.worldHeight = state?.worldHeight || DEFAULT_WORLD_HEIGHT;
+        this.tileSize    = state?.tileSize    || DEFAULT_TILE_SIZE;
+        this.mapSeed     = state?.mapSeed     || DEFAULT_MAP_SEED;
+        this.tiles       = this.parseTilePalette(state?.tilePalette || DEFAULT_TILE_PALETTE);
+        this.mapWidth    = Math.ceil(this.worldWidth  / this.tileSize);
+        this.mapHeight   = Math.ceil(this.worldHeight / this.tileSize);
 
         // Sprite dictionaries keyed by server-side ID
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -299,41 +305,47 @@ export class Game extends Phaser.Scene {
         });
     }
 
-    // ─── Tilemap (visual only — unchanged from original) ─────────────────────
+    // ─── Tilemap (server-owned metadata, deterministic client render) ────────
     initMap() {
+        const rng = this.createSeededRandom(this.mapSeed);
         const mapData = [];
         for (let y = 0; y < this.mapHeight; y++) {
             const row = [];
             for (let x = 0; x < this.mapWidth; x++) {
-                row.push(Phaser.Math.RND.weightedPick(this.tiles));
+                row.push(this.pickTile(rng));
             }
             mapData.push(row);
         }
         this.map = this.make.tilemap({ data: mapData, tileWidth: this.tileSize, tileHeight: this.tileSize });
         const tileset    = this.map.addTilesetImage(ASSETS.spritesheet.tiles.key);
-        this.groundLayer = this.map.createLayer(0, tileset, -this.centreX, this.mapTop - this.centreY);
-    }
-
-    updateMap() {
-        this.scrollMovement += this.scrollSpeed;
-
-        if (this.scrollMovement >= this.tileSize) {
-            let tile, prev;
-            for (let y = this.mapHeight - 2; y > 0; y--) {
-                for (let x = 0; x < this.mapWidth; x++) {
-                    tile = this.map.getTileAt(x, y - 1);
-                    prev = this.map.getTileAt(x, y);
-                    prev.index = tile.index;
-                    if (y === 1) tile.index = Phaser.Math.RND.weightedPick(this.tiles);
-                }
-            }
-            this.scrollMovement -= this.tileSize;
-        }
-
-        this.groundLayer.y = this.mapTop + this.scrollMovement;
+        this.groundLayer = this.map.createLayer(0, tileset, 0, 0);
+        this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+    parseTilePalette(tilePalette) {
+        const tiles = String(tilePalette)
+            .split(',')
+            .map(tile => Number(tile.trim()))
+            .filter(Number.isFinite);
+        return tiles.length > 0 ? tiles : DEFAULT_TILE_PALETTE.split(',').map(Number);
+    }
+
+    createSeededRandom(seed) {
+        let value = seed >>> 0;
+        return () => {
+            value = (value + 0x6D2B79F5) >>> 0;
+            let result = value;
+            result = Math.imul(result ^ (result >>> 15), result | 1);
+            result ^= result + Math.imul(result ^ (result >>> 7), result | 61);
+            return ((result ^ (result >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    pickTile(rng) {
+        return this.tiles[Math.floor(rng() * this.tiles.length)];
+    }
+
     createAnimation(animation) {
         if (this.anims.exists(animation.key)) return;
 

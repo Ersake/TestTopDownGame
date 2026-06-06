@@ -39,6 +39,12 @@ export class GameRoomState extends Schema {
     @type({ map: PlayerBulletState }) playerBullets = new MapSchema<PlayerBulletState>();
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
 
+    @type("int32")  worldWidth:  number = 3840;
+    @type("int32")  worldHeight: number = 2160;
+    @type("int16")  tileSize:    number = 32;
+    @type("int32")  mapSeed:     number = 1337;
+    @type("string") tilePalette: string = "50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84";
+
     @type("int32")   teamScore:   number  = 0;
     @type("boolean") gameStarted: boolean = false;
     @type("boolean") gameOver:    boolean = false;

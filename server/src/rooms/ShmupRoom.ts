@@ -13,8 +13,12 @@ const PLAYER_ACCEL    = 1600;  // px/s^2
 const PLAYER_DRAG     = 2200;  // px/s^2
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
-const GAME_WIDTH      = 1280;
-const GAME_HEIGHT     = 720;
+const VIEW_WIDTH      = 1280;
+const VIEW_HEIGHT     = 720;
+const WORLD_WIDTH     = VIEW_WIDTH * 3;
+const WORLD_HEIGHT    = VIEW_HEIGHT * 3;
+const TILE_SIZE       = 32;
+const TILE_PALETTE    = "50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84";
 
 // Half-extents used for AABB collision detection
 const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
@@ -113,7 +117,13 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     onCreate() {
         this.roomId = this.generateRoomCode();
-        this.setState(new GameRoomState());
+        const state = new GameRoomState();
+        state.worldWidth = WORLD_WIDTH;
+        state.worldHeight = WORLD_HEIGHT;
+        state.tileSize = TILE_SIZE;
+        state.mapSeed = rndInt(1, 2147483647);
+        state.tilePalette = TILE_PALETTE;
+        this.setState(state);
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
 
@@ -137,8 +147,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
-        ps.x = GAME_WIDTH / 2;
-        ps.y = GAME_HEIGHT - 100;
+        ps.x = WORLD_WIDTH / 2;
+        ps.y = WORLD_HEIGHT / 2;
         ps.health = 1;
         this.state.players.set(client.sessionId, ps);
 
@@ -212,8 +222,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.vx = moveToward(sp.vx, targetVx, rate);
             sp.vy = moveToward(sp.vy, targetVy, rate);
 
-            player.x = Math.max(PLAYER_HW, Math.min(GAME_WIDTH  - PLAYER_HW, player.x + sp.vx * dtSec));
-            player.y = Math.max(PLAYER_HH, Math.min(GAME_HEIGHT - PLAYER_HH, player.y + sp.vy * dtSec));
+            player.x = Math.max(PLAYER_HW, Math.min(WORLD_WIDTH  - PLAYER_HW, player.x + sp.vx * dtSec));
+            player.y = Math.max(PLAYER_HH, Math.min(WORLD_HEIGHT - PLAYER_HH, player.y + sp.vy * dtSec));
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
             if (fire && sp.fireCounter === 0) {
@@ -238,7 +248,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sb = this.serverPlayerBullets.get(id);
             if (!sb) { dead.push(id); return; }
             b.y += sb.vy * dtSec;
-            if (b.y < 0) dead.push(id);
+            if (b.y < -PB_HH || b.y > WORLD_HEIGHT + PB_HH || b.x < -PB_HW || b.x > WORLD_WIDTH + PB_HW) dead.push(id);
         });
         dead.forEach(id => { this.state.playerBullets.delete(id); this.serverPlayerBullets.delete(id); });
     }
@@ -314,7 +324,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sb = this.serverEnemyBullets.get(id);
             if (!sb) { dead.push(id); return; }
             b.y += sb.vy * dtSec;
-            if (b.y > GAME_HEIGHT) dead.push(id);
+            if (b.y > WORLD_HEIGHT + EB_HH || b.y < -EB_HH || b.x < -EB_HW || b.x > WORLD_WIDTH + EB_HW) dead.push(id);
         });
         dead.forEach(id => { this.state.enemyBullets.delete(id); this.serverEnemyBullets.delete(id); });
     }
