@@ -16,9 +16,9 @@ import RoomClient from '../network/RoomClient.js';
 
 // Sprite frame constants (matching the original game objects)
 const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
-const LOCAL_SHIP_FRAME  = 8;   // ships.png frame for the local player
-const REMOTE_SHIP_FRAME = 0;   // ships.png frame for remote players
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
+const DEFAULT_PLAYER_DIRECTION = 'N';
+const PLAYER_DISPLAY_SIZE = 128;
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -35,9 +35,10 @@ export class Game extends Phaser.Scene {
     }
 
     update() {
-        this.updateMap();
         if (!this.gameStarted) return;
         this.sendInput();
+        this.updateLocalPlayerAnimation();
+        this.updateRemotePlayerAnimations();
     }
 
     // ─── Variables ────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ export class Game extends Phaser.Scene {
         // Sprite dictionaries keyed by server-side ID
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerSprites       = new Map();
+        this.playerAnimationState = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -72,48 +74,52 @@ export class Game extends Phaser.Scene {
         this.tutorialText = this.add.text(this.centreX, this.centreY, 'Waiting for server…', {
             fontFamily: 'Arial Black', fontSize: 42, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
-        }).setOrigin(0.5).setDepth(100);
+        }).setOrigin(0.5).setDepth(100).setScrollFactor(0);
 
         this.scoreText = this.add.text(20, 20, 'Score: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
-        }).setDepth(100);
+        }).setDepth(100).setScrollFactor(0);
 
         this.killsText = this.add.text(this.scale.width - 20, 20, 'Kills: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffff00',
             stroke: '#000000', strokeThickness: 8,
-        }).setOrigin(1, 0).setDepth(100);
+        }).setOrigin(1, 0).setDepth(100).setScrollFactor(0);
 
         this.playerCountText = this.add.text(this.scale.width - 20, 60, 'Players: 0', {
             fontFamily: 'Arial Black', fontSize: 22, color: '#aaffaa',
             stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(1, 0).setDepth(100);
+        }).setOrigin(1, 0).setDepth(100).setScrollFactor(0);
 
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nPress Space for Lobby', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
-        }).setOrigin(0.5).setDepth(100).setVisible(false);
+        }).setOrigin(0.5).setDepth(100).setVisible(false).setScrollFactor(0);
 
         const roomCode = RoomClient.room ? RoomClient.room.id : '';
         this.roomCodeText = this.add.text(this.centreX, 20, `Room: ${roomCode}`, {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
             stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(0.5, 0).setDepth(100);
+        }).setOrigin(0.5, 0).setDepth(100).setScrollFactor(0);
     }
 
     // ─── Animations ───────────────────────────────────────────────────────────
     initAnimations() {
-        this.anims.create({
-            key: ANIMATION.explosion.key,
-            frames: this.anims.generateFrameNumbers(ANIMATION.explosion.texture, ANIMATION.explosion.config),
-            frameRate: ANIMATION.explosion.frameRate,
-            repeat: ANIMATION.explosion.repeat,
-        });
+        this.createAnimation(ANIMATION.explosion);
+
+        Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
     initInput() {
-        this.cursors = this.input.keyboard.createCursorKeys();
+        this.keys = this.input.keyboard.addKeys({
+            up: Phaser.Input.Keyboard.KeyCodes.W,
+            left: Phaser.Input.Keyboard.KeyCodes.A,
+            down: Phaser.Input.Keyboard.KeyCodes.S,
+            right: Phaser.Input.Keyboard.KeyCodes.D,
+            fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
+        });
     }
 
     // ─── Networking ───────────────────────────────────────────────────────────
@@ -129,20 +135,43 @@ export class Game extends Phaser.Scene {
         // ── Players ──────────────────────────────────────────────────────────
         state.players.onAdd((player, sessionId) => {
             const isLocal = sessionId === RoomClient.sessionId;
-            const frame   = isLocal ? LOCAL_SHIP_FRAME : REMOTE_SHIP_FRAME;
-            const sprite  = this.add.sprite(player.x, player.y, ASSETS.spritesheet.ships.key, frame)
-                .setDepth(100);
+            const sprite  = this.add.sprite(player.x, player.y, ASSETS.spritesheet.playerIdle.key, 0)
+                .setDepth(100)
+                .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
 
             if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
 
             this.playerSprites.set(sessionId, sprite);
+            this.playerAnimationState.set(sessionId, {
+                direction: DEFAULT_PLAYER_DIRECTION,
+                moving: false,
+                lastMovedAt: 0,
+                x: player.x,
+                y: player.y,
+            });
+            this.setPlayerAnimation(sessionId, false, DEFAULT_PLAYER_DIRECTION);
 
             player.onChange(() => {
                 const s = this.playerSprites.get(sessionId);
                 if (!s) return;
+                const animationState = this.playerAnimationState.get(sessionId);
+                const previousX = animationState ? animationState.x : player.x;
+                const previousY = animationState ? animationState.y : player.y;
+
                 // Lerp toward server position for smooth rendering
                 s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
                 s.y = Phaser.Math.Linear(s.y, player.y, 0.3);
+
+                if (animationState) {
+                    const direction = this.getDirectionFromVector(player.x - previousX, player.y - previousY);
+                    if (direction) {
+                        animationState.lastMovedAt = this.time.now;
+                    }
+                    animationState.moving = !!direction;
+                    if (!isLocal) this.setPlayerAnimation(sessionId, animationState.moving, direction);
+                    animationState.x = player.x;
+                    animationState.y = player.y;
+                }
 
                 if (player.isDead && s.visible) {
                     this.addExplosion(s.x, s.y);
@@ -151,6 +180,8 @@ export class Game extends Phaser.Scene {
             });
 
             if (isLocal) {
+                this.cameras.main.startFollow(sprite, false, 1, 1);
+
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
                 });
@@ -163,6 +194,7 @@ export class Game extends Phaser.Scene {
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
             this.playerSprites.delete(sessionId);
+            this.playerAnimationState.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
@@ -238,7 +270,7 @@ export class Game extends Phaser.Scene {
                 this.gameStarted = false;
                 this.gameOverText.setVisible(true);
 
-                this.cursors.space.once('down', async () => {
+                this.keys.fire.once('down', async () => {
                     this.gameOverText.setVisible(false);
                     this.clearAllSprites();
                     await RoomClient.disconnect();
@@ -259,11 +291,11 @@ export class Game extends Phaser.Scene {
     // ─── Input sender ─────────────────────────────────────────────────────────
     sendInput() {
         RoomClient.sendInput({
-            left:  this.cursors.left.isDown,
-            right: this.cursors.right.isDown,
-            up:    this.cursors.up.isDown,
-            down:  this.cursors.down.isDown,
-            fire:  this.cursors.space.isDown,
+            left:  this.keys.left.isDown,
+            right: this.keys.right.isDown,
+            up:    this.keys.up.isDown,
+            down:  this.keys.down.isDown,
+            fire:  this.keys.fire.isDown,
         });
     }
 
@@ -280,6 +312,7 @@ export class Game extends Phaser.Scene {
         this.map = this.make.tilemap({ data: mapData, tileWidth: this.tileSize, tileHeight: this.tileSize });
         const tileset    = this.map.addTilesetImage(ASSETS.spritesheet.tiles.key);
         this.groundLayer = this.map.createLayer(0, tileset, 0, this.mapTop);
+        this.groundLayer.setScrollFactor(0);
     }
 
     updateMap() {
@@ -302,6 +335,66 @@ export class Game extends Phaser.Scene {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+    createAnimation(animation) {
+        if (this.anims.exists(animation.key)) return;
+
+        this.anims.create({
+            key: animation.key,
+            frames: this.anims.generateFrameNumbers(animation.texture, animation.config),
+            frameRate: animation.frameRate,
+            repeat: animation.repeat,
+        });
+    }
+
+    updateLocalPlayerAnimation() {
+        const sessionId = RoomClient.sessionId;
+        if (!sessionId || !this.playerSprites.has(sessionId)) return;
+
+        const dx = Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
+        const dy = Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
+        const direction = this.getDirectionFromVector(dx, dy);
+
+        this.setPlayerAnimation(sessionId, !!direction, direction);
+    }
+
+    updateRemotePlayerAnimations() {
+        this.playerAnimationState.forEach((animationState, sessionId) => {
+            if (sessionId === RoomClient.sessionId || !animationState.moving) return;
+
+            if (this.time.now - animationState.lastMovedAt > 150) {
+                animationState.moving = false;
+                this.setPlayerAnimation(sessionId, false, null);
+            }
+        });
+    }
+
+    getDirectionFromVector(dx, dy) {
+        const threshold = 0.1;
+        const horizontal = Math.abs(dx) > threshold ? (dx > 0 ? 'E' : 'W') : '';
+        const vertical = Math.abs(dy) > threshold ? (dy > 0 ? 'S' : 'N') : '';
+
+        if (!horizontal && !vertical) return null;
+        if (horizontal && vertical) return `${vertical}${horizontal}`;
+        return horizontal || vertical;
+    }
+
+    setPlayerAnimation(sessionId, moving, direction) {
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!sprite || !animationState || !sprite.visible) return;
+
+        const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
+        animationState.direction = nextDirection;
+
+        const mode = moving ? 'run' : 'idle';
+        const animation = ANIMATION.player[mode][nextDirection];
+        if (!animation) return;
+
+        if (sprite.anims.currentAnim?.key !== animation.key || !sprite.anims.isPlaying) {
+            sprite.play(animation.key);
+        }
+    }
+
     addExplosion(x, y) {
         new Explosion(this, x, y);
     }
@@ -312,6 +405,7 @@ export class Game extends Phaser.Scene {
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         this.playerSprites.clear();
+        this.playerAnimationState.clear();
         this.enemySprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();

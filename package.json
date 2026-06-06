@@ -6,7 +6,7 @@
   "scripts": {
     "client:dev": "vite",
     "client:build": "vite build && npm run copy:static",
-    "copy:static": "mkdir -p docs/assets && cp phaser.js docs/phaser.js && cp assets/* docs/assets/",
+    "copy:static": "node -e \"const fs=require('fs'); fs.mkdirSync('docs/assets',{recursive:true}); fs.copyFileSync('phaser.js','docs/phaser.js'); for (const file of fs.readdirSync('assets')) fs.copyFileSync('assets/'+file,'docs/assets/'+file);\"",
     "client:preview": "vite preview",
     "server:dev": "npm run server:dev --prefix server",
     "server:start": "npm run server:start --prefix server"

@@ -8,16 +8,16 @@ import {
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
-const PLAYER_ACCEL    = 3000;  // px/s²  (50 per frame × 60 fps)
-const PLAYER_MAX_VEL  = 500;   // px/s
-const PLAYER_DRAG     = 1000;  // px/s²
+const PLAYER_MAX_VEL  = 300;   // px/s
+const PLAYER_ACCEL    = 1600;  // px/s^2
+const PLAYER_DRAG     = 2200;  // px/s^2
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
 const GAME_WIDTH      = 1280;
 const GAME_HEIGHT     = 720;
 
 // Half-extents used for AABB collision detection
-const PLAYER_HW  = 28;  const PLAYER_HH  = 28;
+const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
@@ -80,6 +80,12 @@ const rndInt  = (min: number, max: number) => Math.floor(Math.random() * (max - 
 const rndReal = (min: number, max: number) => Math.random() * (max - min) + min;
 
 const INITIAL_SPAWN_DELAY = 500; // ms before the first enemy wave
+
+function moveToward(current: number, target: number, maxDelta: number): number {
+    if (current < target) return Math.min(current + maxDelta, target);
+    if (current > target) return Math.max(current - maxDelta, target);
+    return target;
+}
 
 
 // ─── Room code registry (process-local) ──────────────────────────────────────
@@ -186,8 +192,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
 
-        this.spawnTimer -= dt;
-        if (this.spawnTimer <= 0) this.spawnWave();
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
@@ -197,31 +201,24 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (!sp || !sp.alive) return;
             const { left, right, up, down, fire } = sp.input;
 
-            if (left)        sp.vx -= PLAYER_ACCEL * dtSec;
-            if (right)       sp.vx += PLAYER_ACCEL * dtSec;
-            if (!left && !right) {
-                sp.vx > 0
-                    ? (sp.vx = Math.max(0, sp.vx - PLAYER_DRAG * dtSec))
-                    : (sp.vx = Math.min(0, sp.vx + PLAYER_DRAG * dtSec));
-            }
-            if (up)          sp.vy -= PLAYER_ACCEL * dtSec;
-            if (down)        sp.vy += PLAYER_ACCEL * dtSec;
-            if (!up && !down) {
-                sp.vy > 0
-                    ? (sp.vy = Math.max(0, sp.vy - PLAYER_DRAG * dtSec))
-                    : (sp.vy = Math.min(0, sp.vy + PLAYER_DRAG * dtSec));
-            }
+            const inputX = Number(right) - Number(left);
+            const inputY = Number(down) - Number(up);
+            const inputLength = Math.hypot(inputX, inputY);
 
-            sp.vx = Math.max(-PLAYER_MAX_VEL, Math.min(PLAYER_MAX_VEL, sp.vx));
-            sp.vy = Math.max(-PLAYER_MAX_VEL, Math.min(PLAYER_MAX_VEL, sp.vy));
+            const targetVx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
+            const targetVy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
+            const rate = (inputLength > 0 ? PLAYER_ACCEL : PLAYER_DRAG) * dtSec;
 
-            player.x = Math.max(32, Math.min(GAME_WIDTH  - 32, player.x + sp.vx * dtSec));
-            player.y = Math.max(32, Math.min(GAME_HEIGHT - 32, player.y + sp.vy * dtSec));
+            sp.vx = moveToward(sp.vx, targetVx, rate);
+            sp.vy = moveToward(sp.vy, targetVy, rate);
+
+            player.x = Math.max(PLAYER_HW, Math.min(GAME_WIDTH  - PLAYER_HW, player.x + sp.vx * dtSec));
+            player.y = Math.max(PLAYER_HH, Math.min(GAME_HEIGHT - PLAYER_HH, player.y + sp.vy * dtSec));
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
             if (fire && sp.fireCounter === 0) {
                 sp.fireCounter = FIRE_RATE_MS;
-                this.spawnPlayerBullet(player.x, player.y - 32, 1, sid);
+                this.spawnPlayerBullet(player.x, player.y - PLAYER_HH, 1, sid);
             }
         });
     }

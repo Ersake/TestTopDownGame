@@ -26,5 +26,19 @@ export default {
                 frameHeight: 32
             }]
         },
+        playerRun: {
+            key: 'player-run',
+            args: ['assets/Run.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        playerIdle: {
+            key: 'player-idle',
+            args: ['assets/Idle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
     }
 };
