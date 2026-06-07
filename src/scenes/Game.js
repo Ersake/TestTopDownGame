@@ -31,7 +31,7 @@ const TEST_TREE_TRUNK_Y_OFFSET = -18;
 const TEST_TREE_TRUNK_HALF_WIDTH = 8;
 const TEST_TREE_TRUNK_HALF_HEIGHT = 18;
 const ATTACK_HIT_RADIUS = 36;
-const ATTACK_HIT_OFFSET = 54;
+const ATTACK_HIT_OFFSET = 36;
 const DIRECTION_VECTORS = {
     E: { x: 1, y: 0 },
     SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
