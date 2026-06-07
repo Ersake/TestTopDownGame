@@ -4,6 +4,10 @@ export default {
             key: 'punch-whoosh',
             args: ['assets/jofae-swing-whoosh-110410.mp3']
         },
+        woodHit: {
+            key: 'wood-hit',
+            args: ['assets/woodhit.mp3']
+        },
     },
     'image': {
         treeBottom: {

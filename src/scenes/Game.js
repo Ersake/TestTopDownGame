@@ -26,6 +26,22 @@ const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
+const WOOD_HIT_SOUND_VOLUME = 0.75;
+const TEST_TREE_TRUNK_Y_OFFSET = -18;
+const TEST_TREE_TRUNK_HALF_WIDTH = 8;
+const TEST_TREE_TRUNK_HALF_HEIGHT = 18;
+const ATTACK_HIT_RADIUS = 36;
+const ATTACK_HIT_OFFSET = 54;
+const DIRECTION_VECTORS = {
+    E: { x: 1, y: 0 },
+    SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+    S: { x: 0, y: 1 },
+    SW: { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+    W: { x: -1, y: 0 },
+    NW: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+    N: { x: 0, y: -1 },
+    NE: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+};
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -477,6 +493,9 @@ export class Game extends Phaser.Scene {
         }
 
         this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
+        if (this.playerAttackHitsTestTree(sprite, direction)) {
+            this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+        }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
             animationState.attacking = false;
@@ -486,6 +505,33 @@ export class Game extends Phaser.Scene {
                 this.setPlayerAnimation(sessionId, animationState.moving, null);
             }
         });
+    }
+
+    playerAttackHitsTestTree(sprite, direction) {
+        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS[DEFAULT_PLAYER_DIRECTION];
+        const attackX = sprite.x + vector.x * ATTACK_HIT_OFFSET;
+        const attackY = sprite.y + vector.y * ATTACK_HIT_OFFSET;
+        const treeX = this.worldWidth * 0.5 + TEST_TREE_OFFSET_X;
+        const treeY = this.worldHeight * 0.5 + TEST_TREE_TRUNK_Y_OFFSET;
+
+        return this.circleOverlapsAabb(
+            attackX,
+            attackY,
+            ATTACK_HIT_RADIUS,
+            treeX,
+            treeY,
+            TEST_TREE_TRUNK_HALF_WIDTH,
+            TEST_TREE_TRUNK_HALF_HEIGHT,
+        );
+    }
+
+    circleOverlapsAabb(circleX, circleY, radius, rectX, rectY, rectHalfWidth, rectHalfHeight) {
+        const closestX = Phaser.Math.Clamp(circleX, rectX - rectHalfWidth, rectX + rectHalfWidth);
+        const closestY = Phaser.Math.Clamp(circleY, rectY - rectHalfHeight, rectY + rectHalfHeight);
+        const dx = circleX - closestX;
+        const dy = circleY - closestY;
+
+        return dx * dx + dy * dy <= radius * radius;
     }
 
     setPlayerAnimation(sessionId, moving, direction) {
