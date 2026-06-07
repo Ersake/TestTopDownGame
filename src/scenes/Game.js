@@ -28,10 +28,11 @@ const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TEST_TREE_TRUNK_Y_OFFSET = -18;
-const TEST_TREE_TRUNK_HALF_WIDTH = 8;
+const TEST_TREE_TRUNK_HALF_WIDTH = 5;
 const TEST_TREE_TRUNK_HALF_HEIGHT = 18;
 const ATTACK_HIT_RADIUS = 36;
 const ATTACK_HIT_OFFSET = 36;
+const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const DIRECTION_VECTORS = {
     E: { x: 1, y: 0 },
     SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
@@ -533,7 +534,7 @@ export class Game extends Phaser.Scene {
     playerAttackHitsTestTree(sprite, direction) {
         const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS[DEFAULT_PLAYER_DIRECTION];
         const attackX = sprite.x + vector.x * ATTACK_HIT_OFFSET;
-        const attackY = sprite.y + vector.y * ATTACK_HIT_OFFSET;
+        const attackY = sprite.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * ATTACK_HIT_OFFSET;
         const treeX = this.worldWidth * 0.5 + TEST_TREE_OFFSET_X;
         const treeY = this.worldHeight * 0.5 + TEST_TREE_TRUNK_Y_OFFSET;
 

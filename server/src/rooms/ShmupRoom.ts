@@ -26,11 +26,11 @@ const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
-const PLAYER_TREE_HW = 18;
-const PLAYER_TREE_HH = 10;
+const PLAYER_TREE_FOOT_RADIUS = 5;
 const PLAYER_TREE_Y_OFFSET = 36;
-const TEST_TREE_TRUNK_HW = 8;
+const TEST_TREE_TRUNK_HW = 5;
 const TEST_TREE_TRUNK_HH = 18;
+const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 
@@ -65,6 +65,16 @@ function splineGetPoint(points: [number, number][], t: number): { x: number; y: 
 function overlaps(ax: number, ay: number, ahw: number, ahh: number,
                   bx: number, by: number, bhw: number, bhh: number): boolean {
     return Math.abs(ax - bx) < ahw + bhw && Math.abs(ay - by) < ahh + bhh;
+}
+
+function circleOverlapsAabb(cx: number, cy: number, radius: number,
+                            bx: number, by: number, bhw: number, bhh: number): boolean {
+    const closestX = clamp(cx, bx - bhw, bx + bhw);
+    const closestY = clamp(cy, by - bhh, by + bhh);
+    const dx = cx - closestX;
+    const dy = cy - closestY;
+
+    return dx * dx + dy * dy < radius * radius;
 }
 
 // ─── Enemy path data (identical to EnemyFlying.js) ────────────────────────────
@@ -287,11 +297,10 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private collidesWithTestTreeTrunk(playerX: number, playerY: number): boolean {
-        return overlaps(
+        return circleOverlapsAabb(
             playerX,
             playerY + PLAYER_TREE_Y_OFFSET,
-            PLAYER_TREE_HW,
-            PLAYER_TREE_HH,
+            PLAYER_TREE_FOOT_RADIUS,
             TEST_TREE_TRUNK_X,
             TEST_TREE_TRUNK_Y,
             TEST_TREE_TRUNK_HW,
@@ -300,14 +309,27 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private movePlayerWithTestTree(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
-        const clampedX = clamp(nextX, PLAYER_HW, WORLD_WIDTH - PLAYER_HW);
-        const clampedY = clamp(nextY, PLAYER_HH, WORLD_HEIGHT - PLAYER_HH);
-        const resolvedX = this.collidesWithTestTreeTrunk(clampedX, player.y) ? player.x : clampedX;
+        const dx = nextX - player.x;
+        const dy = nextY - player.y;
+        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / MAX_PLAYER_MOVE_STEP));
+        const stepX = dx / steps;
+        const stepY = dy / steps;
+        let resolvedX = player.x;
+        let resolvedY = player.y;
 
-        return {
-            x: resolvedX,
-            y: this.collidesWithTestTreeTrunk(resolvedX, clampedY) ? player.y : clampedY,
-        };
+        for (let i = 0; i < steps; i++) {
+            const candidateX = clamp(resolvedX + stepX, PLAYER_HW, WORLD_WIDTH - PLAYER_HW);
+            if (!this.collidesWithTestTreeTrunk(candidateX, resolvedY)) {
+                resolvedX = candidateX;
+            }
+
+            const candidateY = clamp(resolvedY + stepY, PLAYER_HH, WORLD_HEIGHT - PLAYER_HH);
+            if (!this.collidesWithTestTreeTrunk(resolvedX, candidateY)) {
+                resolvedY = candidateY;
+            }
+        }
+
+        return { x: resolvedX, y: resolvedY };
     }
 
     // ─── Player bullets ───────────────────────────────────────────────────────
