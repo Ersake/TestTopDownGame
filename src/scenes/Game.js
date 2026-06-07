@@ -19,6 +19,8 @@ const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
+const TEST_TREE_HALF_SIZE = 96;
+const TEST_TREE_OFFSET_X = 240;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
@@ -363,10 +365,26 @@ export class Game extends Phaser.Scene {
         this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, WORLD_BACKGROUND_COLOR)
             .setOrigin(0)
             .setDepth(-100);
+        this.initTestTree();
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+    initTestTree() {
+        const treeX = this.worldWidth * 0.5 + TEST_TREE_OFFSET_X;
+        const treeY = this.worldHeight * 0.5;
+
+        this.testTreeBottom = this.add.image(treeX, treeY, ASSETS.image.treeBottom.key)
+            .setOrigin(0.5, 1)
+            .setDisplaySize(TEST_TREE_HALF_SIZE, TEST_TREE_HALF_SIZE)
+            .setDepth(90);
+
+        this.testTreeTop = this.add.image(treeX, treeY, ASSETS.image.treeTop.key)
+            .setOrigin(0.5, 1)
+            .setDisplaySize(TEST_TREE_HALF_SIZE, TEST_TREE_HALF_SIZE)
+            .setDepth(110);
+    }
+
     isLocalSession(sessionId) {
         return !!this.localSessionId && sessionId === this.localSessionId;
     }

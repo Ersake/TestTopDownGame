@@ -14,7 +14,11 @@ function launch() {
         width: 1280,
         height: 720,
         backgroundColor: '#000000',
-        pixelArt: false,
+        pixelArt: true,
+        render: {
+            antialias: false,
+            roundPixels: true,
+        },
         // Physics is kept for the scrolling tilemap; game object collisions are
         // server-authoritative so sprites no longer need Arcade bodies.
         physics: {

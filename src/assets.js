@@ -5,12 +5,16 @@ export default {
             args: ['assets/jofae-swing-whoosh-110410.mp3']
         },
     },
-    // 'image': {
-    //     spikes: {
-    //         key: 'spikes',
-    //         args: ['assets/spikes.png']
-    //     },
-    // },
+    'image': {
+        treeBottom: {
+            key: 'tree-bottom',
+            args: ['assets/treebottom.png']
+        },
+        treeTop: {
+            key: 'tree-top',
+            args: ['assets/treetop.png']
+        },
+    },
     'spritesheet': {
         ships: {
             key: 'ships',

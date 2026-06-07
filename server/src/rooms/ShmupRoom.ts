@@ -17,12 +17,22 @@ const VIEW_WIDTH      = 1280;
 const VIEW_HEIGHT     = 720;
 const WORLD_WIDTH     = VIEW_WIDTH * 3;
 const WORLD_HEIGHT    = VIEW_HEIGHT * 3;
+const TEST_TREE_OFFSET_X = 240;
+const TEST_TREE_X = WORLD_WIDTH / 2 + TEST_TREE_OFFSET_X;
+const TEST_TREE_Y = WORLD_HEIGHT / 2;
+const TEST_TREE_TRUNK_X = TEST_TREE_X;
+const TEST_TREE_TRUNK_Y = TEST_TREE_Y - 18;
 
 // Half-extents used for AABB collision detection
 const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
+const PLAYER_TREE_HW = 18;
+const PLAYER_TREE_HH = 10;
+const PLAYER_TREE_Y_OFFSET = 36;
+const TEST_TREE_TRUNK_HW = 8;
+const TEST_TREE_TRUNK_HH = 18;
 
 // ─── CatmullRom spline (replicates Phaser.Curves.Spline.getPoint) ─────────────
 function catmullRom(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -87,6 +97,10 @@ function moveToward(current: number, target: number, maxDelta: number): number {
     if (current < target) return Math.min(current + maxDelta, target);
     if (current > target) return Math.max(current - maxDelta, target);
     return target;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
 }
 
 function directionFromInput(inputX: number, inputY: number): string | null {
@@ -239,8 +253,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.vx = moveToward(sp.vx, targetVx, rate);
             sp.vy = moveToward(sp.vy, targetVy, rate);
 
-            player.x = Math.max(PLAYER_HW, Math.min(WORLD_WIDTH  - PLAYER_HW, player.x + sp.vx * dtSec));
-            player.y = Math.max(PLAYER_HH, Math.min(WORLD_HEIGHT - PLAYER_HH, player.y + sp.vy * dtSec));
+            const nextX = player.x + sp.vx * dtSec;
+            const nextY = player.y + sp.vy * dtSec;
+            const resolved = this.movePlayerWithTestTree(player, nextX, nextY);
+            if (resolved.x === player.x && nextX !== player.x) sp.vx = 0;
+            if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
+            player.x = resolved.x;
+            player.y = resolved.y;
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
             if (fire && sp.fireCounter === 0) {
@@ -248,6 +267,30 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.spawnPlayerBullet(player.x, player.y - PLAYER_HH, 1, sid);
             }
         });
+    }
+
+    private collidesWithTestTreeTrunk(playerX: number, playerY: number): boolean {
+        return overlaps(
+            playerX,
+            playerY + PLAYER_TREE_Y_OFFSET,
+            PLAYER_TREE_HW,
+            PLAYER_TREE_HH,
+            TEST_TREE_TRUNK_X,
+            TEST_TREE_TRUNK_Y,
+            TEST_TREE_TRUNK_HW,
+            TEST_TREE_TRUNK_HH,
+        );
+    }
+
+    private movePlayerWithTestTree(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
+        const clampedX = clamp(nextX, PLAYER_HW, WORLD_WIDTH - PLAYER_HW);
+        const clampedY = clamp(nextY, PLAYER_HH, WORLD_HEIGHT - PLAYER_HH);
+        const resolvedX = this.collidesWithTestTreeTrunk(clampedX, player.y) ? player.x : clampedX;
+
+        return {
+            x: resolvedX,
+            y: this.collidesWithTestTreeTrunk(resolvedX, clampedY) ? player.y : clampedY,
+        };
     }
 
     // ─── Player bullets ───────────────────────────────────────────────────────
