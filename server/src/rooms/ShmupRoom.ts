@@ -17,8 +17,6 @@ const VIEW_WIDTH      = 1280;
 const VIEW_HEIGHT     = 720;
 const WORLD_WIDTH     = VIEW_WIDTH * 3;
 const WORLD_HEIGHT    = VIEW_HEIGHT * 3;
-const TILE_SIZE       = 32;
-const TILE_PALETTE    = "50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84";
 
 // Half-extents used for AABB collision detection
 const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
@@ -91,7 +89,6 @@ function moveToward(current: number, target: number, maxDelta: number): number {
     return target;
 }
 
-
 // ─── Room code registry (process-local) ──────────────────────────────────────
 // Tracks codes in use to avoid collisions within the same server process.
 const _usedCodes = new Set<string>();
@@ -120,9 +117,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const state = new GameRoomState();
         state.worldWidth = WORLD_WIDTH;
         state.worldHeight = WORLD_HEIGHT;
-        state.tileSize = TILE_SIZE;
-        state.mapSeed = rndInt(1, 2147483647);
-        state.tilePalette = TILE_PALETTE;
         this.setState(state);
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);

@@ -7,7 +7,7 @@
  *   1. Listens for state changes on RoomClient.room
  *   2. Creates / destroys sprites to mirror server state
  *   3. Sends keyboard input to the server every frame (on change)
- *   4. Renders the server-owned deterministic tilemap background
+ *   4. Renders a flat world background inside server-owned bounds
  */
 import ASSETS from '../assets.js';
 import ANIMATION from '../animation.js';
@@ -21,9 +21,8 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
-const DEFAULT_TILE_SIZE = 32;
-const DEFAULT_MAP_SEED = 1337;
-const DEFAULT_TILE_PALETTE = '50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84';
+const WORLD_BACKGROUND_COLOR = 0x2f7d32;
+const WORLD_BACKGROUND_CSS = '#2f7d32';
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -34,7 +33,7 @@ export class Game extends Phaser.Scene {
         this.initVariables();
         this.initGameUi();
         this.initAnimations();
-        this.initMap();
+        this.initWorldBackground();
         this.initInput();
         this.initNetworking();
     }
@@ -59,14 +58,9 @@ export class Game extends Phaser.Scene {
 
         const state = RoomClient.room?.state;
 
-        // Server-owned map config. The client only renders this deterministic map.
+        // Server-owned world bounds. The client only renders inside this space.
         this.worldWidth  = state?.worldWidth  || DEFAULT_WORLD_WIDTH;
         this.worldHeight = state?.worldHeight || DEFAULT_WORLD_HEIGHT;
-        this.tileSize    = state?.tileSize    || DEFAULT_TILE_SIZE;
-        this.mapSeed     = state?.mapSeed     || DEFAULT_MAP_SEED;
-        this.tiles       = this.parseTilePalette(state?.tilePalette || DEFAULT_TILE_PALETTE);
-        this.mapWidth    = Math.ceil(this.worldWidth  / this.tileSize);
-        this.mapHeight   = Math.ceil(this.worldHeight / this.tileSize);
 
         // Sprite dictionaries keyed by server-side ID
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -341,47 +335,16 @@ export class Game extends Phaser.Scene {
         });
     }
 
-    // ─── Tilemap (server-owned metadata, deterministic client render) ────────
-    initMap() {
-        const rng = this.createSeededRandom(this.mapSeed);
-        const mapData = [];
-        for (let y = 0; y < this.mapHeight; y++) {
-            const row = [];
-            for (let x = 0; x < this.mapWidth; x++) {
-                row.push(this.pickTile(rng));
-            }
-            mapData.push(row);
-        }
-        this.map = this.make.tilemap({ data: mapData, tileWidth: this.tileSize, tileHeight: this.tileSize });
-        const tileset    = this.map.addTilesetImage(ASSETS.spritesheet.tiles.key);
-        this.groundLayer = this.map.createLayer(0, tileset, 0, 0);
+    // Flat world background
+    initWorldBackground() {
+        this.localCamera.setBackgroundColor(WORLD_BACKGROUND_CSS);
+        this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, WORLD_BACKGROUND_COLOR)
+            .setOrigin(0)
+            .setDepth(-100);
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
-    parseTilePalette(tilePalette) {
-        const tiles = String(tilePalette)
-            .split(',')
-            .map(tile => Number(tile.trim()))
-            .filter(Number.isFinite);
-        return tiles.length > 0 ? tiles : DEFAULT_TILE_PALETTE.split(',').map(Number);
-    }
-
-    createSeededRandom(seed) {
-        let value = seed >>> 0;
-        return () => {
-            value = (value + 0x6D2B79F5) >>> 0;
-            let result = value;
-            result = Math.imul(result ^ (result >>> 15), result | 1);
-            result ^= result + Math.imul(result ^ (result >>> 7), result | 61);
-            return ((result ^ (result >>> 14)) >>> 0) / 4294967296;
-        };
-    }
-
-    pickTile(rng) {
-        return this.tiles[Math.floor(rng() * this.tiles.length)];
-    }
-
     isLocalSession(sessionId) {
         return !!this.localSessionId && sessionId === this.localSessionId;
     }
