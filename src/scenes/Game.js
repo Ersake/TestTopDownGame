@@ -148,7 +148,7 @@ export class Game extends Phaser.Scene {
 
         this.input.on('pointerdown', (pointer) => {
             if (pointer.leftButtonDown()) {
-                this.playLocalAttackAnimation();
+                this.playLocalAttackAnimation(pointer);
             }
         });
     }
@@ -469,14 +469,22 @@ export class Game extends Phaser.Scene {
         return horizontal || vertical;
     }
 
-    playLocalAttackAnimation() {
+    playLocalAttackAnimation(pointer) {
         const sessionId = this.localSessionId;
         const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
-        if (!this.gameStarted || !sessionId || !animationState || animationState.attacking) return;
+        const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
+        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking) return;
 
-        const direction = animationState.direction || DEFAULT_PLAYER_DIRECTION;
-        RoomClient.sendAttack();
+        const direction = this.getAttackDirectionFromPointer(pointer, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        RoomClient.sendAttack(direction);
         this.playPlayerAttackAnimation(sessionId, direction);
+    }
+
+    getAttackDirectionFromPointer(pointer, sprite, fallbackDirection) {
+        if (!pointer) return fallbackDirection;
+
+        const worldPoint = (this.localCamera || this.cameras.main).getWorldPoint(pointer.x, pointer.y);
+        return this.getDirectionFromVector(worldPoint.x - sprite.x, worldPoint.y - sprite.y) || fallbackDirection;
     }
 
     playPlayerAttackAnimation(sessionId, direction) {

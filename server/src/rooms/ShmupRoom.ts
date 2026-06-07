@@ -33,6 +33,8 @@ const PLAYER_TREE_HH = 10;
 const PLAYER_TREE_Y_OFFSET = 36;
 const TEST_TREE_TRUNK_HW = 8;
 const TEST_TREE_TRUNK_HH = 18;
+const ATTACK_LOCK_MS = 250;
+const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 
 // ─── CatmullRom spline (replicates Phaser.Curves.Spline.getPoint) ─────────────
 function catmullRom(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -79,6 +81,7 @@ const ENEMY_PATHS: [number, number][][] = [
 interface ServerPlayer {
     vx: number; vy: number;
     fireCounter: number;   // ms remaining until next allowed shot
+    attackLockMs: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean };
     alive: boolean;
 }
@@ -110,6 +113,10 @@ function directionFromInput(inputX: number, inputY: number): string | null {
     if (!horizontal && !vertical) return null;
     if (horizontal && vertical) return `${vertical}${horizontal}`;
     return horizontal || vertical;
+}
+
+function normalizeAttackDirection(direction: unknown, fallback: string): string {
+    return typeof direction === "string" && VALID_DIRECTIONS.has(direction) ? direction : fallback;
 }
 
 // ─── Room code registry (process-local) ──────────────────────────────────────
@@ -154,13 +161,18 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.input.fire  = !!data.fire;
         });
 
-        this.onMessage("attack", (client) => {
+        this.onMessage("attack", (client, data) => {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
 
-            player.attackDirection = player.facingDirection || "N";
+            const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
+            player.facingDirection = attackDirection;
+            player.attackDirection = attackDirection;
             player.attackSeq++;
+            sp.attackLockMs = ATTACK_LOCK_MS;
+            sp.vx = 0;
+            sp.vy = 0;
         });
     }
 
@@ -184,6 +196,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverPlayers.set(client.sessionId, {
             vx: 0, vy: 0,
             fireCounter: 0,
+            attackLockMs: 0,
             input: { left: false, right: false, up: false, down: false, fire: false },
             alive: true,
         });
@@ -239,27 +252,35 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sp = this.serverPlayers.get(sid);
             if (!sp || !sp.alive) return;
             const { left, right, up, down, fire } = sp.input;
+            const isAttackLocked = sp.attackLockMs > 0;
+            sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
 
             const inputX = Number(right) - Number(left);
             const inputY = Number(down) - Number(up);
             const inputLength = Math.hypot(inputX, inputY);
-            const facingDirection = directionFromInput(inputX, inputY);
-            if (facingDirection) player.facingDirection = facingDirection;
 
-            const targetVx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
-            const targetVy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
-            const rate = (inputLength > 0 ? PLAYER_ACCEL : PLAYER_DRAG) * dtSec;
+            if (isAttackLocked) {
+                sp.vx = 0;
+                sp.vy = 0;
+            } else {
+                const facingDirection = directionFromInput(inputX, inputY);
+                if (facingDirection) player.facingDirection = facingDirection;
 
-            sp.vx = moveToward(sp.vx, targetVx, rate);
-            sp.vy = moveToward(sp.vy, targetVy, rate);
+                const targetVx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
+                const targetVy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
+                const rate = (inputLength > 0 ? PLAYER_ACCEL : PLAYER_DRAG) * dtSec;
 
-            const nextX = player.x + sp.vx * dtSec;
-            const nextY = player.y + sp.vy * dtSec;
-            const resolved = this.movePlayerWithTestTree(player, nextX, nextY);
-            if (resolved.x === player.x && nextX !== player.x) sp.vx = 0;
-            if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
-            player.x = resolved.x;
-            player.y = resolved.y;
+                sp.vx = moveToward(sp.vx, targetVx, rate);
+                sp.vy = moveToward(sp.vy, targetVy, rate);
+
+                const nextX = player.x + sp.vx * dtSec;
+                const nextY = player.y + sp.vy * dtSec;
+                const resolved = this.movePlayerWithTestTree(player, nextX, nextY);
+                if (resolved.x === player.x && nextX !== player.x) sp.vx = 0;
+                if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
+                player.x = resolved.x;
+                player.y = resolved.y;
+            }
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
             if (fire && sp.fireCounter === 0) {
