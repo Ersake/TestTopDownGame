@@ -139,7 +139,9 @@ export class Game extends Phaser.Scene {
         const state = room.state;
 
         // ── Players ──────────────────────────────────────────────────────────
-        state.players.onAdd((player, sessionId) => {
+        const addPlayer = (player, sessionId) => {
+            if (this.playerSprites.has(sessionId)) return;
+
             const isLocal = sessionId === RoomClient.sessionId;
             const sprite  = this.add.sprite(player.x, player.y, ASSETS.spritesheet.playerIdle.key, 0)
                 .setDepth(100)
@@ -186,7 +188,9 @@ export class Game extends Phaser.Scene {
             });
 
             if (isLocal) {
+                this.cameras.main.centerOn(player.x, player.y);
                 this.cameras.main.startFollow(sprite, false, 1, 1);
+                this.killsText.setText(`Kills: ${player.kills}`);
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
@@ -194,7 +198,10 @@ export class Game extends Phaser.Scene {
             }
 
             this.playerCountText.setText(`Players: ${state.players.size}`);
-        });
+        };
+
+        state.players.onAdd(addPlayer);
+        state.players.forEach(addPlayer);
 
         state.players.onRemove((_player, sessionId) => {
             const s = this.playerSprites.get(sessionId);
@@ -205,7 +212,9 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Enemies ──────────────────────────────────────────────────────────
-        state.enemies.onAdd((enemy, id) => {
+        const addEnemy = (enemy, id) => {
+            if (this.enemySprites.has(id)) return;
+
             const frame  = SHIP_FRAME_OFFSET + enemy.shipId;
             const sprite = this.add.sprite(enemy.x, enemy.y, ASSETS.spritesheet.ships.key, frame)
                 .setDepth(10).setFlipY(true);
@@ -215,7 +224,10 @@ export class Game extends Phaser.Scene {
                 const s = this.enemySprites.get(id);
                 if (s) { s.x = enemy.x; s.y = enemy.y; }
             });
-        });
+        };
+
+        state.enemies.onAdd(addEnemy);
+        state.enemies.forEach(addEnemy);
 
         state.enemies.onRemove((_enemy, id) => {
             const s = this.enemySprites.get(id);
@@ -224,7 +236,9 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Player bullets ───────────────────────────────────────────────────
-        state.playerBullets.onAdd((bullet, id) => {
+        const addPlayerBullet = (bullet, id) => {
+            if (this.playerBulletSprites.has(id)) return;
+
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, bullet.power - 1)
                 .setDepth(10);
             this.playerBulletSprites.set(id, sprite);
@@ -233,7 +247,10 @@ export class Game extends Phaser.Scene {
                 const s = this.playerBulletSprites.get(id);
                 if (s) { s.x = bullet.x; s.y = bullet.y; }
             });
-        });
+        };
+
+        state.playerBullets.onAdd(addPlayerBullet);
+        state.playerBullets.forEach(addPlayerBullet);
 
         state.playerBullets.onRemove((_bullet, id) => {
             const s = this.playerBulletSprites.get(id);
@@ -242,7 +259,9 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Enemy bullets ────────────────────────────────────────────────────
-        state.enemyBullets.onAdd((bullet, id) => {
+        const addEnemyBullet = (bullet, id) => {
+            if (this.enemyBulletSprites.has(id)) return;
+
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, EB_TILE_OFFSET + bullet.power)
                 .setDepth(10).setFlipY(true);
             this.enemyBulletSprites.set(id, sprite);
@@ -251,7 +270,10 @@ export class Game extends Phaser.Scene {
                 const s = this.enemyBulletSprites.get(id);
                 if (s) { s.x = bullet.x; s.y = bullet.y; }
             });
-        });
+        };
+
+        state.enemyBullets.onAdd(addEnemyBullet);
+        state.enemyBullets.forEach(addEnemyBullet);
 
         state.enemyBullets.onRemove((_bullet, id) => {
             const s = this.enemyBulletSprites.get(id);
