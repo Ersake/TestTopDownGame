@@ -181,6 +181,9 @@ export class Game extends Phaser.Scene {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
                 attacking: false,
+                attackVisualLockUntil: 0,
+                attackVisualLockX: player.x,
+                attackVisualLockY: player.y,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
@@ -194,9 +197,18 @@ export class Game extends Phaser.Scene {
                 const previousX = animationState ? animationState.x : player.x;
                 const previousY = animationState ? animationState.y : player.y;
 
-                // Lerp toward server position for smooth rendering
-                s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
-                s.y = Phaser.Math.Linear(s.y, player.y, 0.3);
+                const visualLocked = isLocal
+                    && animationState?.attacking
+                    && this.time.now < animationState.attackVisualLockUntil;
+
+                if (visualLocked) {
+                    s.x = animationState.attackVisualLockX;
+                    s.y = animationState.attackVisualLockY;
+                } else {
+                    // Lerp toward server position for smooth rendering
+                    s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
+                    s.y = Phaser.Math.Linear(s.y, player.y, 0.3);
+                }
 
                 if (animationState) {
                     const direction = this.getDirectionFromVector(player.x - previousX, player.y - previousY);
@@ -476,6 +488,9 @@ export class Game extends Phaser.Scene {
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking) return;
 
         const direction = this.getAttackDirectionFromPointer(pointer, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        animationState.attackVisualLockUntil = this.time.now + 250;
+        animationState.attackVisualLockX = sprite.x;
+        animationState.attackVisualLockY = sprite.y;
         RoomClient.sendAttack(direction);
         this.playPlayerAttackAnimation(sessionId, direction);
     }

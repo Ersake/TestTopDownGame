@@ -82,6 +82,8 @@ interface ServerPlayer {
     vx: number; vy: number;
     fireCounter: number;   // ms remaining until next allowed shot
     attackLockMs: number;
+    attackLockX: number;
+    attackLockY: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean };
     alive: boolean;
 }
@@ -171,6 +173,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackDirection = attackDirection;
             player.attackSeq++;
             sp.attackLockMs = ATTACK_LOCK_MS;
+            sp.attackLockX = player.x;
+            sp.attackLockY = player.y;
             sp.vx = 0;
             sp.vy = 0;
         });
@@ -197,6 +201,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             vx: 0, vy: 0,
             fireCounter: 0,
             attackLockMs: 0,
+            attackLockX: ps.x,
+            attackLockY: ps.y,
             input: { left: false, right: false, up: false, down: false, fire: false },
             alive: true,
         });
@@ -262,6 +268,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (isAttackLocked) {
                 sp.vx = 0;
                 sp.vy = 0;
+                player.x = sp.attackLockX;
+                player.y = sp.attackLockY;
             } else {
                 const facingDirection = directionFromInput(inputX, inputY);
                 if (facingDirection) player.facingDirection = facingDirection;
