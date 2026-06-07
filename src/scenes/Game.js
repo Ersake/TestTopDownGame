@@ -19,8 +19,8 @@ const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
-const DEFAULT_WORLD_WIDTH = 1280;
-const DEFAULT_WORLD_HEIGHT = 720;
+const DEFAULT_WORLD_WIDTH = 3840;
+const DEFAULT_WORLD_HEIGHT = 2160;
 const DEFAULT_TILE_SIZE = 32;
 const DEFAULT_MAP_SEED = 1337;
 const DEFAULT_TILE_PALETTE = '50,50,50,50,50,50,50,50,50,110,110,110,110,110,50,50,50,50,50,50,50,50,50,110,110,110,110,110,36,48,60,72,84';
@@ -42,6 +42,7 @@ export class Game extends Phaser.Scene {
     update() {
         if (!this.gameStarted) return;
         this.sendInput();
+        this.ensureLocalCameraFollow();
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
     }
@@ -49,6 +50,10 @@ export class Game extends Phaser.Scene {
     // ─── Variables ────────────────────────────────────────────────────────────
     initVariables() {
         this.gameStarted = false;
+        this.localSessionId = RoomClient.sessionId;
+        this.localPlayerSprite = null;
+        this.localPlayerState = null;
+        this.localCamera = this.cameras.main;
         this.centreX = this.scale.width  * 0.5;
         this.centreY = this.scale.height * 0.5;
 
@@ -136,33 +141,35 @@ export class Game extends Phaser.Scene {
             return;
         }
 
+        this.localSessionId = room.sessionId || RoomClient.sessionId;
         const state = room.state;
 
         // ── Players ──────────────────────────────────────────────────────────
         const addPlayer = (player, sessionId) => {
-            if (this.playerSprites.has(sessionId)) return;
+            const playerSessionId = sessionId || player.sessionId;
+            if (!playerSessionId || this.playerSprites.has(playerSessionId)) return;
 
-            const isLocal = sessionId === RoomClient.sessionId;
+            const isLocal = this.isLocalSession(playerSessionId);
             const sprite  = this.add.sprite(player.x, player.y, ASSETS.spritesheet.playerIdle.key, 0)
                 .setDepth(100)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
 
             if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
 
-            this.playerSprites.set(sessionId, sprite);
-            this.playerAnimationState.set(sessionId, {
+            this.playerSprites.set(playerSessionId, sprite);
+            this.playerAnimationState.set(playerSessionId, {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
             });
-            this.setPlayerAnimation(sessionId, false, DEFAULT_PLAYER_DIRECTION);
+            this.setPlayerAnimation(playerSessionId, false, DEFAULT_PLAYER_DIRECTION);
 
             player.onChange(() => {
-                const s = this.playerSprites.get(sessionId);
+                const s = this.playerSprites.get(playerSessionId);
                 if (!s) return;
-                const animationState = this.playerAnimationState.get(sessionId);
+                const animationState = this.playerAnimationState.get(playerSessionId);
                 const previousX = animationState ? animationState.x : player.x;
                 const previousY = animationState ? animationState.y : player.y;
 
@@ -176,7 +183,7 @@ export class Game extends Phaser.Scene {
                         animationState.lastMovedAt = this.time.now;
                     }
                     animationState.moving = !!direction;
-                    if (!isLocal) this.setPlayerAnimation(sessionId, animationState.moving, direction);
+                    if (!isLocal) this.setPlayerAnimation(playerSessionId, animationState.moving, direction);
                     animationState.x = player.x;
                     animationState.y = player.y;
                 }
@@ -188,8 +195,7 @@ export class Game extends Phaser.Scene {
             });
 
             if (isLocal) {
-                this.cameras.main.centerOn(player.x, player.y);
-                this.cameras.main.startFollow(sprite, false, 1, 1);
+                this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
 
                 player.listen('kills', (kills) => {
@@ -206,6 +212,11 @@ export class Game extends Phaser.Scene {
         state.players.onRemove((_player, sessionId) => {
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
+            if (this.isLocalSession(sessionId)) {
+                this.localCamera.stopFollow();
+                this.localPlayerSprite = null;
+                this.localPlayerState = null;
+            }
             this.playerSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
@@ -213,15 +224,16 @@ export class Game extends Phaser.Scene {
 
         // ── Enemies ──────────────────────────────────────────────────────────
         const addEnemy = (enemy, id) => {
-            if (this.enemySprites.has(id)) return;
+            const enemyId = id || enemy.id;
+            if (!enemyId || this.enemySprites.has(enemyId)) return;
 
             const frame  = SHIP_FRAME_OFFSET + enemy.shipId;
             const sprite = this.add.sprite(enemy.x, enemy.y, ASSETS.spritesheet.ships.key, frame)
                 .setDepth(10).setFlipY(true);
-            this.enemySprites.set(id, sprite);
+            this.enemySprites.set(enemyId, sprite);
 
             enemy.onChange(() => {
-                const s = this.enemySprites.get(id);
+                const s = this.enemySprites.get(enemyId);
                 if (s) { s.x = enemy.x; s.y = enemy.y; }
             });
         };
@@ -237,14 +249,15 @@ export class Game extends Phaser.Scene {
 
         // ── Player bullets ───────────────────────────────────────────────────
         const addPlayerBullet = (bullet, id) => {
-            if (this.playerBulletSprites.has(id)) return;
+            const bulletId = id || bullet.id;
+            if (!bulletId || this.playerBulletSprites.has(bulletId)) return;
 
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, bullet.power - 1)
                 .setDepth(10);
-            this.playerBulletSprites.set(id, sprite);
+            this.playerBulletSprites.set(bulletId, sprite);
 
             bullet.onChange(() => {
-                const s = this.playerBulletSprites.get(id);
+                const s = this.playerBulletSprites.get(bulletId);
                 if (s) { s.x = bullet.x; s.y = bullet.y; }
             });
         };
@@ -260,14 +273,15 @@ export class Game extends Phaser.Scene {
 
         // ── Enemy bullets ────────────────────────────────────────────────────
         const addEnemyBullet = (bullet, id) => {
-            if (this.enemyBulletSprites.has(id)) return;
+            const bulletId = id || bullet.id;
+            if (!bulletId || this.enemyBulletSprites.has(bulletId)) return;
 
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, EB_TILE_OFFSET + bullet.power)
                 .setDepth(10).setFlipY(true);
-            this.enemyBulletSprites.set(id, sprite);
+            this.enemyBulletSprites.set(bulletId, sprite);
 
             bullet.onChange(() => {
-                const s = this.enemyBulletSprites.get(id);
+                const s = this.enemyBulletSprites.get(bulletId);
                 if (s) { s.x = bullet.x; s.y = bullet.y; }
             });
         };
@@ -341,7 +355,7 @@ export class Game extends Phaser.Scene {
         this.map = this.make.tilemap({ data: mapData, tileWidth: this.tileSize, tileHeight: this.tileSize });
         const tileset    = this.map.addTilesetImage(ASSETS.spritesheet.tiles.key);
         this.groundLayer = this.map.createLayer(0, tileset, 0, 0);
-        this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -368,6 +382,28 @@ export class Game extends Phaser.Scene {
         return this.tiles[Math.floor(rng() * this.tiles.length)];
     }
 
+    isLocalSession(sessionId) {
+        return !!this.localSessionId && sessionId === this.localSessionId;
+    }
+
+    activateLocalCamera(sprite, player) {
+        this.localPlayerSprite = sprite;
+        this.localPlayerState = player;
+        this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        this.localCamera.centerOn(player.x, player.y);
+        this.localCamera.startFollow(sprite, false, 1, 1);
+    }
+
+    ensureLocalCameraFollow() {
+        if (!this.localPlayerSprite) return;
+
+        this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        const followedSprite = this.localCamera._follow;
+        if (followedSprite !== this.localPlayerSprite) {
+            this.localCamera.startFollow(this.localPlayerSprite, false, 1, 1);
+        }
+    }
+
     createAnimation(animation) {
         if (this.anims.exists(animation.key)) return;
 
@@ -380,7 +416,7 @@ export class Game extends Phaser.Scene {
     }
 
     updateLocalPlayerAnimation() {
-        const sessionId = RoomClient.sessionId;
+        const sessionId = this.localSessionId;
         if (!sessionId || !this.playerSprites.has(sessionId)) return;
 
         const dx = Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
@@ -392,7 +428,7 @@ export class Game extends Phaser.Scene {
 
     updateRemotePlayerAnimations() {
         this.playerAnimationState.forEach((animationState, sessionId) => {
-            if (sessionId === RoomClient.sessionId || !animationState.moving) return;
+            if (this.isLocalSession(sessionId) || !animationState.moving) return;
 
             if (this.time.now - animationState.lastMovedAt > 150) {
                 animationState.moving = false;
