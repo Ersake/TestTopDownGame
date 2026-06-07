@@ -9,8 +9,6 @@ import {
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 300;   // px/s
-const PLAYER_ACCEL    = 1600;  // px/s^2
-const PLAYER_DRAG     = 2200;  // px/s^2
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
 const VIEW_WIDTH      = 1280;
@@ -97,12 +95,6 @@ const rndInt  = (min: number, max: number) => Math.floor(Math.random() * (max - 
 const rndReal = (min: number, max: number) => Math.random() * (max - min) + min;
 
 const INITIAL_SPAWN_DELAY = 500; // ms before the first enemy wave
-
-function moveToward(current: number, target: number, maxDelta: number): number {
-    if (current < target) return Math.min(current + maxDelta, target);
-    if (current > target) return Math.max(current - maxDelta, target);
-    return target;
-}
 
 function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -274,12 +266,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const facingDirection = directionFromInput(inputX, inputY);
                 if (facingDirection) player.facingDirection = facingDirection;
 
-                const targetVx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
-                const targetVy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
-                const rate = (inputLength > 0 ? PLAYER_ACCEL : PLAYER_DRAG) * dtSec;
-
-                sp.vx = moveToward(sp.vx, targetVx, rate);
-                sp.vy = moveToward(sp.vy, targetVy, rate);
+                sp.vx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
+                sp.vy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
 
                 const nextX = player.x + sp.vx * dtSec;
                 const nextY = player.y + sp.vy * dtSec;
