@@ -1,10 +1,10 @@
 export default {
-    // 'audio': {
-    //     score: {
-    //         key: 'sound',
-    //         args: ['assets/sound.mp3', 'assets/sound.m4a', 'assets/sound.ogg']
-    //     },
-    // },
+    'audio': {
+        punchWhoosh: {
+            key: 'punch-whoosh',
+            args: ['assets/jofae-swing-whoosh-110410.mp3']
+        },
+    },
     // 'image': {
     //     spikes: {
     //         key: 'spikes',

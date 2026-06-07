@@ -23,6 +23,7 @@ const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
+const PUNCH_SOUND_VOLUME = 0.6;
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -456,6 +457,8 @@ export class Game extends Phaser.Scene {
             animationState.attacking = false;
             return;
         }
+
+        this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
             animationState.attacking = false;
