@@ -27,6 +27,7 @@ const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
+const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const TEST_TREE_TRUNK_Y_OFFSET = -18;
 const TEST_TREE_TRUNK_HALF_WIDTH = 5;
 const TEST_TREE_TRUNK_HALF_HEIGHT = 18;
@@ -92,6 +93,37 @@ export class Game extends Phaser.Scene {
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
+        this.isTabActive = this.isDocumentActive();
+        this.remoteAttackAudioDirty = !this.isTabActive;
+        this.suppressRemoteAttackAudioUntil = this.isTabActive ? 0 : Number.POSITIVE_INFINITY;
+        this.handleTabInactive = () => {
+            this.isTabActive = false;
+            this.remoteAttackAudioDirty = true;
+            this.suppressRemoteAttackAudioUntil = Number.POSITIVE_INFINITY;
+        };
+        this.handleTabActive = () => {
+            this.isTabActive = this.isDocumentActive();
+            if (!this.isTabActive) return;
+
+            this.syncRemoteAttackSeqBaselines();
+            this.remoteAttackAudioDirty = false;
+            this.suppressRemoteAttackAudioUntil = performance.now() + REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS;
+        };
+        this.handleVisibilityChange = () => {
+            if (document.hidden) {
+                this.handleTabInactive();
+            } else {
+                this.handleTabActive();
+            }
+        };
+        document.addEventListener('visibilitychange', this.handleVisibilityChange);
+        window.addEventListener('blur', this.handleTabInactive);
+        window.addEventListener('focus', this.handleTabActive);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+            window.removeEventListener('blur', this.handleTabInactive);
+            window.removeEventListener('focus', this.handleTabActive);
+        });
     }
 
     // ─── UI ───────────────────────────────────────────────────────────────────
@@ -185,6 +217,7 @@ export class Game extends Phaser.Scene {
                 attackVisualLockUntil: 0,
                 attackVisualLockX: player.x,
                 attackVisualLockY: player.y,
+                lastAttackSeq: player.attackSeq || 0,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
@@ -236,9 +269,15 @@ export class Game extends Phaser.Scene {
             });
 
             player.listen('attackSeq', () => {
-                if (player.attackSeq > 0) {
-                    this.playPlayerAttackAnimation(playerSessionId, player.attackDirection);
-                }
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (!animationState || player.attackSeq <= animationState.lastAttackSeq) return;
+
+                animationState.lastAttackSeq = player.attackSeq;
+                if (player.attackSeq <= 0) return;
+
+                this.playPlayerAttackAnimation(playerSessionId, player.attackDirection, {
+                    playAudio: this.shouldPlayAttackAudio(playerSessionId),
+                });
             });
 
             if (isLocal) {
@@ -493,7 +532,7 @@ export class Game extends Phaser.Scene {
         animationState.attackVisualLockX = sprite.x;
         animationState.attackVisualLockY = sprite.y;
         RoomClient.sendAttack(direction);
-        this.playPlayerAttackAnimation(sessionId, direction);
+        this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
     }
 
     getAttackDirectionFromPointer(pointer, sprite, fallbackDirection) {
@@ -503,7 +542,7 @@ export class Game extends Phaser.Scene {
         return this.getDirectionFromVector(worldPoint.x - sprite.x, worldPoint.y - sprite.y) || fallbackDirection;
     }
 
-    playPlayerAttackAnimation(sessionId, direction) {
+    playPlayerAttackAnimation(sessionId, direction, { playAudio = true } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || animationState.attacking || !sprite.visible) return;
@@ -516,9 +555,11 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
-        if (this.playerAttackHitsTestTree(sprite, direction)) {
-            this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+        if (playAudio) {
+            this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
+            if (this.playerAttackHitsTestTree(sprite, direction)) {
+                this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+            }
         }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
@@ -527,6 +568,32 @@ export class Game extends Phaser.Scene {
                 this.updateLocalPlayerAnimation();
             } else {
                 this.setPlayerAnimation(sessionId, animationState.moving, null);
+            }
+        });
+    }
+
+    shouldPlayAttackAudio(sessionId) {
+        if (this.isLocalSession(sessionId)) return true;
+        if (!this.isTabActive || document.hidden || this.remoteAttackAudioDirty) return false;
+        return performance.now() >= this.suppressRemoteAttackAudioUntil;
+    }
+
+    isDocumentActive() {
+        const hasFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : !document.hidden;
+        return !document.hidden && hasFocus;
+    }
+
+    syncRemoteAttackSeqBaselines() {
+        const players = RoomClient.room?.state?.players;
+        if (!players) return;
+
+        players.forEach((player, sessionId) => {
+            const playerSessionId = sessionId || player.sessionId;
+            if (!playerSessionId || this.isLocalSession(playerSessionId)) return;
+
+            const animationState = this.playerAnimationState.get(playerSessionId);
+            if (animationState) {
+                animationState.lastAttackSeq = player.attackSeq || 0;
             }
         });
     }
