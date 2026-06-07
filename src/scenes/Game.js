@@ -114,6 +114,7 @@ export class Game extends Phaser.Scene {
 
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.attack).forEach(animation => this.createAnimation(animation));
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -124,6 +125,12 @@ export class Game extends Phaser.Scene {
             down: Phaser.Input.Keyboard.KeyCodes.S,
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
+        });
+
+        this.input.on('pointerdown', (pointer) => {
+            if (pointer.leftButtonDown()) {
+                this.playLocalAttackAnimation();
+            }
         });
     }
 
@@ -154,6 +161,7 @@ export class Game extends Phaser.Scene {
             this.playerAnimationState.set(playerSessionId, {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
+                attacking: false,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
@@ -185,6 +193,19 @@ export class Game extends Phaser.Scene {
                 if (player.isDead && s.visible) {
                     this.addExplosion(s.x, s.y);
                     s.setVisible(false);
+                }
+            });
+
+            player.listen('facingDirection', (direction) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState && direction) {
+                    animationState.direction = direction;
+                }
+            });
+
+            player.listen('attackSeq', () => {
+                if (player.attackSeq > 0) {
+                    this.playPlayerAttackAnimation(playerSessionId, player.attackDirection);
                 }
             });
 
@@ -382,6 +403,9 @@ export class Game extends Phaser.Scene {
         const sessionId = this.localSessionId;
         if (!sessionId || !this.playerSprites.has(sessionId)) return;
 
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (animationState?.attacking) return;
+
         const dx = Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
         const dy = Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
         const direction = this.getDirectionFromVector(dx, dy);
@@ -410,21 +434,64 @@ export class Game extends Phaser.Scene {
         return horizontal || vertical;
     }
 
-    setPlayerAnimation(sessionId, moving, direction) {
+    playLocalAttackAnimation() {
+        const sessionId = this.localSessionId;
+        const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
+        if (!this.gameStarted || !sessionId || !animationState || animationState.attacking) return;
+
+        const direction = animationState.direction || DEFAULT_PLAYER_DIRECTION;
+        RoomClient.sendAttack();
+        this.playPlayerAttackAnimation(sessionId, direction);
+    }
+
+    playPlayerAttackAnimation(sessionId, direction) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
-        if (!sprite || !animationState || !sprite.visible) return;
+        if (!sprite || !animationState || animationState.attacking || !sprite.visible) return;
+
+        animationState.attacking = true;
+
+        const didPlay = this.playPlayerAnimation(sessionId, 'attack', direction, { force: true, restart: true });
+        if (!didPlay) {
+            animationState.attacking = false;
+            return;
+        }
+
+        sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+            animationState.attacking = false;
+            if (this.isLocalSession(sessionId)) {
+                this.updateLocalPlayerAnimation();
+            } else {
+                this.setPlayerAnimation(sessionId, animationState.moving, null);
+            }
+        });
+    }
+
+    setPlayerAnimation(sessionId, moving, direction) {
+        const mode = moving ? 'run' : 'idle';
+        this.playPlayerAnimation(sessionId, mode, direction);
+    }
+
+    playPlayerAnimation(sessionId, mode, direction, { force = false, restart = false } = {}) {
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!sprite || !animationState || !sprite.visible) return false;
+        if (animationState.attacking && !force) return false;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
         animationState.direction = nextDirection;
 
-        const mode = moving ? 'run' : 'idle';
-        const animation = ANIMATION.player[mode][nextDirection];
-        if (!animation) return;
+        const animation = ANIMATION.player[mode]?.[nextDirection];
+        if (!animation) return false;
 
         if (sprite.anims.currentAnim?.key !== animation.key || !sprite.anims.isPlaying) {
             sprite.play(animation.key);
+        } else if (restart) {
+            sprite.anims.stop();
+            sprite.play(animation.key);
         }
+
+        return true;
     }
 
     addExplosion(x, y) {

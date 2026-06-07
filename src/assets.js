@@ -40,5 +40,12 @@ export default {
                 frameHeight: 128,
             }]
         },
+        playerAttack: {
+            key: 'player-attack',
+            args: ['assets/Attack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
     }
 };

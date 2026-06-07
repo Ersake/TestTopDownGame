@@ -94,6 +94,11 @@ class RoomClient {
         this.room.send("input", input);
     }
 
+    sendAttack() {
+        if (!this.room) return;
+        this.room.send("attack");
+    }
+
     _lastInput = "";
 }
 

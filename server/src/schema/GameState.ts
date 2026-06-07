@@ -7,6 +7,9 @@ export class PlayerState extends Schema {
     @type("int8")    health: number = 1;
     @type("int32")   kills: number = 0;
     @type("boolean") isDead: boolean = false;
+    @type("string")  facingDirection: string = "N";
+    @type("string")  attackDirection: string = "N";
+    @type("int32")   attackSeq: number = 0;
 }
 
 export class EnemyState extends Schema {

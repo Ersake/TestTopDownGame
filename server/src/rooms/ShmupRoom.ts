@@ -89,6 +89,15 @@ function moveToward(current: number, target: number, maxDelta: number): number {
     return target;
 }
 
+function directionFromInput(inputX: number, inputY: number): string | null {
+    const horizontal = inputX > 0 ? "E" : inputX < 0 ? "W" : "";
+    const vertical = inputY > 0 ? "S" : inputY < 0 ? "N" : "";
+
+    if (!horizontal && !vertical) return null;
+    if (horizontal && vertical) return `${vertical}${horizontal}`;
+    return horizontal || vertical;
+}
+
 // ─── Room code registry (process-local) ──────────────────────────────────────
 // Tracks codes in use to avoid collisions within the same server process.
 const _usedCodes = new Set<string>();
@@ -130,6 +139,15 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.input.down  = !!data.down;
             sp.input.fire  = !!data.fire;
         });
+
+        this.onMessage("attack", (client) => {
+            const sp = this.serverPlayers.get(client.sessionId);
+            const player = this.state.players.get(client.sessionId);
+            if (!sp || !sp.alive || !player || this.state.gameOver) return;
+
+            player.attackDirection = player.facingDirection || "N";
+            player.attackSeq++;
+        });
     }
 
     onJoin(client: Client) {
@@ -144,6 +162,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
         ps.health = 1;
+        ps.facingDirection = "N";
+        ps.attackDirection = "N";
+        ps.attackSeq = 0;
         this.state.players.set(client.sessionId, ps);
 
         this.serverPlayers.set(client.sessionId, {
@@ -208,6 +229,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             const inputX = Number(right) - Number(left);
             const inputY = Number(down) - Number(up);
             const inputLength = Math.hypot(inputX, inputY);
+            const facingDirection = directionFromInput(inputX, inputY);
+            if (facingDirection) player.facingDirection = facingDirection;
 
             const targetVx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
             const targetVy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
