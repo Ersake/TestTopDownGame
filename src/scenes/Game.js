@@ -31,6 +31,7 @@ const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.75;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
+const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const LOG_PILE_OFFSETS = [
@@ -221,6 +222,10 @@ export class Game extends Phaser.Scene {
         room.onMessage('enemyHit', (hit) => {
             if (!hit || !this.shouldPlayEnemyHitAudio(hit.attackerId)) return;
             this.sound.play(ASSETS.audio.skeletonHit.key, { volume: SKELETON_HIT_SOUND_VOLUME });
+        });
+
+        room.onMessage('woodPickup', () => {
+            this.sound.play(ASSETS.audio.grabItem.key, { volume: GRAB_ITEM_SOUND_VOLUME });
         });
 
         // ── Players ──────────────────────────────────────────────────────────

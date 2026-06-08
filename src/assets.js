@@ -16,6 +16,10 @@ export default {
             key: 'skeleton-hit',
             args: ['assets/skeleton hit sound.mp3']
         },
+        grabItem: {
+            key: 'grab-item',
+            args: ['assets/grabitem.mp3']
+        },
     },
     'image': {
         treeBottom: {

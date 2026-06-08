@@ -252,7 +252,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.input.interact = isInteracting;
 
             if (isInteracting && !wasInteracting) {
-                this.tryPickupWood(client.sessionId);
+                if (this.tryPickupWood(client.sessionId)) {
+                    client.send("woodPickup", { amount: WOOD_PILE_AMOUNT });
+                }
             }
         });
 
@@ -565,10 +567,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.logs.set(log.id, log);
     }
 
-    private tryPickupWood(sessionId: string) {
+    private tryPickupWood(sessionId: string): boolean {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
-        if (!sp || !sp.alive || !player || this.state.gameOver) return;
+        if (!sp || !sp.alive || !player || this.state.gameOver) return false;
 
         const pickupX = player.x;
         const pickupY = player.y + PLAYER_TREE_Y_OFFSET;
@@ -586,13 +588,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
         });
 
-        if (!closestLogId) return;
+        if (!closestLogId) return false;
 
         const log = this.state.logs.get(closestLogId);
-        if (!log) return;
+        if (!log) return false;
 
         player.wood += log.amount || WOOD_PILE_AMOUNT;
         this.state.logs.delete(closestLogId);
+        return true;
     }
 
     // ─── Main tick ────────────────────────────────────────────────────────────
