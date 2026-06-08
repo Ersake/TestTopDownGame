@@ -563,18 +563,22 @@ export class Game extends Phaser.Scene {
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking) return;
 
-        const direction = this.getAttackDirectionFromPointer(pointer, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
         animationState.attackVisualLockUntil = this.time.now + 250;
         animationState.attackVisualLockX = sprite.x;
         animationState.attackVisualLockY = sprite.y;
-        RoomClient.sendAttack(direction);
+        RoomClient.sendAttack(direction, worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
     }
 
-    getAttackDirectionFromPointer(pointer, sprite, fallbackDirection) {
-        if (!pointer) return fallbackDirection;
+    getPointerWorldPoint(pointer) {
+        if (!pointer) return null;
+        return (this.localCamera || this.cameras.main).getWorldPoint(pointer.x, pointer.y);
+    }
 
-        const worldPoint = (this.localCamera || this.cameras.main).getWorldPoint(pointer.x, pointer.y);
+    getAttackDirectionFromWorldPoint(worldPoint, sprite, fallbackDirection) {
+        if (!worldPoint) return fallbackDirection;
         return this.getDirectionFromVector(worldPoint.x - sprite.x, worldPoint.y - sprite.y) || fallbackDirection;
     }
 

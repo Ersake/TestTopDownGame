@@ -37,9 +37,11 @@ const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
 const ATTACK_COOLDOWN_MS = 850;
 const TREE_HEALTH = 4;
-const ATTACK_HIT_RADIUS = 36;
-const ATTACK_HIT_OFFSET = 36;
+const ATTACK_HIT_RADIUS = 44;
+const ATTACK_HIT_START_OFFSET = 10;
+const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
+const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const LOG_DROP_OFFSETS: [number, number][] = [
     [-18, -6],
@@ -101,6 +103,35 @@ function circleOverlapsAabb(cx: number, cy: number, radius: number,
     const dy = cy - closestY;
 
     return dx * dx + dy * dy < radius * radius;
+}
+
+function pointSegmentDistanceSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lengthSq = abx * abx + aby * aby;
+    const t = lengthSq > 0 ? clamp(((px - ax) * abx + (py - ay) * aby) / lengthSq, 0, 1) : 0;
+    const closestX = ax + abx * t;
+    const closestY = ay + aby * t;
+    const dx = px - closestX;
+    const dy = py - closestY;
+    return dx * dx + dy * dy;
+}
+
+function capsuleOverlapsAabb(ax: number, ay: number, bx: number, by: number, radius: number,
+                             rectX: number, rectY: number, rectHw: number, rectHh: number): boolean {
+    const closestCenterX = clamp((ax + bx) * 0.5, rectX - rectHw, rectX + rectHw);
+    const closestCenterY = clamp((ay + by) * 0.5, rectY - rectHh, rectY + rectHh);
+
+    const candidates: [number, number][] = [
+        [closestCenterX, closestCenterY],
+        [rectX - rectHw, rectY - rectHh],
+        [rectX + rectHw, rectY - rectHh],
+        [rectX - rectHw, rectY + rectHh],
+        [rectX + rectHw, rectY + rectHh],
+    ];
+
+    const radiusSq = radius * radius;
+    return candidates.some(([x, y]) => pointSegmentDistanceSq(x, y, ax, ay, bx, by) <= radiusSq);
 }
 
 // ─── Enemy path data (identical to EnemyFlying.js) ────────────────────────────
@@ -217,7 +248,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackCooldownMs = ATTACK_COOLDOWN_MS;
             sp.vx = 0;
             sp.vy = 0;
-            const treeHit = this.damageTreeFromAttack(player, client.sessionId, attackDirection);
+            const treeHit = this.damageTreeFromAttack(player, client.sessionId, attackDirection, data?.targetX, data?.targetY);
             if (treeHit) this.broadcast("treeHit", treeHit);
         });
     }
@@ -328,8 +359,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
-    private damageTreeFromAttack(player: PlayerState, attackerId: string, direction: string): TreeHitPayload | null {
-        const hitTreeId = this.findTreeHitByAttack(player, direction);
+    private damageTreeFromAttack(player: PlayerState, attackerId: string, direction: string, targetX: unknown, targetY: unknown): TreeHitPayload | null {
+        const hitTreeId = this.findTreeHitByAttack(player, direction, targetX, targetY);
         if (!hitTreeId) return null;
 
         const tree = this.state.trees.get(hitTreeId);
@@ -358,17 +389,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         return hitPayload;
     }
 
-    private findTreeHitByAttack(player: PlayerState, direction: string): string | null {
-        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS.N;
-        const attackX = player.x + vector.x * ATTACK_HIT_OFFSET;
-        const attackY = player.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * ATTACK_HIT_OFFSET;
+    private findTreeHitByAttack(player: PlayerState, direction: string, targetX: unknown, targetY: unknown): string | null {
+        const vector = this.getAttackVector(player, direction, targetX, targetY);
+        const originX = player.x;
+        const originY = player.y + ATTACK_HIT_ORIGIN_Y_OFFSET;
+        const attackStartX = originX + vector.x * ATTACK_HIT_START_OFFSET;
+        const attackStartY = originY + vector.y * ATTACK_HIT_START_OFFSET;
+        const attackEndX = originX + vector.x * ATTACK_HIT_END_OFFSET;
+        const attackEndY = originY + vector.y * ATTACK_HIT_END_OFFSET;
         let closestTreeId: string | null = null;
         let closestDistanceSq = Number.POSITIVE_INFINITY;
 
         this.state.trees.forEach((tree, id) => {
-            if (!circleOverlapsAabb(
-                attackX,
-                attackY,
+            if (!capsuleOverlapsAabb(
+                attackStartX,
+                attackStartY,
+                attackEndX,
+                attackEndY,
                 ATTACK_HIT_RADIUS,
                 tree.x,
                 tree.y + TREE_TRUNK_Y_OFFSET,
@@ -376,8 +413,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 TREE_TRUNK_HH,
             )) return;
 
-            const dx = attackX - tree.x;
-            const dy = attackY - (tree.y + TREE_TRUNK_Y_OFFSET);
+            const dx = attackEndX - tree.x;
+            const dy = attackEndY - (tree.y + TREE_TRUNK_Y_OFFSET);
             const distanceSq = dx * dx + dy * dy;
             if (distanceSq < closestDistanceSq) {
                 closestDistanceSq = distanceSq;
@@ -386,6 +423,21 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         return closestTreeId;
+    }
+
+    private getAttackVector(player: PlayerState, direction: string, targetX: unknown, targetY: unknown): { x: number; y: number } {
+        if (typeof targetX === "number" && typeof targetY === "number" && Number.isFinite(targetX) && Number.isFinite(targetY)) {
+            const clampedTargetX = clamp(targetX, 0, WORLD_WIDTH);
+            const clampedTargetY = clamp(targetY, 0, WORLD_HEIGHT);
+            const dx = clampedTargetX - player.x;
+            const dy = clampedTargetY - (player.y + ATTACK_HIT_ORIGIN_Y_OFFSET);
+            const distance = Math.hypot(dx, dy);
+            if (distance >= ATTACK_TARGET_MIN_DISTANCE) {
+                return { x: dx / distance, y: dy / distance };
+            }
+        }
+
+        return DIRECTION_VECTORS[direction] || DIRECTION_VECTORS.N;
     }
 
     private spawnLogsForTree(tree: TreeState) {
