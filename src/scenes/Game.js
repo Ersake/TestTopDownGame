@@ -21,6 +21,7 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
+const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
@@ -118,33 +119,38 @@ export class Game extends Phaser.Scene {
         this.tutorialText = this.add.text(this.centreX, this.centreY, 'Waiting for server…', {
             fontFamily: 'Arial Black', fontSize: 42, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
-        }).setOrigin(0.5).setDepth(100).setScrollFactor(0);
+        }).setOrigin(0.5).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.scoreText = this.add.text(20, 20, 'Score: 0', {
+        this.timerText = this.add.text(20, 20, '00:00', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
-        }).setDepth(100).setScrollFactor(0);
+        }).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.scoreText = this.add.text(20, 58, 'Score: 0', {
+            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 8,
+        }).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.killsText = this.add.text(this.scale.width - 20, 20, 'Kills: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffff00',
             stroke: '#000000', strokeThickness: 8,
-        }).setOrigin(1, 0).setDepth(100).setScrollFactor(0);
+        }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.playerCountText = this.add.text(this.scale.width - 20, 60, 'Players: 0', {
             fontFamily: 'Arial Black', fontSize: 22, color: '#aaffaa',
             stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(1, 0).setDepth(100).setScrollFactor(0);
+        }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nPress Space for Lobby', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
-        }).setOrigin(0.5).setDepth(100).setVisible(false).setScrollFactor(0);
+        }).setOrigin(0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0);
 
         const roomCode = RoomClient.room ? RoomClient.room.id : '';
         this.roomCodeText = this.add.text(this.centreX, 20, `Room: ${roomCode}`, {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
             stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(0.5, 0).setDepth(100).setScrollFactor(0);
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
     }
 
     // ─── Animations ───────────────────────────────────────────────────────────
@@ -438,6 +444,11 @@ export class Game extends Phaser.Scene {
             this.scoreText.setText(`Score: ${score}`);
         });
 
+        this.timerText.setText(this.formatElapsedTime(state.elapsedSeconds || 0));
+        state.listen('elapsedSeconds', (elapsedSeconds) => {
+            this.timerText.setText(this.formatElapsedTime(elapsedSeconds || 0));
+        });
+
         state.listen('gameStarted', (started) => {
             if (started) {
                 this.gameStarted = true;
@@ -477,6 +488,13 @@ export class Game extends Phaser.Scene {
             down:  this.keys.down.isDown,
             fire:  this.keys.fire.isDown,
         });
+    }
+
+    formatElapsedTime(elapsedSeconds) {
+        const safeSeconds = Math.max(0, Math.floor(elapsedSeconds || 0));
+        const minutes = Math.floor(safeSeconds / 60);
+        const seconds = safeSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
 
     // Flat world background

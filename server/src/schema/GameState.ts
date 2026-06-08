@@ -59,6 +59,7 @@ export class GameRoomState extends Schema {
     @type("int32")  worldWidth:  number = 3840;
     @type("int32")  worldHeight: number = 2160;
 
+    @type("int32")   elapsedSeconds: number = 0;
     @type("int32")   teamScore:   number  = 0;
     @type("boolean") gameStarted: boolean = false;
     @type("boolean") gameOver:    boolean = false;

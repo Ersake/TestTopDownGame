@@ -201,6 +201,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverEnemyBullets  = new Map<string, ServerBullet>();
     private serverTreeHealth    = new Map<string, number>();
     private spawnTimer          = 0; // ms until next enemy wave
+    private elapsedMs           = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -283,6 +284,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (!this.state.gameStarted) {
             this.state.gameStarted = true;
+            this.elapsedMs = 0;
+            this.state.elapsedSeconds = 0;
             this.spawnTimer = INITIAL_SPAWN_DELAY; // first wave shortly after start
         }
     }
@@ -301,6 +304,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.generateTrees();
 
         this.state.teamScore = 0;
+        this.elapsedMs = 0;
+        this.state.elapsedSeconds = 0;
         this.state.gameOver  = false;
         this.spawnTimer      = INITIAL_SPAWN_DELAY;
     }
@@ -455,12 +460,18 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!this.state.gameStarted || this.state.gameOver) return;
         const dtSec = dt / 1000;
 
+        this.tickElapsedTime(dt);
         this.tickPlayers(dtSec, dt);
         this.tickPlayerBullets(dtSec);
         this.tickEnemies(dtSec, dt);
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
 
+    }
+
+    private tickElapsedTime(dtMs: number) {
+        this.elapsedMs += dtMs;
+        this.state.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
