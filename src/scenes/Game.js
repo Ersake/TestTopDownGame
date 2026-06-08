@@ -15,10 +15,10 @@ import Explosion from '../gameObjects/Explosion.js';
 import RoomClient from '../network/RoomClient.js';
 
 // Sprite frame constants (matching the original game objects)
-const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
+const ENEMY_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const WOOD_UI_ICON_SIZE = 64;
@@ -30,6 +30,8 @@ const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.75;
+const SKELETON_HIT_SOUND_VOLUME = 0.75;
+const ENEMY_DAMAGE_FLASH_MS = 90;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const LOG_PILE_OFFSETS = [
     { x: -18, y: -6 },
@@ -38,6 +40,8 @@ const LOG_PILE_OFFSETS = [
     { x: -9, y: 10 },
     { x: 11, y: 8 },
 ];
+const DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+const FRAMES_PER_DIRECTION = 15;
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -83,6 +87,7 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
+        this.enemyAnimationState = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -174,6 +179,9 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -208,6 +216,11 @@ export class Game extends Phaser.Scene {
         room.onMessage('treeHit', (hit) => {
             if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
             this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+        });
+
+        room.onMessage('enemyHit', (hit) => {
+            if (!hit || !this.shouldPlayEnemyHitAudio(hit.attackerId)) return;
+            this.sound.play(ASSETS.audio.skeletonHit.key, { volume: SKELETON_HIT_SOUND_VOLUME });
         });
 
         // ── Players ──────────────────────────────────────────────────────────
@@ -393,14 +406,56 @@ export class Game extends Phaser.Scene {
             const enemyId = id || enemy.id;
             if (!enemyId || this.enemySprites.has(enemyId)) return;
 
-            const frame  = SHIP_FRAME_OFFSET + enemy.shipId;
-            const sprite = this.add.sprite(enemy.x, enemy.y, ASSETS.spritesheet.ships.key, frame)
-                .setDepth(10).setFlipY(true);
+            const sprite = this.add.sprite(enemy.x, enemy.y, ASSETS.spritesheet.enemy1Run.key, 0)
+                .setDepth(100)
+                .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
             this.enemySprites.set(enemyId, sprite);
+            this.enemyAnimationState.set(enemyId, {
+                direction: enemy.facingDirection || 'S',
+                action: enemy.action || 'run',
+                attacking: false,
+                takingDamage: false,
+                damageFlashEvent: null,
+                lastAttackSeq: enemy.attackSeq || 0,
+                lastDamageSeq: enemy.damageSeq || 0,
+            });
+            this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
 
             enemy.onChange(() => {
                 const s = this.enemySprites.get(enemyId);
-                if (s) { s.x = enemy.x; s.y = enemy.y; }
+                if (!s) return;
+
+                s.x = Phaser.Math.Linear(s.x, enemy.x, 0.3);
+                s.y = Phaser.Math.Linear(s.y, enemy.y, 0.3);
+                this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
+            });
+
+            enemy.listen('action', (action) => {
+                const animationState = this.enemyAnimationState.get(enemyId);
+                this.setEnemyAnimation(enemyId, action || 'run', enemy.facingDirection || animationState?.direction || 'S');
+            });
+
+            enemy.listen('facingDirection', (direction) => {
+                const animationState = this.enemyAnimationState.get(enemyId);
+                this.setEnemyAnimation(enemyId, animationState?.action || enemy.action || 'run', direction || animationState?.direction || 'S');
+            });
+
+            enemy.listen('attackSeq', () => {
+                const animationState = this.enemyAnimationState.get(enemyId);
+                if (!animationState || enemy.attackSeq <= animationState.lastAttackSeq) return;
+
+                animationState.lastAttackSeq = enemy.attackSeq;
+                if (enemy.attackSeq <= 0) return;
+                this.playEnemyAttackAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
+            });
+
+            enemy.listen('damageSeq', () => {
+                const animationState = this.enemyAnimationState.get(enemyId);
+                if (!animationState || enemy.damageSeq <= animationState.lastDamageSeq) return;
+
+                animationState.lastDamageSeq = enemy.damageSeq;
+                if (enemy.damageSeq <= 0) return;
+                this.playEnemyDamageAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
             });
         };
 
@@ -410,7 +465,12 @@ export class Game extends Phaser.Scene {
         state.enemies.onRemove((_enemy, id) => {
             const s = this.enemySprites.get(id);
             if (s) { this.addExplosion(s.x, s.y); s.destroy(); }
+            const animationState = this.enemyAnimationState.get(id);
+            if (animationState?.damageFlashEvent) {
+                animationState.damageFlashEvent.remove(false);
+            }
             this.enemySprites.delete(id);
+            this.enemyAnimationState.delete(id);
         });
 
         // ── Player bullets ───────────────────────────────────────────────────
@@ -662,6 +722,11 @@ export class Game extends Phaser.Scene {
         return this.shouldPlayWorldEventAudio();
     }
 
+    shouldPlayEnemyHitAudio(attackerId) {
+        if (this.isLocalSession(attackerId)) return true;
+        return this.shouldPlayWorldEventAudio();
+    }
+
     isDocumentActive() {
         const hasFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : !document.hidden;
         return !document.hidden && hasFocus;
@@ -709,6 +774,111 @@ export class Game extends Phaser.Scene {
         return true;
     }
 
+    setEnemyAnimation(enemyId, action, direction) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!animationState) return;
+
+        const nextDirection = direction || animationState.direction || 'S';
+        animationState.direction = nextDirection;
+        animationState.action = action || 'run';
+        if (animationState.takingDamage) return;
+        if (animationState.attacking) return;
+
+        if (animationState.action === 'idle') {
+            this.setEnemyIdleFrame(enemyId, nextDirection);
+            return;
+        }
+
+        this.playEnemyAnimation(enemyId, 'run', nextDirection);
+    }
+
+    playEnemyAttackAnimation(enemyId, direction) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!animationState || animationState.attacking) return;
+
+        animationState.attacking = true;
+        const didPlay = this.playEnemyAnimation(enemyId, 'attack', direction, { restart: true });
+        if (!didPlay) {
+            animationState.attacking = false;
+            return;
+        }
+
+        const sprite = this.enemySprites.get(enemyId);
+        sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+            animationState.attacking = false;
+            this.setEnemyAnimation(enemyId, animationState.action, animationState.direction);
+        });
+    }
+
+    playEnemyDamageAnimation(enemyId, direction) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!animationState) return;
+
+        animationState.takingDamage = true;
+        animationState.attacking = false;
+        const didPlay = this.playEnemyAnimation(enemyId, 'damage', direction, { restart: true });
+        if (!didPlay) {
+            animationState.takingDamage = false;
+            return;
+        }
+
+        const sprite = this.enemySprites.get(enemyId);
+        this.flashEnemyDamage(enemyId);
+        sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+            animationState.takingDamage = false;
+            this.setEnemyAnimation(enemyId, animationState.action, animationState.direction);
+        });
+    }
+
+    flashEnemyDamage(enemyId) {
+        const sprite = this.enemySprites.get(enemyId);
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!sprite || !animationState) return;
+
+        if (animationState.damageFlashEvent) {
+            animationState.damageFlashEvent.remove(false);
+        }
+
+        sprite.setTintFill(0xffffff);
+        animationState.damageFlashEvent = this.time.delayedCall(ENEMY_DAMAGE_FLASH_MS, () => {
+            const currentSprite = this.enemySprites.get(enemyId);
+            const currentState = this.enemyAnimationState.get(enemyId);
+            if (currentSprite) currentSprite.clearTint();
+            if (currentState) currentState.damageFlashEvent = null;
+        });
+    }
+
+    playEnemyAnimation(enemyId, mode, direction, { restart = false } = {}) {
+        const sprite = this.enemySprites.get(enemyId);
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!sprite || !animationState) return false;
+
+        const nextDirection = direction || animationState.direction || 'S';
+        animationState.direction = nextDirection;
+
+        const animation = ANIMATION.enemy1[mode]?.[nextDirection];
+        if (!animation) return false;
+
+        if (sprite.anims.currentAnim?.key !== animation.key || !sprite.anims.isPlaying) {
+            sprite.play(animation.key);
+        } else if (restart) {
+            sprite.anims.stop();
+            sprite.play(animation.key);
+        }
+
+        return true;
+    }
+
+    setEnemyIdleFrame(enemyId, direction) {
+        const sprite = this.enemySprites.get(enemyId);
+        if (!sprite) return;
+
+        const row = DIRECTION_ORDER.indexOf(direction);
+        const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
+        if (sprite.anims.isPlaying) sprite.anims.stop();
+        sprite.setTexture(ASSETS.spritesheet.enemy1Run.key, frame);
+    }
+
     addExplosion(x, y) {
         new Explosion(this, x, y);
     }
@@ -728,6 +898,7 @@ export class Game extends Phaser.Scene {
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.enemySprites.clear();
+        this.enemyAnimationState.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
         this.playerBulletSprites.clear();

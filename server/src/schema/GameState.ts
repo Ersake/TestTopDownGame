@@ -20,6 +20,10 @@ export class EnemyState extends Schema {
     @type("int8")    shipId: number = 0;
     @type("int8")    power: number = 1;
     @type("int8")    health: number = 1;
+    @type("string")  facingDirection: string = "S";
+    @type("string")  action: string = "run";
+    @type("int32")   attackSeq: number = 0;
+    @type("int32")   damageSeq: number = 0;
 }
 
 export class PlayerBulletState extends Schema {

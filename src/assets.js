@@ -12,6 +12,10 @@ export default {
             key: 'tree-fall',
             args: ['assets/treefall.mp3']
         },
+        skeletonHit: {
+            key: 'skeleton-hit',
+            args: ['assets/skeleton hit sound.mp3']
+        },
     },
     'image': {
         treeBottom: {
@@ -59,6 +63,27 @@ export default {
         playerAttack: {
             key: 'player-attack',
             args: ['assets/Attack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        enemy1Run: {
+            key: 'enemy1-run',
+            args: ['assets/Enemy1Run.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        enemy1Attack: {
+            key: 'enemy1-attack',
+            args: ['assets/Enemy1Attack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        enemy1TakeDamage: {
+            key: 'enemy1-take-damage',
+            args: ['assets/Enemy1TakeDamage.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]
