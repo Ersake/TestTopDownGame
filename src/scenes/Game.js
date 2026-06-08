@@ -21,7 +21,7 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
-const WOOD_UI_ICON_SIZE = 32;
+const WOOD_UI_ICON_SIZE = 64;
 const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
@@ -134,18 +134,13 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.scoreText = this.add.text(20, 58, 'Score: 0', {
-            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 8,
-        }).setDepth(UI_DEPTH).setScrollFactor(0);
-
-        this.woodIcon = this.add.image(34, 112, ASSETS.image.log.key)
+        this.woodIcon = this.add.image(52, this.scale.height - 52, ASSETS.image.log.key)
             .setOrigin(0.5)
             .setDisplaySize(WOOD_UI_ICON_SIZE, WOOD_UI_ICON_SIZE)
             .setDepth(UI_DEPTH)
             .setScrollFactor(0);
 
-        this.woodText = this.add.text(58, 96, '0', {
+        this.woodText = this.add.text(96, this.scale.height - 70, '0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
@@ -467,10 +462,6 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Root state listeners ─────────────────────────────────────────────
-        state.listen('teamScore', (score) => {
-            this.scoreText.setText(`Score: ${score}`);
-        });
-
         this.timerText.setText(this.formatElapsedTime(state.elapsedSeconds || 0));
         state.listen('elapsedSeconds', (elapsedSeconds) => {
             this.timerText.setText(this.formatElapsedTime(elapsedSeconds || 0));
