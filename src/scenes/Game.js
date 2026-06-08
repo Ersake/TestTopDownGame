@@ -19,8 +19,7 @@ const SHIP_FRAME_OFFSET = 12;  // ships.png: enemy frames start at 12 + shipId
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
-const TEST_TREE_HALF_SIZE = 96;
-const TEST_TREE_OFFSET_X = 240;
+const TREE_HALF_SIZE = 96;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
@@ -89,6 +88,7 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
+        this.treeSprites         = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -308,6 +308,34 @@ export class Game extends Phaser.Scene {
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
+        const addTree = (tree, id) => {
+            const treeId = id || tree.id;
+            if (!treeId || this.treeSprites.has(treeId)) return;
+
+            const bottom = this.add.image(tree.x, tree.y, ASSETS.image.treeBottom.key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(TREE_HALF_SIZE, TREE_HALF_SIZE)
+                .setDepth(90);
+
+            const top = this.add.image(tree.x, tree.y, ASSETS.image.treeTop.key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(TREE_HALF_SIZE, TREE_HALF_SIZE)
+                .setDepth(110);
+
+            this.treeSprites.set(treeId, { bottom, top, tree });
+        };
+
+        state.trees.onAdd(addTree);
+        state.trees.forEach(addTree);
+
+        state.trees.onRemove((_tree, id) => {
+            const sprites = this.treeSprites.get(id);
+            if (!sprites) return;
+            sprites.bottom.destroy();
+            sprites.top.destroy();
+            this.treeSprites.delete(id);
+        });
+
         // ── Enemies ──────────────────────────────────────────────────────────
         const addEnemy = (enemy, id) => {
             const enemyId = id || enemy.id;
@@ -433,26 +461,10 @@ export class Game extends Phaser.Scene {
         this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, WORLD_BACKGROUND_COLOR)
             .setOrigin(0)
             .setDepth(-100);
-        this.initTestTree();
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
-    initTestTree() {
-        const treeX = this.worldWidth * 0.5 + TEST_TREE_OFFSET_X;
-        const treeY = this.worldHeight * 0.5;
-
-        this.testTreeBottom = this.add.image(treeX, treeY, ASSETS.image.treeBottom.key)
-            .setOrigin(0.5, 1)
-            .setDisplaySize(TEST_TREE_HALF_SIZE, TEST_TREE_HALF_SIZE)
-            .setDepth(90);
-
-        this.testTreeTop = this.add.image(treeX, treeY, ASSETS.image.treeTop.key)
-            .setOrigin(0.5, 1)
-            .setDisplaySize(TEST_TREE_HALF_SIZE, TEST_TREE_HALF_SIZE)
-            .setDepth(110);
-    }
-
     isLocalSession(sessionId) {
         return !!this.localSessionId && sessionId === this.localSessionId;
     }
@@ -602,18 +614,22 @@ export class Game extends Phaser.Scene {
         const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS[DEFAULT_PLAYER_DIRECTION];
         const attackX = sprite.x + vector.x * ATTACK_HIT_OFFSET;
         const attackY = sprite.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * ATTACK_HIT_OFFSET;
-        const treeX = this.worldWidth * 0.5 + TEST_TREE_OFFSET_X;
-        const treeY = this.worldHeight * 0.5 + TEST_TREE_TRUNK_Y_OFFSET;
+        let hitTree = false;
 
-        return this.circleOverlapsAabb(
-            attackX,
-            attackY,
-            ATTACK_HIT_RADIUS,
-            treeX,
-            treeY,
-            TEST_TREE_TRUNK_HALF_WIDTH,
-            TEST_TREE_TRUNK_HALF_HEIGHT,
-        );
+        this.treeSprites.forEach(({ tree }) => {
+            if (hitTree) return;
+            hitTree = this.circleOverlapsAabb(
+                attackX,
+                attackY,
+                ATTACK_HIT_RADIUS,
+                tree.x,
+                tree.y + TEST_TREE_TRUNK_Y_OFFSET,
+                TEST_TREE_TRUNK_HALF_WIDTH,
+                TEST_TREE_TRUNK_HALF_HEIGHT,
+            );
+        });
+
+        return hitTree;
     }
 
     circleOverlapsAabb(circleX, circleY, radius, rectX, rectY, rectHalfWidth, rectHalfHeight) {
@@ -659,11 +675,16 @@ export class Game extends Phaser.Scene {
     clearAllSprites() {
         this.playerSprites.forEach(s => s.destroy());
         this.enemySprites.forEach(s => s.destroy());
+        this.treeSprites.forEach(({ bottom, top }) => {
+            bottom.destroy();
+            top.destroy();
+        });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.enemySprites.clear();
+        this.treeSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }

@@ -36,11 +36,18 @@ export class EnemyBulletState extends Schema {
     @type("int8")    power: number = 1;
 }
 
+export class TreeState extends Schema {
+    @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 export class GameRoomState extends Schema {
     @type({ map: PlayerState })       players      = new MapSchema<PlayerState>();
     @type({ map: EnemyState })        enemies      = new MapSchema<EnemyState>();
     @type({ map: PlayerBulletState }) playerBullets = new MapSchema<PlayerBulletState>();
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
+    @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
 
     @type("int32")  worldWidth:  number = 3840;
     @type("int32")  worldHeight: number = 2160;

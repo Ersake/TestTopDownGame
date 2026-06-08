@@ -5,6 +5,7 @@ import {
     EnemyState,
     PlayerBulletState,
     EnemyBulletState,
+    TreeState,
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
@@ -15,11 +16,12 @@ const VIEW_WIDTH      = 1280;
 const VIEW_HEIGHT     = 720;
 const WORLD_WIDTH     = VIEW_WIDTH * 3;
 const WORLD_HEIGHT    = VIEW_HEIGHT * 3;
-const TEST_TREE_OFFSET_X = 240;
-const TEST_TREE_X = WORLD_WIDTH / 2 + TEST_TREE_OFFSET_X;
-const TEST_TREE_Y = WORLD_HEIGHT / 2;
-const TEST_TREE_TRUNK_X = TEST_TREE_X;
-const TEST_TREE_TRUNK_Y = TEST_TREE_Y - 18;
+const TREE_COUNT = 25;
+const TREE_GRID_COLS = 5;
+const TREE_GRID_ROWS = 5;
+const TREE_EDGE_PADDING = 192;
+const TREE_SPAWN_CLEAR_RADIUS = 300;
+const TREE_TRUNK_Y_OFFSET = -18;
 
 // Half-extents used for AABB collision detection
 const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
@@ -28,8 +30,8 @@ const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
 const PLAYER_TREE_FOOT_RADIUS = 5;
 const PLAYER_TREE_Y_OFFSET = 36;
-const TEST_TREE_TRUNK_HW = 5;
-const TEST_TREE_TRUNK_HH = 18;
+const TREE_TRUNK_HW = 5;
+const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
@@ -152,6 +154,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         state.worldWidth = WORLD_WIDTH;
         state.worldHeight = WORLD_HEIGHT;
         this.setState(state);
+        this.generateTrees();
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
 
@@ -241,6 +244,48 @@ export class ShmupRoom extends Room<GameRoomState> {
         _usedCodes.delete(this.roomId);
     }
 
+    private generateTrees() {
+        this.state.trees.clear();
+
+        const usableWidth = WORLD_WIDTH - TREE_EDGE_PADDING * 2;
+        const usableHeight = WORLD_HEIGHT - TREE_EDGE_PADDING * 2;
+        const cellWidth = usableWidth / TREE_GRID_COLS;
+        const cellHeight = usableHeight / TREE_GRID_ROWS;
+        const spawnX = WORLD_WIDTH / 2;
+        const spawnY = WORLD_HEIGHT / 2;
+
+        let treeIndex = 0;
+        for (let row = 0; row < TREE_GRID_ROWS; row++) {
+            for (let col = 0; col < TREE_GRID_COLS; col++) {
+                let x = 0;
+                let y = 0;
+
+                for (let attempt = 0; attempt < 12; attempt++) {
+                    x = TREE_EDGE_PADDING + col * cellWidth + rndReal(cellWidth * 0.2, cellWidth * 0.8);
+                    y = TREE_EDGE_PADDING + row * cellHeight + rndReal(cellHeight * 0.2, cellHeight * 0.8);
+
+                    if (Math.hypot(x - spawnX, y - spawnY) >= TREE_SPAWN_CLEAR_RADIUS) break;
+                }
+
+                if (Math.hypot(x - spawnX, y - spawnY) < TREE_SPAWN_CLEAR_RADIUS) {
+                    const dx = x - spawnX || 1;
+                    const dy = y - spawnY || 0;
+                    const length = Math.hypot(dx, dy);
+                    x = spawnX + (dx / length) * TREE_SPAWN_CLEAR_RADIUS;
+                    y = spawnY + (dy / length) * TREE_SPAWN_CLEAR_RADIUS;
+                    x = clamp(x, TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
+                    y = clamp(y, TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+                }
+
+                const tree = new TreeState();
+                tree.id = `tree-${++treeIndex}`;
+                tree.x = x;
+                tree.y = y;
+                this.state.trees.set(tree.id, tree);
+            }
+        }
+    }
+
     // ─── Main tick ────────────────────────────────────────────────────────────
     private tick(dt: number) {
         if (!this.state.gameStarted || this.state.gameOver) return;
@@ -297,15 +342,21 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private collidesWithTestTreeTrunk(playerX: number, playerY: number): boolean {
-        return circleOverlapsAabb(
-            playerX,
-            playerY + PLAYER_TREE_Y_OFFSET,
-            PLAYER_TREE_FOOT_RADIUS,
-            TEST_TREE_TRUNK_X,
-            TEST_TREE_TRUNK_Y,
-            TEST_TREE_TRUNK_HW,
-            TEST_TREE_TRUNK_HH,
-        );
+        let collides = false;
+        this.state.trees.forEach((tree) => {
+            if (collides) return;
+            collides = circleOverlapsAabb(
+                playerX,
+                playerY + PLAYER_TREE_Y_OFFSET,
+                PLAYER_TREE_FOOT_RADIUS,
+                tree.x,
+                tree.y + TREE_TRUNK_Y_OFFSET,
+                TREE_TRUNK_HW,
+                TREE_TRUNK_HH,
+            );
+        });
+
+        return collides;
     }
 
     private movePlayerWithTestTree(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
