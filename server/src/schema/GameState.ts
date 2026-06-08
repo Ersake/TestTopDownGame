@@ -42,12 +42,19 @@ export class TreeState extends Schema {
     @type("float32") y: number = 0;
 }
 
+export class LogState extends Schema {
+    @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 export class GameRoomState extends Schema {
     @type({ map: PlayerState })       players      = new MapSchema<PlayerState>();
     @type({ map: EnemyState })        enemies      = new MapSchema<EnemyState>();
     @type({ map: PlayerBulletState }) playerBullets = new MapSchema<PlayerBulletState>();
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
     @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
+    @type({ map: LogState })          logs          = new MapSchema<LogState>();
 
     @type("int32")  worldWidth:  number = 3840;
     @type("int32")  worldHeight: number = 2160;

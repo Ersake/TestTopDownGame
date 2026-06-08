@@ -6,6 +6,7 @@ import {
     PlayerBulletState,
     EnemyBulletState,
     TreeState,
+    LogState,
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
@@ -34,7 +35,30 @@ const TREE_TRUNK_HW = 5;
 const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
+const ATTACK_COOLDOWN_MS = 850;
+const TREE_HEALTH = 4;
+const ATTACK_HIT_RADIUS = 36;
+const ATTACK_HIT_OFFSET = 36;
+const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
+const LOG_WORLD_PADDING = 16;
+const LOG_DROP_OFFSETS: [number, number][] = [
+    [-18, -6],
+    [0, -10],
+    [18, -6],
+    [-9, 10],
+    [11, 8],
+];
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
+const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
+    E: { x: 1, y: 0 },
+    SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+    S: { x: 0, y: 1 },
+    SW: { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+    W: { x: -1, y: 0 },
+    NW: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+    N: { x: 0, y: -1 },
+    NE: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+};
 
 // ─── CatmullRom spline (replicates Phaser.Curves.Spline.getPoint) ─────────────
 function catmullRom(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -94,11 +118,19 @@ interface ServerPlayer {
     attackLockMs: number;
     attackLockX: number;
     attackLockY: number;
+    attackCooldownMs: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean };
     alive: boolean;
 }
 interface ServerEnemy   { pathIndex: number; pathSpeed: number; pathId: number; fireCounter: number; power: number; }
 interface ServerBullet  { vy: number; }
+interface TreeHitPayload {
+    treeId: string;
+    attackerId: string;
+    x: number;
+    y: number;
+    remainingHealth: number;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 let _id = 0;
@@ -136,6 +168,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverEnemies       = new Map<string, ServerEnemy>();
     private serverPlayerBullets = new Map<string, ServerBullet>();
     private serverEnemyBullets  = new Map<string, ServerBullet>();
+    private serverTreeHealth    = new Map<string, number>();
     private spawnTimer          = 0; // ms until next enemy wave
 
     private generateRoomCode(): string {
@@ -172,6 +205,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
+            if (sp.attackCooldownMs > 0) return;
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
             player.facingDirection = attackDirection;
@@ -180,8 +214,11 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackLockMs = ATTACK_LOCK_MS;
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
+            sp.attackCooldownMs = ATTACK_COOLDOWN_MS;
             sp.vx = 0;
             sp.vy = 0;
+            const treeHit = this.damageTreeFromAttack(player, client.sessionId, attackDirection);
+            if (treeHit) this.broadcast("treeHit", treeHit);
         });
     }
 
@@ -208,6 +245,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockMs: 0,
             attackLockX: ps.x,
             attackLockY: ps.y,
+            attackCooldownMs: 0,
             input: { left: false, right: false, up: false, down: false, fire: false },
             alive: true,
         });
@@ -228,6 +266,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverPlayerBullets.clear();
         this.state.enemyBullets.clear();
         this.serverEnemyBullets.clear();
+        this.state.logs.clear();
+        this.generateTrees();
 
         this.state.teamScore = 0;
         this.state.gameOver  = false;
@@ -246,6 +286,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private generateTrees() {
         this.state.trees.clear();
+        this.serverTreeHealth.clear();
 
         const usableWidth = WORLD_WIDTH - TREE_EDGE_PADDING * 2;
         const usableHeight = WORLD_HEIGHT - TREE_EDGE_PADDING * 2;
@@ -282,8 +323,79 @@ export class ShmupRoom extends Room<GameRoomState> {
                 tree.x = x;
                 tree.y = y;
                 this.state.trees.set(tree.id, tree);
+                this.serverTreeHealth.set(tree.id, TREE_HEALTH);
             }
         }
+    }
+
+    private damageTreeFromAttack(player: PlayerState, attackerId: string, direction: string): TreeHitPayload | null {
+        const hitTreeId = this.findTreeHitByAttack(player, direction);
+        if (!hitTreeId) return null;
+
+        const tree = this.state.trees.get(hitTreeId);
+        if (!tree) {
+            this.serverTreeHealth.delete(hitTreeId);
+            return null;
+        }
+
+        const nextHealth = Math.max(0, (this.serverTreeHealth.get(hitTreeId) ?? TREE_HEALTH) - 1);
+        const hitPayload = {
+            treeId: hitTreeId,
+            attackerId,
+            x: tree.x,
+            y: tree.y,
+            remainingHealth: nextHealth,
+        };
+
+        if (nextHealth > 0) {
+            this.serverTreeHealth.set(hitTreeId, nextHealth);
+            return hitPayload;
+        }
+
+        this.spawnLogsForTree(tree);
+        this.state.trees.delete(hitTreeId);
+        this.serverTreeHealth.delete(hitTreeId);
+        return hitPayload;
+    }
+
+    private findTreeHitByAttack(player: PlayerState, direction: string): string | null {
+        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS.N;
+        const attackX = player.x + vector.x * ATTACK_HIT_OFFSET;
+        const attackY = player.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * ATTACK_HIT_OFFSET;
+        let closestTreeId: string | null = null;
+        let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+        this.state.trees.forEach((tree, id) => {
+            if (!circleOverlapsAabb(
+                attackX,
+                attackY,
+                ATTACK_HIT_RADIUS,
+                tree.x,
+                tree.y + TREE_TRUNK_Y_OFFSET,
+                TREE_TRUNK_HW,
+                TREE_TRUNK_HH,
+            )) return;
+
+            const dx = attackX - tree.x;
+            const dy = attackY - (tree.y + TREE_TRUNK_Y_OFFSET);
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq < closestDistanceSq) {
+                closestDistanceSq = distanceSq;
+                closestTreeId = id;
+            }
+        });
+
+        return closestTreeId;
+    }
+
+    private spawnLogsForTree(tree: TreeState) {
+        LOG_DROP_OFFSETS.forEach(([offsetX, offsetY]) => {
+            const log = new LogState();
+            log.id = `log-${nextId()}`;
+            log.x = clamp(tree.x + offsetX, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
+            log.y = clamp(tree.y - 8 + offsetY, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
+            this.state.logs.set(log.id, log);
+        });
     }
 
     // ─── Main tick ────────────────────────────────────────────────────────────
@@ -307,6 +419,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const { left, right, up, down, fire } = sp.input;
             const isAttackLocked = sp.attackLockMs > 0;
             sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
+            sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
 
             const inputX = Number(right) - Number(left);
             const inputY = Number(down) - Number(up);

@@ -8,6 +8,10 @@ export default {
             key: 'wood-hit',
             args: ['assets/woodhit.mp3']
         },
+        treeFall: {
+            key: 'tree-fall',
+            args: ['assets/treefall.mp3']
+        },
     },
     'image': {
         treeBottom: {
@@ -17,6 +21,10 @@ export default {
         treeTop: {
             key: 'tree-top',
             args: ['assets/treetop.png']
+        },
+        log: {
+            key: 'log',
+            args: ['assets/log.png']
         },
     },
     'spritesheet': {

@@ -20,29 +20,15 @@ const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
+const LOG_DISPLAY_SIZE = 48;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
+const TREE_FALL_SOUND_VOLUME = 0.75;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
-const TEST_TREE_TRUNK_Y_OFFSET = -18;
-const TEST_TREE_TRUNK_HALF_WIDTH = 5;
-const TEST_TREE_TRUNK_HALF_HEIGHT = 18;
-const ATTACK_HIT_RADIUS = 36;
-const ATTACK_HIT_OFFSET = 36;
-const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
-const DIRECTION_VECTORS = {
-    E: { x: 1, y: 0 },
-    SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
-    S: { x: 0, y: 1 },
-    SW: { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
-    W: { x: -1, y: 0 },
-    NW: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
-    N: { x: 0, y: -1 },
-    NE: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
-};
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -89,6 +75,7 @@ export class Game extends Phaser.Scene {
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.treeSprites         = new Map();
+        this.logSprites          = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -196,6 +183,11 @@ export class Game extends Phaser.Scene {
 
         this.localSessionId = room.sessionId || RoomClient.sessionId;
         const state = room.state;
+
+        room.onMessage('treeHit', (hit) => {
+            if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
+            this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+        });
 
         // ── Players ──────────────────────────────────────────────────────────
         const addPlayer = (player, sessionId) => {
@@ -334,9 +326,41 @@ export class Game extends Phaser.Scene {
             sprites.bottom.destroy();
             sprites.top.destroy();
             this.treeSprites.delete(id);
+            if (this.shouldPlayWorldEventAudio()) {
+                this.sound.play(ASSETS.audio.treeFall.key, { volume: TREE_FALL_SOUND_VOLUME });
+            }
         });
 
         // ── Enemies ──────────────────────────────────────────────────────────
+        const addLog = (log, id) => {
+            const logId = id || log.id;
+            if (!logId || this.logSprites.has(logId)) return;
+
+            const sprite = this.add.image(log.x, log.y, ASSETS.image.log.key)
+                .setOrigin(0.5, 0.5)
+                .setDisplaySize(LOG_DISPLAY_SIZE, LOG_DISPLAY_SIZE)
+                .setDepth(85);
+
+            this.logSprites.set(logId, sprite);
+
+            log.onChange(() => {
+                const s = this.logSprites.get(logId);
+                if (s) {
+                    s.x = log.x;
+                    s.y = log.y;
+                }
+            });
+        };
+
+        state.logs.onAdd(addLog);
+        state.logs.forEach(addLog);
+
+        state.logs.onRemove((_log, id) => {
+            const sprite = this.logSprites.get(id);
+            if (sprite) sprite.destroy();
+            this.logSprites.delete(id);
+        });
+
         const addEnemy = (enemy, id) => {
             const enemyId = id || enemy.id;
             if (!enemyId || this.enemySprites.has(enemyId)) return;
@@ -569,9 +593,6 @@ export class Game extends Phaser.Scene {
 
         if (playAudio) {
             this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
-            if (this.playerAttackHitsTestTree(sprite, direction)) {
-                this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
-            }
         }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
@@ -588,6 +609,16 @@ export class Game extends Phaser.Scene {
         if (this.isLocalSession(sessionId)) return true;
         if (!this.isTabActive || document.hidden || this.remoteAttackAudioDirty) return false;
         return performance.now() >= this.suppressRemoteAttackAudioUntil;
+    }
+
+    shouldPlayWorldEventAudio() {
+        if (!this.isTabActive || document.hidden || this.remoteAttackAudioDirty) return false;
+        return performance.now() >= this.suppressRemoteAttackAudioUntil;
+    }
+
+    shouldPlayTreeHitAudio(attackerId) {
+        if (this.isLocalSession(attackerId)) return true;
+        return this.shouldPlayWorldEventAudio();
     }
 
     isDocumentActive() {
@@ -608,37 +639,6 @@ export class Game extends Phaser.Scene {
                 animationState.lastAttackSeq = player.attackSeq || 0;
             }
         });
-    }
-
-    playerAttackHitsTestTree(sprite, direction) {
-        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS[DEFAULT_PLAYER_DIRECTION];
-        const attackX = sprite.x + vector.x * ATTACK_HIT_OFFSET;
-        const attackY = sprite.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * ATTACK_HIT_OFFSET;
-        let hitTree = false;
-
-        this.treeSprites.forEach(({ tree }) => {
-            if (hitTree) return;
-            hitTree = this.circleOverlapsAabb(
-                attackX,
-                attackY,
-                ATTACK_HIT_RADIUS,
-                tree.x,
-                tree.y + TEST_TREE_TRUNK_Y_OFFSET,
-                TEST_TREE_TRUNK_HALF_WIDTH,
-                TEST_TREE_TRUNK_HALF_HEIGHT,
-            );
-        });
-
-        return hitTree;
-    }
-
-    circleOverlapsAabb(circleX, circleY, radius, rectX, rectY, rectHalfWidth, rectHalfHeight) {
-        const closestX = Phaser.Math.Clamp(circleX, rectX - rectHalfWidth, rectX + rectHalfWidth);
-        const closestY = Phaser.Math.Clamp(circleY, rectY - rectHalfHeight, rectY + rectHalfHeight);
-        const dx = circleX - closestX;
-        const dy = circleY - closestY;
-
-        return dx * dx + dy * dy <= radius * radius;
     }
 
     setPlayerAnimation(sessionId, moving, direction) {
@@ -679,12 +679,14 @@ export class Game extends Phaser.Scene {
             bottom.destroy();
             top.destroy();
         });
+        this.logSprites.forEach(s => s.destroy());
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.enemySprites.clear();
         this.treeSprites.clear();
+        this.logSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }
