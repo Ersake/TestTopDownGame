@@ -6,6 +6,7 @@ export class PlayerState extends Schema {
     @type("float32") y: number = 0;
     @type("int8")    health: number = 1;
     @type("int32")   kills: number = 0;
+    @type("int32")   wood: number = 0;
     @type("boolean") isDead: boolean = false;
     @type("string")  facingDirection: string = "N";
     @type("string")  attackDirection: string = "N";
@@ -46,6 +47,7 @@ export class LogState extends Schema {
     @type("string")  id: string = "";
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
+    @type("int8")    amount: number = 5;
 }
 
 export class GameRoomState extends Schema {

@@ -82,12 +82,12 @@ class RoomClient {
     /**
      * Send the current keyboard input state to the server.
      * Only transmits when the state has changed since the last call.
-     * @param {{ left: boolean, right: boolean, up: boolean, down: boolean, fire: boolean }} input
+     * @param {{ left: boolean, right: boolean, up: boolean, down: boolean, fire: boolean, interact: boolean }} input
      */
     sendInput(input) {
         if (!this.room) return;
 
-        const encoded = `${+input.left}${+input.right}${+input.up}${+input.down}${+input.fire}`;
+        const encoded = `${+input.left}${+input.right}${+input.up}${+input.down}${+input.fire}${+input.interact}`;
         if (encoded === this._lastInput) return;
         this._lastInput = encoded;
 

@@ -37,19 +37,14 @@ const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
 const ATTACK_COOLDOWN_MS = 850;
 const TREE_HEALTH = 4;
+const WOOD_PILE_AMOUNT = 5;
+const WOOD_PICKUP_RADIUS = 48;
 const ATTACK_HIT_RADIUS = 44;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
-const LOG_DROP_OFFSETS: [number, number][] = [
-    [-18, -6],
-    [0, -10],
-    [18, -6],
-    [-9, 10],
-    [11, 8],
-];
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -150,7 +145,7 @@ interface ServerPlayer {
     attackLockX: number;
     attackLockY: number;
     attackCooldownMs: number;
-    input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean };
+    input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
 interface ServerEnemy   { pathIndex: number; pathSpeed: number; pathId: number; fireCounter: number; power: number; }
@@ -226,11 +221,18 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("input", (client, data) => {
             const sp = this.serverPlayers.get(client.sessionId);
             if (!sp) return;
+            const wasInteracting = sp.input.interact;
+            const isInteracting = !!data.interact;
             sp.input.left  = !!data.left;
             sp.input.right = !!data.right;
             sp.input.up    = !!data.up;
             sp.input.down  = !!data.down;
             sp.input.fire  = !!data.fire;
+            sp.input.interact = isInteracting;
+
+            if (isInteracting && !wasInteracting) {
+                this.tryPickupWood(client.sessionId);
+            }
         });
 
         this.onMessage("attack", (client, data) => {
@@ -266,6 +268,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
         ps.health = 1;
+        ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
         ps.attackSeq = 0;
@@ -278,7 +281,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockX: ps.x,
             attackLockY: ps.y,
             attackCooldownMs: 0,
-            input: { left: false, right: false, up: false, down: false, fire: false },
+            input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
         });
 
@@ -446,13 +449,42 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private spawnLogsForTree(tree: TreeState) {
-        LOG_DROP_OFFSETS.forEach(([offsetX, offsetY]) => {
-            const log = new LogState();
-            log.id = `log-${nextId()}`;
-            log.x = clamp(tree.x + offsetX, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
-            log.y = clamp(tree.y - 8 + offsetY, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
-            this.state.logs.set(log.id, log);
+        const log = new LogState();
+        log.id = `log-${nextId()}`;
+        log.x = clamp(tree.x, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
+        log.y = clamp(tree.y - 8, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
+        log.amount = WOOD_PILE_AMOUNT;
+        this.state.logs.set(log.id, log);
+    }
+
+    private tryPickupWood(sessionId: string) {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver) return;
+
+        const pickupX = player.x;
+        const pickupY = player.y + PLAYER_TREE_Y_OFFSET;
+        const pickupRadiusSq = WOOD_PICKUP_RADIUS * WOOD_PICKUP_RADIUS;
+        let closestLogId: string | null = null;
+        let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+        this.state.logs.forEach((log, id) => {
+            const dx = pickupX - log.x;
+            const dy = pickupY - log.y;
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq <= pickupRadiusSq && distanceSq < closestDistanceSq) {
+                closestDistanceSq = distanceSq;
+                closestLogId = id;
+            }
         });
+
+        if (!closestLogId) return;
+
+        const log = this.state.logs.get(closestLogId);
+        if (!log) return;
+
+        player.wood += log.amount || WOOD_PILE_AMOUNT;
+        this.state.logs.delete(closestLogId);
     }
 
     // ─── Main tick ────────────────────────────────────────────────────────────

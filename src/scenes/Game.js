@@ -21,6 +21,7 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
+const WOOD_UI_ICON_SIZE = 32;
 const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
@@ -30,6 +31,13 @@ const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.75;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
+const LOG_PILE_OFFSETS = [
+    { x: -18, y: -6 },
+    { x: 0, y: -10 },
+    { x: 18, y: -6 },
+    { x: -9, y: 10 },
+    { x: 11, y: 8 },
+];
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -131,6 +139,17 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
 
+        this.woodIcon = this.add.image(34, 112, ASSETS.image.log.key)
+            .setOrigin(0.5)
+            .setDisplaySize(WOOD_UI_ICON_SIZE, WOOD_UI_ICON_SIZE)
+            .setDepth(UI_DEPTH)
+            .setScrollFactor(0);
+
+        this.woodText = this.add.text(58, 96, '0', {
+            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 8,
+        }).setDepth(UI_DEPTH).setScrollFactor(0);
+
         this.killsText = this.add.text(this.scale.width - 20, 20, 'Kills: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffff00',
             stroke: '#000000', strokeThickness: 8,
@@ -170,6 +189,7 @@ export class Game extends Phaser.Scene {
             down: Phaser.Input.Keyboard.KeyCodes.S,
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
+            interact: Phaser.Input.Keyboard.KeyCodes.F,
         });
 
         this.input.on('pointerdown', (pointer) => {
@@ -281,9 +301,14 @@ export class Game extends Phaser.Scene {
             if (isLocal) {
                 this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
+                this.woodText.setText(`${player.wood || 0}`);
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
+                });
+
+                player.listen('wood', (wood) => {
+                    this.woodText.setText(`${wood || 0}`);
                 });
             }
 
@@ -342,19 +367,21 @@ export class Game extends Phaser.Scene {
             const logId = id || log.id;
             if (!logId || this.logSprites.has(logId)) return;
 
-            const sprite = this.add.image(log.x, log.y, ASSETS.image.log.key)
+            const sprites = LOG_PILE_OFFSETS.map((offset) => this.add.image(log.x + offset.x, log.y + offset.y, ASSETS.image.log.key)
                 .setOrigin(0.5, 0.5)
                 .setDisplaySize(LOG_DISPLAY_SIZE, LOG_DISPLAY_SIZE)
-                .setDepth(85);
+                .setDepth(85));
 
-            this.logSprites.set(logId, sprite);
+            this.logSprites.set(logId, { sprites, log });
 
             log.onChange(() => {
-                const s = this.logSprites.get(logId);
-                if (s) {
-                    s.x = log.x;
-                    s.y = log.y;
-                }
+                const pile = this.logSprites.get(logId);
+                if (!pile) return;
+                pile.sprites.forEach((sprite, index) => {
+                    const offset = LOG_PILE_OFFSETS[index] || { x: 0, y: 0 };
+                    sprite.x = log.x + offset.x;
+                    sprite.y = log.y + offset.y;
+                });
             });
         };
 
@@ -362,8 +389,8 @@ export class Game extends Phaser.Scene {
         state.logs.forEach(addLog);
 
         state.logs.onRemove((_log, id) => {
-            const sprite = this.logSprites.get(id);
-            if (sprite) sprite.destroy();
+            const pile = this.logSprites.get(id);
+            if (pile) pile.sprites.forEach((sprite) => sprite.destroy());
             this.logSprites.delete(id);
         });
 
@@ -487,6 +514,7 @@ export class Game extends Phaser.Scene {
             up:    this.keys.up.isDown,
             down:  this.keys.down.isDown,
             fire:  this.keys.fire.isDown,
+            interact: this.keys.interact.isDown,
         });
     }
 
@@ -701,7 +729,9 @@ export class Game extends Phaser.Scene {
             bottom.destroy();
             top.destroy();
         });
-        this.logSprites.forEach(s => s.destroy());
+        this.logSprites.forEach(({ sprites }) => {
+            sprites.forEach((sprite) => sprite.destroy());
+        });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         this.playerSprites.clear();
