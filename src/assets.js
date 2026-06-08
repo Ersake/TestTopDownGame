@@ -20,6 +20,10 @@ export default {
             key: 'grab-item',
             args: ['assets/grabitem.mp3']
         },
+        playerHurt: {
+            key: 'player-hurt',
+            args: ['assets/playerhurt.mp3']
+        },
     },
     'image': {
         treeBottom: {

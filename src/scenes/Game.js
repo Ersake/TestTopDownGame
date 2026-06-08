@@ -32,7 +32,13 @@ const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.75;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
+const PLAYER_HURT_SOUND_VOLUME = 0.75;
 const ENEMY_DAMAGE_FLASH_MS = 90;
+const PLAYER_MAX_HEALTH = 5;
+const PLAYER_HEALTH_BAR_WIDTH = 48;
+const PLAYER_HEALTH_BAR_HEIGHT = 6;
+const PLAYER_HEALTH_BAR_Y_OFFSET = -74;
+const PLAYER_HEALTH_BAR_DEPTH = 130;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const LOG_PILE_OFFSETS = [
     { x: -18, y: -6 },
@@ -64,6 +70,7 @@ export class Game extends Phaser.Scene {
         this.ensureLocalCameraFollow();
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
+        this.updatePlayerHealthBars();
     }
 
     // ─── Variables ────────────────────────────────────────────────────────────
@@ -86,6 +93,7 @@ export class Game extends Phaser.Scene {
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerSprites       = new Map();
         this.playerAnimationState = new Map();
+        this.playerHealthBars = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -228,6 +236,11 @@ export class Game extends Phaser.Scene {
             this.sound.play(ASSETS.audio.grabItem.key, { volume: GRAB_ITEM_SOUND_VOLUME });
         });
 
+        room.onMessage('playerHurt', () => {
+            if (!this.shouldPlayWorldEventAudio()) return;
+            this.sound.play(ASSETS.audio.playerHurt.key, { volume: PLAYER_HURT_SOUND_VOLUME });
+        });
+
         // ── Players ──────────────────────────────────────────────────────────
         const addPlayer = (player, sessionId) => {
             const playerSessionId = sessionId || player.sessionId;
@@ -241,6 +254,11 @@ export class Game extends Phaser.Scene {
             if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
 
             this.playerSprites.set(playerSessionId, sprite);
+            this.playerHealthBars.set(playerSessionId, {
+                background: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH),
+                fill: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH + 1),
+                player,
+            });
             this.playerAnimationState.set(playerSessionId, {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
@@ -299,6 +317,10 @@ export class Game extends Phaser.Scene {
                 }
             });
 
+            player.listen('health', () => {
+                this.updatePlayerHealthBar(playerSessionId);
+            });
+
             player.listen('attackSeq', () => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (!animationState || player.attackSeq <= animationState.lastAttackSeq) return;
@@ -334,6 +356,11 @@ export class Game extends Phaser.Scene {
         state.players.onRemove((_player, sessionId) => {
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
+            const healthBar = this.playerHealthBars.get(sessionId);
+            if (healthBar) {
+                healthBar.background.destroy();
+                healthBar.fill.destroy();
+            }
             if (this.isLocalSession(sessionId)) {
                 this.localCamera.stopFollow();
                 this.localPlayerSprite = null;
@@ -341,6 +368,7 @@ export class Game extends Phaser.Scene {
             }
             this.playerSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
+            this.playerHealthBars.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
@@ -884,12 +912,43 @@ export class Game extends Phaser.Scene {
         sprite.setTexture(ASSETS.spritesheet.enemy1Run.key, frame);
     }
 
+    updatePlayerHealthBars() {
+        this.playerHealthBars.forEach((_healthBar, sessionId) => {
+            this.updatePlayerHealthBar(sessionId);
+        });
+    }
+
+    updatePlayerHealthBar(sessionId) {
+        const healthBar = this.playerHealthBars.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        if (!healthBar || !sprite) return;
+
+        const health = Phaser.Math.Clamp(healthBar.player.health || 0, 0, PLAYER_MAX_HEALTH);
+        const fillWidth = (health / PLAYER_MAX_HEALTH) * PLAYER_HEALTH_BAR_WIDTH;
+        const x = sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprite.y + PLAYER_HEALTH_BAR_Y_OFFSET;
+
+        healthBar.background.clear();
+        healthBar.background.fillStyle(0x050505, 1);
+        healthBar.background.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH, PLAYER_HEALTH_BAR_HEIGHT);
+
+        healthBar.fill.clear();
+        if (fillWidth > 0) {
+            healthBar.fill.fillStyle(0xff1010, 1);
+            healthBar.fill.fillRect(x, y, fillWidth, PLAYER_HEALTH_BAR_HEIGHT);
+        }
+    }
+
     addExplosion(x, y) {
         new Explosion(this, x, y);
     }
 
     clearAllSprites() {
         this.playerSprites.forEach(s => s.destroy());
+        this.playerHealthBars.forEach(({ background, fill }) => {
+            background.destroy();
+            fill.destroy();
+        });
         this.enemySprites.forEach(s => s.destroy());
         this.treeSprites.forEach(({ bottom, top }) => {
             bottom.destroy();
@@ -902,6 +961,7 @@ export class Game extends Phaser.Scene {
         this.enemyBulletSprites.forEach(s => s.destroy());
         this.playerSprites.clear();
         this.playerAnimationState.clear();
+        this.playerHealthBars.clear();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.treeSprites.clear();

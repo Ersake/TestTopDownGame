@@ -11,6 +11,7 @@ import {
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 300;   // px/s
+const PLAYER_MAX_HEALTH = 5;
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
 const VIEW_WIDTH      = 1280;
@@ -55,6 +56,11 @@ const ENEMY1_MIN_CHASE_STEP = 1;
 const ENEMY1_WINDUP_MS = 175;
 const ENEMY1_ATTACK_MS = 850;
 const ENEMY1_EDGE_OFFSET = 96;
+const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 225;
+const ENEMY1_ATTACK_DAMAGE = 1;
+const ENEMY1_ATTACK_HIT_OFFSET = 28;
+const ENEMY1_ATTACK_HIT_HW = 42;
+const ENEMY1_ATTACK_HIT_HH = 36;
 const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
@@ -181,6 +187,13 @@ interface EnemyHitPayload {
     y: number;
     remainingHealth: number;
 }
+interface PlayerHurtPayload {
+    playerId: string;
+    attackerId: string;
+    x: number;
+    y: number;
+    health: number;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 let _id = 0;
@@ -297,7 +310,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.sessionId = client.sessionId;
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
-        ps.health = 1;
+        ps.health = PLAYER_MAX_HEALTH;
         ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
@@ -811,6 +824,11 @@ export class ShmupRoom extends Room<GameRoomState> {
                     se.modeMs = ENEMY1_ATTACK_MS;
                     enemy.action = "attack";
                     enemy.attackSeq++;
+                    const attackOrigin = { x: enemy.x, y: enemy.y };
+                    const attackDirection = enemy.facingDirection || "S";
+                    setTimeout(() => {
+                        this.applyEnemyAttackImpact(id, attackOrigin, attackDirection);
+                    }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
                 }
                 return;
             }
@@ -854,6 +872,24 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     // ─── Enemy bullets ────────────────────────────────────────────────────────
+    private applyEnemyAttackImpact(enemyId: string, attackOrigin: AttackOrigin, direction: string) {
+        if (this.state.gameOver || !this.state.enemies.has(enemyId)) return;
+
+        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS.S;
+        const hitX = attackOrigin.x + vector.x * ENEMY1_ATTACK_HIT_OFFSET;
+        const hitY = attackOrigin.y + vector.y * ENEMY1_ATTACK_HIT_OFFSET;
+
+        this.state.players.forEach((player, playerId) => {
+            const sp = this.serverPlayers.get(playerId);
+            if (!sp || !sp.alive || player.isDead) return;
+
+            if (!overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
+
+            const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
+            if (hurt) this.broadcast("playerHurt", hurt);
+        });
+    }
+
     private spawnEnemyBullet(x: number, y: number, power: number) {
         const id = nextId();
         const b  = new EnemyBulletState();
@@ -908,7 +944,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (!sp.alive || deadEB.includes(bid)) return;
                 if (overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, bullet.x, bullet.y, EB_HW, EB_HH)) {
                     deadEB.push(bid);
-                    this.killPlayer(sid, sp, player);
+                    const hurt = this.damagePlayer(sid, sp, player, bullet.power || ENEMY1_ATTACK_DAMAGE, bid);
+                    if (hurt) this.broadcast("playerHurt", hurt);
                 }
             });
 
@@ -917,6 +954,25 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     // ─── Player death ─────────────────────────────────────────────────────────
+    private damagePlayer(sid: string, sp: ServerPlayer, player: PlayerState, damage: number, attackerId: string): PlayerHurtPayload | null {
+        if (!sp.alive || player.isDead || damage <= 0) return null;
+
+        player.health = Math.max(0, player.health - damage);
+        const payload = {
+            playerId: sid,
+            attackerId,
+            x: player.x,
+            y: player.y,
+            health: player.health,
+        };
+
+        if (player.health <= 0) {
+            this.killPlayer(sid, sp, player);
+        }
+
+        return payload;
+    }
+
     private killPlayer(sid: string, sp: ServerPlayer, player: PlayerState) {
         if (!sp.alive) return;
         sp.alive   = false;
