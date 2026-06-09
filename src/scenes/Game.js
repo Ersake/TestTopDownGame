@@ -38,8 +38,15 @@ const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
 const PLAYER_HEALTH_BAR_HEIGHT = 6;
-const PLAYER_HEALTH_BAR_Y_OFFSET = -60;
+const PLAYER_HEALTH_BAR_Y_OFFSET = -48;
 const PLAYER_HEALTH_BAR_DEPTH = 130;
+const PLAYER_HEALTH_BAR_FILL_COLOR = 0x10ff35;
+const ENEMY_MAX_HEALTH = 3;
+const ENEMY_HEALTH_BAR_WIDTH = 48;
+const ENEMY_HEALTH_BAR_HEIGHT = 6;
+const ENEMY_HEALTH_BAR_Y_OFFSET = -60;
+const ENEMY_HEALTH_BAR_DEPTH = 130;
+const ENEMY_HEALTH_BAR_FILL_COLOR = 0xff1010;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const INITIAL_SERVER_AUDIO_SUPPRESS_MS = 1500;
 const MASTER_VOLUME_STORAGE_KEY = 'testtopdown-master-volume';
@@ -84,6 +91,7 @@ export class Game extends Phaser.Scene {
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
+        this.updateEnemyHealthBars();
     }
 
     // ─── Variables ────────────────────────────────────────────────────────────
@@ -110,6 +118,7 @@ export class Game extends Phaser.Scene {
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
+        this.enemyHealthBars = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -547,6 +556,11 @@ export class Game extends Phaser.Scene {
                 .setDepth(100)
                 .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
             this.enemySprites.set(enemyId, sprite);
+            this.enemyHealthBars.set(enemyId, {
+                background: this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH),
+                fill: this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH + 1),
+                enemy,
+            });
             this.enemyAnimationState.set(enemyId, {
                 animationKey: enemyAnimationKey,
                 direction: enemy.facingDirection || 'S',
@@ -579,6 +593,10 @@ export class Game extends Phaser.Scene {
             enemy.listen('facingDirection', (direction) => {
                 const animationState = this.enemyAnimationState.get(enemyId);
                 this.setEnemyAnimation(enemyId, animationState?.action || enemy.action || 'run', direction || animationState?.direction || 'S');
+            });
+
+            enemy.listen('health', () => {
+                this.updateEnemyHealthBar(enemyId);
             });
 
             enemy.listen('attackSeq', () => {
@@ -624,6 +642,11 @@ export class Game extends Phaser.Scene {
         state.enemies.onRemove((_enemy, id) => {
             const s = this.enemySprites.get(id);
             const animationState = this.enemyAnimationState.get(id);
+            const healthBar = this.enemyHealthBars.get(id);
+            if (healthBar) {
+                healthBar.background.destroy();
+                healthBar.fill.destroy();
+            }
             if (s) {
                 if (!animationState?.dead) this.addExplosion(s.x, s.y);
                 s.destroy();
@@ -633,6 +656,7 @@ export class Game extends Phaser.Scene {
             }
             this.enemySprites.delete(id);
             this.enemyAnimationState.delete(id);
+            this.enemyHealthBars.delete(id);
         });
 
         // ── Player bullets ───────────────────────────────────────────────────
@@ -1195,6 +1219,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updateEnemyHealthBars() {
+        this.enemyHealthBars.forEach((_healthBar, enemyId) => {
+            this.updateEnemyHealthBar(enemyId);
+        });
+    }
+
     updatePlayerHealthBar(sessionId) {
         const healthBar = this.playerHealthBars.get(sessionId);
         const sprite = this.playerSprites.get(sessionId);
@@ -1211,8 +1241,29 @@ export class Game extends Phaser.Scene {
 
         healthBar.fill.clear();
         if (fillWidth > 0) {
-            healthBar.fill.fillStyle(0xff1010, 1);
+            healthBar.fill.fillStyle(PLAYER_HEALTH_BAR_FILL_COLOR, 1);
             healthBar.fill.fillRect(x, y, fillWidth, PLAYER_HEALTH_BAR_HEIGHT);
+        }
+    }
+
+    updateEnemyHealthBar(enemyId) {
+        const healthBar = this.enemyHealthBars.get(enemyId);
+        const sprite = this.enemySprites.get(enemyId);
+        if (!healthBar || !sprite) return;
+
+        const health = Phaser.Math.Clamp(healthBar.enemy.health || 0, 0, ENEMY_MAX_HEALTH);
+        const fillWidth = (health / ENEMY_MAX_HEALTH) * ENEMY_HEALTH_BAR_WIDTH;
+        const x = sprite.x - ENEMY_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprite.y + ENEMY_HEALTH_BAR_Y_OFFSET;
+
+        healthBar.background.clear();
+        healthBar.background.fillStyle(0x050505, 1);
+        healthBar.background.fillRect(x, y, ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT);
+
+        healthBar.fill.clear();
+        if (fillWidth > 0) {
+            healthBar.fill.fillStyle(ENEMY_HEALTH_BAR_FILL_COLOR, 1);
+            healthBar.fill.fillRect(x, y, fillWidth, ENEMY_HEALTH_BAR_HEIGHT);
         }
     }
 
@@ -1227,6 +1278,10 @@ export class Game extends Phaser.Scene {
             fill.destroy();
         });
         this.enemySprites.forEach(s => s.destroy());
+        this.enemyHealthBars.forEach(({ background, fill }) => {
+            background.destroy();
+            fill.destroy();
+        });
         this.treeSprites.forEach(({ bottom, top }) => {
             bottom.destroy();
             top.destroy();
@@ -1241,6 +1296,7 @@ export class Game extends Phaser.Scene {
         this.playerHealthBars.clear();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
+        this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
         this.playerBulletSprites.clear();
