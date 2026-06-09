@@ -38,6 +38,10 @@ export default {
             key: 'log',
             args: ['assets/log.png']
         },
+        volume: {
+            key: 'volume',
+            args: ['assets/volume.png']
+        },
     },
     'spritesheet': {
         ships: {
@@ -71,6 +75,13 @@ export default {
         playerAttack: {
             key: 'player-attack',
             args: ['assets/Attack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        playerDie: {
+            key: 'player-die',
+            args: ['assets/Playerdie.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

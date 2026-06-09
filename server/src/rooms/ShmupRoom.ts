@@ -255,6 +255,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("input", (client, data) => {
             const sp = this.serverPlayers.get(client.sessionId);
             if (!sp) return;
+            if (!sp.alive) {
+                sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
+                sp.vx = 0;
+                sp.vy = 0;
+                return;
+            }
             const wasInteracting = sp.input.interact;
             const isInteracting = !!data.interact;
             sp.input.left  = !!data.left;
@@ -976,6 +982,9 @@ export class ShmupRoom extends Room<GameRoomState> {
     private killPlayer(sid: string, sp: ServerPlayer, player: PlayerState) {
         if (!sp.alive) return;
         sp.alive   = false;
+        sp.vx = 0;
+        sp.vy = 0;
+        sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
         player.health = 0;
         this.checkAllDead();

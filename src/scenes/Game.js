@@ -29,7 +29,7 @@ const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
-const TREE_FALL_SOUND_VOLUME = 0.75;
+const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.75;
@@ -37,9 +37,16 @@ const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
 const PLAYER_HEALTH_BAR_HEIGHT = 6;
-const PLAYER_HEALTH_BAR_Y_OFFSET = -74;
+const PLAYER_HEALTH_BAR_Y_OFFSET = -60;
 const PLAYER_HEALTH_BAR_DEPTH = 130;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
+const INITIAL_SERVER_AUDIO_SUPPRESS_MS = 1500;
+const MASTER_VOLUME_STORAGE_KEY = 'testtopdown-master-volume';
+const DEFAULT_MASTER_VOLUME = 0.5;
+const MAX_EFFECTIVE_SOUND_VOLUME = 0.65;
+const VOLUME_SLIDER_WIDTH = 120;
+const VOLUME_SLIDER_HEIGHT = 8;
+const VOLUME_UI_ICON_SIZE = 64;
 const LOG_PILE_OFFSETS = [
     { x: -18, y: -6 },
     { x: 0, y: -10 },
@@ -103,6 +110,8 @@ export class Game extends Phaser.Scene {
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
+        this.masterVolume = this.loadMasterVolume();
+        this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.isTabActive = this.isDocumentActive();
         this.remoteAttackAudioDirty = !this.isTabActive;
         this.suppressRemoteAttackAudioUntil = this.isTabActive ? 0 : Number.POSITIVE_INFINITY;
@@ -179,6 +188,55 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.initVolumeSlider();
+    }
+
+    initVolumeSlider() {
+        const x = this.centreX - VOLUME_SLIDER_WIDTH * 0.5;
+        const y = 58;
+
+        this.volumeIcon = this.add.image(x - 42, y, ASSETS.image.volume.key)
+            .setOrigin(0.5)
+            .setDisplaySize(VOLUME_UI_ICON_SIZE, VOLUME_UI_ICON_SIZE)
+            .setDepth(UI_DEPTH)
+            .setScrollFactor(0);
+
+        this.volumeSliderTrack = this.add.rectangle(x, y, VOLUME_SLIDER_WIDTH, VOLUME_SLIDER_HEIGHT, 0x050505, 0.85)
+            .setOrigin(0, 0.5)
+            .setDepth(UI_DEPTH)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+
+        this.volumeSliderFill = this.add.rectangle(x, y, VOLUME_SLIDER_WIDTH, VOLUME_SLIDER_HEIGHT, 0xdddddd, 1)
+            .setOrigin(0, 0.5)
+            .setDepth(UI_DEPTH + 1)
+            .setScrollFactor(0);
+
+        this.volumeSliderKnob = this.add.circle(x, y, 8, 0xffffff, 1)
+            .setDepth(UI_DEPTH + 2)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+
+        const updateFromPointer = (pointer) => {
+            const value = Phaser.Math.Clamp((pointer.x - x) / VOLUME_SLIDER_WIDTH, 0, 1);
+            this.setMasterVolume(value);
+        };
+
+        this.volumeSliderTrack.on('pointerdown', updateFromPointer);
+        this.volumeSliderFill.on('pointerdown', updateFromPointer);
+        this.volumeSliderKnob.on('pointerdown', (pointer) => {
+            updateFromPointer(pointer);
+            this.volumeSliderDragging = true;
+        });
+        this.input.on('pointermove', (pointer) => {
+            if (this.volumeSliderDragging) updateFromPointer(pointer);
+        });
+        this.input.on('pointerup', () => {
+            this.volumeSliderDragging = false;
+        });
+
+        this.updateVolumeSliderUi();
     }
 
     // ─── Animations ───────────────────────────────────────────────────────────
@@ -188,6 +246,7 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.die).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
@@ -224,21 +283,21 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('treeHit', (hit) => {
             if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
-            this.sound.play(ASSETS.audio.woodHit.key, { volume: WOOD_HIT_SOUND_VOLUME });
+            this.playSfx(ASSETS.audio.woodHit.key, WOOD_HIT_SOUND_VOLUME, { serverEvent: true });
         });
 
         room.onMessage('enemyHit', (hit) => {
             if (!hit || !this.shouldPlayEnemyHitAudio(hit.attackerId)) return;
-            this.sound.play(ASSETS.audio.skeletonHit.key, { volume: SKELETON_HIT_SOUND_VOLUME });
+            this.playSfx(ASSETS.audio.skeletonHit.key, SKELETON_HIT_SOUND_VOLUME, { serverEvent: true });
         });
 
         room.onMessage('woodPickup', () => {
-            this.sound.play(ASSETS.audio.grabItem.key, { volume: GRAB_ITEM_SOUND_VOLUME });
+            this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
         });
 
         room.onMessage('playerHurt', () => {
             if (!this.shouldPlayWorldEventAudio()) return;
-            this.sound.play(ASSETS.audio.playerHurt.key, { volume: PLAYER_HURT_SOUND_VOLUME });
+            this.playSfx(ASSETS.audio.playerHurt.key, PLAYER_HURT_SOUND_VOLUME, { serverEvent: true });
         });
 
         // ── Players ──────────────────────────────────────────────────────────
@@ -263,6 +322,8 @@ export class Game extends Phaser.Scene {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
                 attacking: false,
+                dead: false,
+                deathPlayed: false,
                 attackVisualLockUntil: 0,
                 attackVisualLockX: player.x,
                 attackVisualLockY: player.y,
@@ -304,10 +365,13 @@ export class Game extends Phaser.Scene {
                     animationState.y = player.y;
                 }
 
-                if (player.isDead && s.visible) {
-                    this.addExplosion(s.x, s.y);
-                    s.setVisible(false);
+                if (player.isDead) {
+                    this.playPlayerDeathAnimation(playerSessionId);
                 }
+            });
+
+            player.listen('isDead', (isDead) => {
+                if (isDead) this.playPlayerDeathAnimation(playerSessionId);
             });
 
             player.listen('facingDirection', (direction) => {
@@ -332,6 +396,10 @@ export class Game extends Phaser.Scene {
                     playAudio: this.shouldPlayAttackAudio(playerSessionId),
                 });
             });
+
+            if (player.isDead) {
+                this.playPlayerDeathAnimation(playerSessionId);
+            }
 
             if (isLocal) {
                 this.activateLocalCamera(sprite, player);
@@ -399,7 +467,7 @@ export class Game extends Phaser.Scene {
             sprites.top.destroy();
             this.treeSprites.delete(id);
             if (this.shouldPlayWorldEventAudio()) {
-                this.sound.play(ASSETS.audio.treeFall.key, { volume: TREE_FALL_SOUND_VOLUME });
+                this.playSfx(ASSETS.audio.treeFall.key, TREE_FALL_SOUND_VOLUME, { serverEvent: true });
             }
         });
 
@@ -657,7 +725,7 @@ export class Game extends Phaser.Scene {
         if (!sessionId || !this.playerSprites.has(sessionId)) return;
 
         const animationState = this.playerAnimationState.get(sessionId);
-        if (animationState?.attacking) return;
+        if (animationState?.attacking || animationState?.dead) return;
 
         const dx = Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
         const dy = Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
@@ -668,6 +736,7 @@ export class Game extends Phaser.Scene {
 
     updateRemotePlayerAnimations() {
         this.playerAnimationState.forEach((animationState, sessionId) => {
+            if (animationState.dead) return;
             if (this.isLocalSession(sessionId) || !animationState.moving) return;
 
             if (this.time.now - animationState.lastMovedAt > 150) {
@@ -691,7 +760,7 @@ export class Game extends Phaser.Scene {
         const sessionId = this.localSessionId;
         const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
-        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking) return;
+        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking || animationState.dead) return;
 
         const worldPoint = this.getPointerWorldPoint(pointer);
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
@@ -715,7 +784,7 @@ export class Game extends Phaser.Scene {
     playPlayerAttackAnimation(sessionId, direction, { playAudio = true } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
-        if (!sprite || !animationState || animationState.attacking || !sprite.visible) return;
+        if (!sprite || !animationState || animationState.attacking || animationState.dead || !sprite.visible) return;
 
         animationState.attacking = true;
 
@@ -726,7 +795,7 @@ export class Game extends Phaser.Scene {
         }
 
         if (playAudio) {
-            this.sound.play(ASSETS.audio.punchWhoosh.key, { volume: PUNCH_SOUND_VOLUME });
+            this.playSfx(ASSETS.audio.punchWhoosh.key, PUNCH_SOUND_VOLUME);
         }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
@@ -739,13 +808,73 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    playPlayerDeathAnimation(sessionId) {
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!sprite || !animationState || animationState.deathPlayed) return;
+
+        animationState.dead = true;
+        animationState.deathPlayed = true;
+        animationState.attacking = false;
+        animationState.moving = false;
+
+        const direction = animationState.direction || DEFAULT_PLAYER_DIRECTION;
+        const animation = ANIMATION.player.die?.[direction];
+        if (!animation) return;
+
+        sprite.setVisible(true);
+        sprite.anims.stop();
+        sprite.play(animation.key);
+    }
+
+    loadMasterVolume() {
+        const saved = Number(window.localStorage?.getItem(MASTER_VOLUME_STORAGE_KEY));
+        return Number.isFinite(saved) ? Phaser.Math.Clamp(saved, 0, 1) : DEFAULT_MASTER_VOLUME;
+    }
+
+    setMasterVolume(value) {
+        this.masterVolume = Phaser.Math.Clamp(value, 0, 1);
+        try {
+            window.localStorage?.setItem(MASTER_VOLUME_STORAGE_KEY, String(this.masterVolume));
+        } catch (_error) {
+            // Ignore storage failures; volume still works for this session.
+        }
+        this.updateVolumeSliderUi();
+    }
+
+    updateVolumeSliderUi() {
+        if (!this.volumeSliderTrack || !this.volumeSliderFill || !this.volumeSliderKnob) return;
+
+        const value = Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1);
+        const width = VOLUME_SLIDER_WIDTH * value;
+        this.volumeSliderFill.width = Math.max(1, width);
+        this.volumeSliderKnob.x = this.volumeSliderTrack.x + width;
+        this.volumeSliderKnob.y = this.volumeSliderTrack.y;
+    }
+
+    playSfx(key, baseVolume, { serverEvent = false } = {}) {
+        if (serverEvent && !this.shouldPlayServerEventAudio()) return;
+
+        const volume = Math.min(
+            MAX_EFFECTIVE_SOUND_VOLUME,
+            Phaser.Math.Clamp(baseVolume, 0, 1) * Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1),
+        );
+        if (volume <= 0) return;
+        this.sound.play(key, { volume });
+    }
+
     shouldPlayAttackAudio(sessionId) {
         if (this.isLocalSession(sessionId)) return true;
         if (!this.isTabActive || document.hidden || this.remoteAttackAudioDirty) return false;
         return performance.now() >= this.suppressRemoteAttackAudioUntil;
     }
 
+    shouldPlayServerEventAudio() {
+        return performance.now() >= this.suppressServerEventAudioUntil;
+    }
+
     shouldPlayWorldEventAudio() {
+        if (!this.shouldPlayServerEventAudio()) return false;
         if (!this.isTabActive || document.hidden || this.remoteAttackAudioDirty) return false;
         return performance.now() >= this.suppressRemoteAttackAudioUntil;
     }
@@ -781,6 +910,8 @@ export class Game extends Phaser.Scene {
     }
 
     setPlayerAnimation(sessionId, moving, direction) {
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (animationState?.dead) return;
         const mode = moving ? 'run' : 'idle';
         this.playPlayerAnimation(sessionId, mode, direction);
     }
@@ -789,6 +920,7 @@ export class Game extends Phaser.Scene {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || !sprite.visible) return false;
+        if (animationState.dead && mode !== 'die') return false;
         if (animationState.attacking && !force) return false;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;

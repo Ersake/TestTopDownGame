@@ -29,6 +29,7 @@ export default {
         idle: createDirectionalAnimations('idle', ASSETS.spritesheet.playerIdle.key),
         run: createDirectionalAnimations('run', ASSETS.spritesheet.playerRun.key),
         attack: createDirectionalAnimations('attack', ASSETS.spritesheet.playerAttack.key, { frameRate: 18, repeat: 0 }),
+        die: createDirectionalAnimations('die', ASSETS.spritesheet.playerDie.key, { frameRate: 18, repeat: 0 }),
     },
     enemy1: {
         run: createDirectionalAnimations('enemy1-run', ASSETS.spritesheet.enemy1Run.key),
