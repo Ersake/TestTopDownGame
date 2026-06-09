@@ -31,6 +31,7 @@ const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
+const SKELETON_HIT_BURST_WINDOW_MS = 80;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const ENEMY_DAMAGE_FLASH_MS = 90;
@@ -46,7 +47,7 @@ const DEFAULT_MASTER_VOLUME = 0.5;
 const MAX_EFFECTIVE_SOUND_VOLUME = 0.65;
 const VOLUME_SLIDER_WIDTH = 120;
 const VOLUME_SLIDER_HEIGHT = 8;
-const VOLUME_UI_ICON_SIZE = 64;
+const VOLUME_UI_ICON_SIZE = 48;
 const SPATIAL_FULL_VOLUME_RADIUS = 250;
 const SPATIAL_MAX_VOLUME = 0.9;
 const SPATIAL_MIN_ONSCREEN_VOLUME = 0.25;
@@ -116,6 +117,7 @@ export class Game extends Phaser.Scene {
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
         this.masterVolume = this.loadMasterVolume();
+        this.sfxGroupLastPlayedAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.isTabActive = this.isDocumentActive();
         this.remoteAttackAudioDirty = !this.isTabActive;
@@ -306,6 +308,8 @@ export class Game extends Phaser.Scene {
                 spatial: !this.isLocalSession(hit.attackerId),
                 worldX: hit.x,
                 worldY: hit.y,
+                groupKey: ASSETS.audio.skeletonHit.key,
+                groupWindowMs: SKELETON_HIT_BURST_WINDOW_MS,
             });
         });
 
@@ -887,7 +891,14 @@ export class Game extends Phaser.Scene {
         this.volumeSliderKnob.y = this.volumeSliderTrack.y;
     }
 
-    playSfx(key, baseVolume, { serverEvent = false, spatial = false, worldX = null, worldY = null } = {}) {
+    playSfx(key, baseVolume, {
+        serverEvent = false,
+        spatial = false,
+        worldX = null,
+        worldY = null,
+        groupKey = null,
+        groupWindowMs = 0,
+    } = {}) {
         if (serverEvent && !this.shouldPlayServerEventAudio()) return;
 
         const spatialMultiplier = spatial ? this.getSpatialVolumeMultiplier(worldX, worldY) : 1;
@@ -900,6 +911,14 @@ export class Game extends Phaser.Scene {
                 * spatialMultiplier,
         );
         if (volume <= 0) return;
+
+        if (groupKey && groupWindowMs > 0) {
+            const now = performance.now();
+            const lastPlayedAt = this.sfxGroupLastPlayedAt.get(groupKey) || 0;
+            if (now - lastPlayedAt < groupWindowMs) return;
+            this.sfxGroupLastPlayedAt.set(groupKey, now);
+        }
+
         this.sound.play(key, { volume });
     }
 
