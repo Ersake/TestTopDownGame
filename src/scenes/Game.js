@@ -32,7 +32,7 @@ const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
-const PLAYER_HURT_SOUND_VOLUME = 0.75;
+const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
@@ -47,6 +47,11 @@ const MAX_EFFECTIVE_SOUND_VOLUME = 0.65;
 const VOLUME_SLIDER_WIDTH = 120;
 const VOLUME_SLIDER_HEIGHT = 8;
 const VOLUME_UI_ICON_SIZE = 64;
+const SPATIAL_FULL_VOLUME_RADIUS = 250;
+const SPATIAL_MAX_VOLUME = 0.9;
+const SPATIAL_MIN_ONSCREEN_VOLUME = 0.25;
+const SPATIAL_MIN_AUDIBLE_VIEWPORT_SCALE = 0.5;
+const SPATIAL_SILENT_VIEWPORT_SCALE = 0.8;
 const LOG_PILE_OFFSETS = [
     { x: -18, y: -6 },
     { x: 0, y: -10 },
@@ -283,21 +288,36 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('treeHit', (hit) => {
             if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
-            this.playSfx(ASSETS.audio.woodHit.key, WOOD_HIT_SOUND_VOLUME, { serverEvent: true });
+            this.playSfx(ASSETS.audio.woodHit.key, WOOD_HIT_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(hit.attackerId),
+                worldX: hit.x,
+                worldY: hit.y,
+            });
         });
 
         room.onMessage('enemyHit', (hit) => {
             if (!hit || !this.shouldPlayEnemyHitAudio(hit.attackerId)) return;
-            this.playSfx(ASSETS.audio.skeletonHit.key, SKELETON_HIT_SOUND_VOLUME, { serverEvent: true });
+            this.playSfx(ASSETS.audio.skeletonHit.key, SKELETON_HIT_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(hit.attackerId),
+                worldX: hit.x,
+                worldY: hit.y,
+            });
         });
 
         room.onMessage('woodPickup', () => {
             this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
         });
 
-        room.onMessage('playerHurt', () => {
+        room.onMessage('playerHurt', (hurt) => {
             if (!this.shouldPlayWorldEventAudio()) return;
-            this.playSfx(ASSETS.audio.playerHurt.key, PLAYER_HURT_SOUND_VOLUME, { serverEvent: true });
+            this.playSfx(ASSETS.audio.playerHurt.key, PLAYER_HURT_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(hurt?.playerId),
+                worldX: hurt?.x,
+                worldY: hurt?.y,
+            });
         });
 
         // ── Players ──────────────────────────────────────────────────────────
@@ -467,7 +487,12 @@ export class Game extends Phaser.Scene {
             sprites.top.destroy();
             this.treeSprites.delete(id);
             if (this.shouldPlayWorldEventAudio()) {
-                this.playSfx(ASSETS.audio.treeFall.key, TREE_FALL_SOUND_VOLUME, { serverEvent: true });
+                this.playSfx(ASSETS.audio.treeFall.key, TREE_FALL_SOUND_VOLUME, {
+                    serverEvent: true,
+                    spatial: true,
+                    worldX: sprites.bottom.x,
+                    worldY: sprites.bottom.y,
+                });
             }
         });
 
@@ -795,7 +820,11 @@ export class Game extends Phaser.Scene {
         }
 
         if (playAudio) {
-            this.playSfx(ASSETS.audio.punchWhoosh.key, PUNCH_SOUND_VOLUME);
+            this.playSfx(ASSETS.audio.punchWhoosh.key, PUNCH_SOUND_VOLUME, {
+                spatial: !this.isLocalSession(sessionId),
+                worldX: sprite.x,
+                worldY: sprite.y,
+            });
         }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
@@ -852,15 +881,49 @@ export class Game extends Phaser.Scene {
         this.volumeSliderKnob.y = this.volumeSliderTrack.y;
     }
 
-    playSfx(key, baseVolume, { serverEvent = false } = {}) {
+    playSfx(key, baseVolume, { serverEvent = false, spatial = false, worldX = null, worldY = null } = {}) {
         if (serverEvent && !this.shouldPlayServerEventAudio()) return;
+
+        const spatialMultiplier = spatial ? this.getSpatialVolumeMultiplier(worldX, worldY) : 1;
+        if (spatialMultiplier <= 0) return;
 
         const volume = Math.min(
             MAX_EFFECTIVE_SOUND_VOLUME,
-            Phaser.Math.Clamp(baseVolume, 0, 1) * Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1),
+            Phaser.Math.Clamp(baseVolume, 0, 1)
+                * Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1)
+                * spatialMultiplier,
         );
         if (volume <= 0) return;
         this.sound.play(key, { volume });
+    }
+
+    getSpatialVolumeMultiplier(worldX, worldY) {
+        const listener = this.localPlayerSprite;
+        if (!listener || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return 0;
+
+        const distance = Math.hypot(worldX - listener.x, worldY - listener.y);
+        const viewportRadius = Math.max(this.scale.width, this.scale.height);
+        const minAudibleRadius = viewportRadius * SPATIAL_MIN_AUDIBLE_VIEWPORT_SCALE;
+        const silentRadius = viewportRadius * SPATIAL_SILENT_VIEWPORT_SCALE;
+
+        if (distance <= SPATIAL_FULL_VOLUME_RADIUS) return SPATIAL_MAX_VOLUME;
+        if (distance >= silentRadius) return 0;
+
+        if (distance <= minAudibleRadius) {
+            const t = Phaser.Math.Clamp(
+                (distance - SPATIAL_FULL_VOLUME_RADIUS) / Math.max(1, minAudibleRadius - SPATIAL_FULL_VOLUME_RADIUS),
+                0,
+                1,
+            );
+            return Phaser.Math.Linear(SPATIAL_MAX_VOLUME, SPATIAL_MIN_ONSCREEN_VOLUME, t);
+        }
+
+        const t = Phaser.Math.Clamp(
+            (distance - minAudibleRadius) / Math.max(1, silentRadius - minAudibleRadius),
+            0,
+            1,
+        );
+        return Phaser.Math.Linear(SPATIAL_MIN_ONSCREEN_VOLUME, 0, t);
     }
 
     shouldPlayAttackAudio(sessionId) {
