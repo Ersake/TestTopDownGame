@@ -257,9 +257,11 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy1.death).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy2.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy2.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy2.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy2.death).forEach(animation => this.createAnimation(animation));
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -551,9 +553,12 @@ export class Game extends Phaser.Scene {
                 action: enemy.action || 'run',
                 attacking: false,
                 takingDamage: false,
+                dead: !!enemy.isDead,
+                deathPlayed: false,
                 damageFlashEvent: null,
                 lastAttackSeq: enemy.attackSeq || 0,
                 lastDamageSeq: enemy.damageSeq || 0,
+                lastDeathSeq: enemy.deathSeq || 0,
             });
             this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
 
@@ -591,8 +596,26 @@ export class Game extends Phaser.Scene {
 
                 animationState.lastDamageSeq = enemy.damageSeq;
                 if (enemy.damageSeq <= 0) return;
+                if (enemy.isDead || animationState.dead) return;
                 this.playEnemyDamageAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
             });
+
+            enemy.listen('deathSeq', () => {
+                const animationState = this.enemyAnimationState.get(enemyId);
+                if (!animationState || enemy.deathSeq <= animationState.lastDeathSeq) return;
+
+                animationState.lastDeathSeq = enemy.deathSeq;
+                if (enemy.deathSeq <= 0) return;
+                this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
+            });
+
+            enemy.listen('isDead', (isDead) => {
+                if (isDead) this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
+            });
+
+            if (enemy.isDead) {
+                this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
+            }
         };
 
         state.enemies.onAdd(addEnemy);
@@ -600,8 +623,11 @@ export class Game extends Phaser.Scene {
 
         state.enemies.onRemove((_enemy, id) => {
             const s = this.enemySprites.get(id);
-            if (s) { this.addExplosion(s.x, s.y); s.destroy(); }
             const animationState = this.enemyAnimationState.get(id);
+            if (s) {
+                if (!animationState?.dead) this.addExplosion(s.x, s.y);
+                s.destroy();
+            }
             if (animationState?.damageFlashEvent) {
                 animationState.damageFlashEvent.remove(false);
             }
@@ -1034,6 +1060,7 @@ export class Game extends Phaser.Scene {
         const nextDirection = direction || animationState.direction || 'S';
         animationState.direction = nextDirection;
         animationState.action = action || 'run';
+        if (animationState.dead) return;
         if (animationState.takingDamage) return;
         if (animationState.attacking) return;
 
@@ -1047,7 +1074,7 @@ export class Game extends Phaser.Scene {
 
     playEnemyAttackAnimation(enemyId, direction) {
         const animationState = this.enemyAnimationState.get(enemyId);
-        if (!animationState || animationState.attacking) return;
+        if (!animationState || animationState.attacking || animationState.dead) return;
 
         animationState.attacking = true;
         const didPlay = this.playEnemyAnimation(enemyId, 'attack', direction, { restart: true });
@@ -1065,7 +1092,7 @@ export class Game extends Phaser.Scene {
 
     playEnemyDamageAnimation(enemyId, direction) {
         const animationState = this.enemyAnimationState.get(enemyId);
-        if (!animationState) return;
+        if (!animationState || animationState.dead) return;
 
         animationState.takingDamage = true;
         animationState.attacking = false;
@@ -1081,6 +1108,28 @@ export class Game extends Phaser.Scene {
             animationState.takingDamage = false;
             this.setEnemyAnimation(enemyId, animationState.action, animationState.direction);
         });
+    }
+
+    playEnemyDeathAnimation(enemyId, direction) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!animationState || animationState.deathPlayed) return;
+
+        animationState.dead = true;
+        animationState.deathPlayed = true;
+        animationState.attacking = false;
+        animationState.takingDamage = false;
+        animationState.action = 'dead';
+
+        if (animationState.damageFlashEvent) {
+            animationState.damageFlashEvent.remove(false);
+            animationState.damageFlashEvent = null;
+        }
+
+        const didPlay = this.playEnemyAnimation(enemyId, 'death', direction, { restart: true });
+        if (!didPlay) return;
+
+        const sprite = this.enemySprites.get(enemyId);
+        if (sprite) sprite.clearTint();
     }
 
     flashEnemyDamage(enemyId) {

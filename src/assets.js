@@ -107,6 +107,13 @@ export default {
                 frameHeight: 128,
             }]
         },
+        enemy1Death: {
+            key: 'enemy1-death',
+            args: ['assets/Enemy1Death.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
         enemy2Run: {
             key: 'enemy2-run',
             args: ['assets/Enemy2Run.png', {
@@ -117,6 +124,13 @@ export default {
         enemy2Attack: {
             key: 'enemy2-attack',
             args: ['assets/Enemy2Attack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        enemy2Death: {
+            key: 'enemy2-death',
+            args: ['assets/Enemy2death.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

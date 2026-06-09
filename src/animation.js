@@ -35,10 +35,12 @@ export default {
         run: createDirectionalAnimations('enemy1-run', ASSETS.spritesheet.enemy1Run.key),
         attack: createDirectionalAnimations('enemy1-attack', ASSETS.spritesheet.enemy1Attack.key, { frameRate: 18, repeat: 0 }),
         damage: createDirectionalAnimations('enemy1-damage', ASSETS.spritesheet.enemy1TakeDamage.key, { frameRate: 18, repeat: 0 }),
+        death: createDirectionalAnimations('enemy1-death', ASSETS.spritesheet.enemy1Death.key, { frameRate: 18, repeat: 0 }),
     },
     enemy2: {
         run: createDirectionalAnimations('enemy2-run', ASSETS.spritesheet.enemy2Run.key),
         attack: createDirectionalAnimations('enemy2-attack', ASSETS.spritesheet.enemy2Attack.key, { frameRate: 18, repeat: 0 }),
         damage: createDirectionalAnimations('enemy2-damage', ASSETS.spritesheet.enemy1TakeDamage.key, { frameRate: 18, repeat: 0 }),
+        death: createDirectionalAnimations('enemy2-death', ASSETS.spritesheet.enemy2Death.key, { frameRate: 18, repeat: 0 }),
     },
 };

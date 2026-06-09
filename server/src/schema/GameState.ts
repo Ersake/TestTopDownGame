@@ -25,6 +25,8 @@ export class EnemyState extends Schema {
     @type("string")  action: string = "run";
     @type("int32")   attackSeq: number = 0;
     @type("int32")   damageSeq: number = 0;
+    @type("boolean") isDead: boolean = false;
+    @type("int32")   deathSeq: number = 0;
 }
 
 export class PlayerBulletState extends Schema {

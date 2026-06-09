@@ -56,6 +56,8 @@ const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
 const ENEMY1_MIN_CHASE_STEP = 1;
 const ENEMY1_WINDUP_MS = 175;
 const ENEMY1_ATTACK_MS = 850;
+const ENEMY_DEATH_REMOVE_MS = 850;
+const ENEMY_HIT_STUN_MS = 250;
 const ENEMY1_EDGE_OFFSET = 96;
 const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 225;
 const ENEMY1_ATTACK_DAMAGE = 1;
@@ -170,7 +172,7 @@ interface ServerPlayer {
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
-type EnemyMode = "chase" | "windup" | "attack";
+type EnemyMode = "chase" | "windup" | "attack" | "stun";
 interface ServerEnemy   { mode: EnemyMode; modeMs: number; targetId: string | null; }
 interface ServerBullet  { vy: number; }
 interface AttackOrigin {
@@ -514,9 +516,18 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.serverEnemies.delete(enemyId);
                 return;
             }
+            if (enemy.isDead) return;
 
             enemy.health = Math.max(0, enemy.health - 1);
-            enemy.damageSeq++;
+            if (enemy.health > 0) {
+                enemy.damageSeq++;
+                const se = this.serverEnemies.get(enemyId);
+                if (se) {
+                    se.mode = "stun";
+                    se.modeMs = ENEMY_HIT_STUN_MS;
+                    enemy.action = "idle";
+                }
+            }
             hitPayloads.push({
                 enemyId,
                 attackerId,
@@ -529,8 +540,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const owner = this.state.players.get(attackerId);
                 if (owner) owner.kills++;
                 this.state.teamScore += 10;
-                this.state.enemies.delete(enemyId);
-                this.serverEnemies.delete(enemyId);
+                this.killEnemy(enemyId, enemy);
             }
         });
 
@@ -564,6 +574,22 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         return hitEnemyIds;
+    }
+
+    private killEnemy(enemyId: string, enemy: EnemyState) {
+        if (enemy.isDead) return;
+
+        enemy.isDead = true;
+        enemy.action = "dead";
+        enemy.deathSeq++;
+        this.serverEnemies.delete(enemyId);
+
+        setTimeout(() => {
+            const current = this.state.enemies.get(enemyId);
+            if (current?.isDead) {
+                this.state.enemies.delete(enemyId);
+            }
+        }, ENEMY_DEATH_REMOVE_MS);
     }
 
     private getAttackVector(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): { x: number; y: number } {
@@ -768,6 +794,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         e.power = 1;
         e.health = 3;
         e.action = "run";
+        e.isDead = false;
+        e.deathSeq = 0;
 
         if (edge === 0) {
             e.x = rndReal(ENEMY1_EDGE_OFFSET, WORLD_WIDTH - ENEMY1_EDGE_OFFSET);
@@ -795,8 +823,18 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickEnemies(dtSec: number, dtMs: number) {
         const dead: string[] = [];
         this.state.enemies.forEach((enemy, id) => {
+            if (enemy.isDead) return;
             const se = this.serverEnemies.get(id);
             if (!se) { dead.push(id); return; }
+
+            if (se.mode === "stun") {
+                enemy.action = "idle";
+                se.modeMs = Math.max(0, se.modeMs - dtMs);
+                if (se.modeMs === 0) {
+                    se.mode = "chase";
+                }
+                return;
+            }
 
             const target = this.findNearestAlivePlayer(enemy.x, enemy.y);
             if (!target) {
@@ -979,6 +1017,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (deadBullets.includes(bid)) return;
             this.state.enemies.forEach((enemy, eid) => {
                 if (deadBullets.includes(bid) || deadEnemies.includes(eid)) return;
+                if (enemy.isDead) return;
                 if (overlaps(bullet.x, bullet.y, PB_HW, PB_HH, enemy.x, enemy.y, ENEMY_HW, ENEMY_HH)) {
                     const owner = this.state.players.get(bullet.ownerId);
                     if (owner) owner.kills++;
@@ -991,7 +1030,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         deadBullets.forEach(id => { this.state.playerBullets.delete(id); this.serverPlayerBullets.delete(id); });
-        deadEnemies.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
+        deadEnemies.forEach(id => {
+            const enemy = this.state.enemies.get(id);
+            if (enemy) this.killEnemy(id, enemy);
+        });
 
         // Enemy bullets vs players. Enemy body/attack damage is disabled for now.
         this.state.players.forEach((player, sid) => {
