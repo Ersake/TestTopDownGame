@@ -8,6 +8,7 @@ export class PlayerState extends Schema {
     @type("int32")   kills: number = 0;
     @type("int32")   wood: number = 0;
     @type("boolean") isDead: boolean = false;
+    @type("float32") reviveProgress: number = 0;
     @type("string")  facingDirection: string = "N";
     @type("string")  attackDirection: string = "N";
     @type("int32")   attackSeq: number = 0;

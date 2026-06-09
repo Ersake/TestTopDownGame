@@ -42,6 +42,8 @@ const ENEMY_ATTACK_IMPACT_DELAY_MS = 225;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 48;
+const REVIVE_DURATION_MS = 2500;
+const REVIVE_RADIUS = 64;
 const ATTACK_HIT_RADIUS = 44;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
@@ -169,6 +171,7 @@ interface ServerPlayer {
     attackLockX: number;
     attackLockY: number;
     attackCooldownMs: number;
+    revivingTargetId: string | null;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
@@ -277,6 +280,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.input.interact = isInteracting;
 
             if (isInteracting && !wasInteracting) {
+                if (this.tryStartRevive(client.sessionId, client)) {
+                    return;
+                }
                 if (this.tryPickupWood(client.sessionId)) {
                     client.send("woodPickup", { amount: WOOD_PILE_AMOUNT });
                 }
@@ -288,6 +294,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
             if (sp.attackCooldownMs > 0) return;
+            this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
             player.facingDirection = attackDirection;
@@ -336,6 +343,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockX: ps.x,
             attackLockY: ps.y,
             attackCooldownMs: 0,
+            revivingTargetId: null,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
         });
@@ -369,6 +377,8 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     onLeave(client: Client) {
+        this.cancelRevive(client.sessionId);
+        this.cancelRevivesTargeting(client.sessionId);
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
         this.checkAllDead();
@@ -647,6 +657,66 @@ export class ShmupRoom extends Room<GameRoomState> {
         return true;
     }
 
+    private tryStartRevive(sessionId: string, client: Client): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver) return false;
+
+        const reviverX = player.x;
+        const reviverY = player.y + PLAYER_TREE_Y_OFFSET;
+        const radiusSq = REVIVE_RADIUS * REVIVE_RADIUS;
+        let closestTargetId: string | null = null;
+        let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+        this.state.players.forEach((target, targetId) => {
+            if (targetId === sessionId || !target.isDead) return;
+            if (this.isPlayerBeingRevived(targetId)) return;
+
+            const dx = reviverX - target.x;
+            const dy = reviverY - (target.y + PLAYER_TREE_Y_OFFSET);
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq <= radiusSq && distanceSq < closestDistanceSq) {
+                closestDistanceSq = distanceSq;
+                closestTargetId = targetId;
+            }
+        });
+
+        if (!closestTargetId) return false;
+
+        this.cancelRevive(sessionId);
+        sp.revivingTargetId = closestTargetId;
+        const target = this.state.players.get(closestTargetId);
+        if (target) target.reviveProgress = 0;
+        client.send("reviveStarted", { targetId: closestTargetId, durationMs: REVIVE_DURATION_MS });
+        return true;
+    }
+
+    private isPlayerBeingRevived(targetId: string): boolean {
+        for (const sp of this.serverPlayers.values()) {
+            if (sp.revivingTargetId === targetId) return true;
+        }
+        return false;
+    }
+
+    private cancelRevive(sessionId: string) {
+        const sp = this.serverPlayers.get(sessionId);
+        if (!sp?.revivingTargetId) return;
+
+        const target = this.state.players.get(sp.revivingTargetId);
+        if (target) target.reviveProgress = 0;
+        sp.revivingTargetId = null;
+    }
+
+    private cancelRevivesTargeting(targetId: string) {
+        this.serverPlayers.forEach((sp) => {
+            if (sp.revivingTargetId === targetId) {
+                sp.revivingTargetId = null;
+            }
+        });
+        const target = this.state.players.get(targetId);
+        if (target) target.reviveProgress = 0;
+    }
+
     // ─── Main tick ────────────────────────────────────────────────────────────
     private tick(dt: number) {
         if (!this.state.gameStarted || this.state.gameOver) return;
@@ -654,6 +724,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.tickElapsedTime(dt);
         this.tickPlayers(dtSec, dt);
+        this.tickRevives(dt);
         this.tickPlayerBullets(dtSec);
         this.tickEnemies(dtSec, dt);
         this.tickEnemyBullets(dtSec);
@@ -664,6 +735,50 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickElapsedTime(dtMs: number) {
         this.elapsedMs += dtMs;
         this.state.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+    }
+
+    private tickRevives(dtMs: number) {
+        this.serverPlayers.forEach((sp, reviverId) => {
+            if (!sp.revivingTargetId) return;
+
+            const reviver = this.state.players.get(reviverId);
+            const target = this.state.players.get(sp.revivingTargetId);
+            if (!sp.alive || !reviver || !target || !target.isDead) {
+                this.cancelRevive(reviverId);
+                return;
+            }
+
+            const dx = reviver.x - target.x;
+            const dy = (reviver.y + PLAYER_TREE_Y_OFFSET) - (target.y + PLAYER_TREE_Y_OFFSET);
+            if (dx * dx + dy * dy > REVIVE_RADIUS * REVIVE_RADIUS) {
+                this.cancelRevive(reviverId);
+                return;
+            }
+
+            target.reviveProgress = clamp(target.reviveProgress + dtMs / REVIVE_DURATION_MS, 0, 1);
+            if (target.reviveProgress >= 1) {
+                this.completeRevive(reviverId, sp.revivingTargetId);
+            }
+        });
+    }
+
+    private completeRevive(reviverId: string, targetId: string) {
+        const reviver = this.serverPlayers.get(reviverId);
+        const targetSp = this.serverPlayers.get(targetId);
+        const target = this.state.players.get(targetId);
+        if (!reviver || !targetSp || !target) return;
+
+        reviver.revivingTargetId = null;
+        targetSp.alive = true;
+        targetSp.vx = 0;
+        targetSp.vy = 0;
+        targetSp.attackLockMs = 0;
+        targetSp.attackCooldownMs = 0;
+        targetSp.revivingTargetId = null;
+        targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
+        target.health = PLAYER_MAX_HEALTH;
+        target.isDead = false;
+        target.reviveProgress = 0;
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
@@ -1083,6 +1198,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
         player.health = 0;
+        player.reviveProgress = 0;
+        this.cancelRevive(sid);
         this.checkAllDead();
     }
 

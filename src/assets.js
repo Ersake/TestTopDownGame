@@ -24,6 +24,10 @@ export default {
             key: 'player-hurt',
             args: ['assets/playerhurt.mp3']
         },
+        reviveSound: {
+            key: 'revive-sound',
+            args: ['assets/revivesound.mp3']
+        },
     },
     'image': {
         treeBottom: {

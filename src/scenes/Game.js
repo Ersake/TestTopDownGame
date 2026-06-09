@@ -33,6 +33,7 @@ const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
 const SKELETON_HIT_BURST_WINDOW_MS = 80;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
+const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_MAX_HEALTH = 5;
@@ -41,6 +42,11 @@ const PLAYER_HEALTH_BAR_HEIGHT = 6;
 const PLAYER_HEALTH_BAR_Y_OFFSET = -48;
 const PLAYER_HEALTH_BAR_DEPTH = 130;
 const PLAYER_HEALTH_BAR_FILL_COLOR = 0x10ff35;
+const PLAYER_REVIVE_BAR_WIDTH = 58;
+const PLAYER_REVIVE_BAR_HEIGHT = 7;
+const PLAYER_REVIVE_BAR_Y_OFFSET = -38;
+const PLAYER_REVIVE_BAR_DEPTH = 131;
+const PLAYER_REVIVE_BAR_FILL_COLOR = 0x8bdcff;
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -91,6 +97,7 @@ export class Game extends Phaser.Scene {
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
+        this.updatePlayerReviveBars();
         this.updateEnemyHealthBars();
     }
 
@@ -115,6 +122,7 @@ export class Game extends Phaser.Scene {
         this.playerSprites       = new Map();
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
+        this.playerReviveBars = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -328,6 +336,10 @@ export class Game extends Phaser.Scene {
             this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
         });
 
+        room.onMessage('reviveStarted', () => {
+            this.playSfx(ASSETS.audio.reviveSound.key, REVIVE_SOUND_VOLUME);
+        });
+
         room.onMessage('playerHurt', (hurt) => {
             if (!this.shouldPlayWorldEventAudio()) return;
             this.playSfx(ASSETS.audio.playerHurt.key, PLAYER_HURT_SOUND_VOLUME, {
@@ -354,6 +366,11 @@ export class Game extends Phaser.Scene {
             this.playerHealthBars.set(playerSessionId, {
                 background: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH),
                 fill: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH + 1),
+                player,
+            });
+            this.playerReviveBars.set(playerSessionId, {
+                background: this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH),
+                fill: this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1),
                 player,
             });
             this.playerAnimationState.set(playerSessionId, {
@@ -405,11 +422,14 @@ export class Game extends Phaser.Scene {
 
                 if (player.isDead) {
                     this.playPlayerDeathAnimation(playerSessionId);
+                } else if (animationState?.dead) {
+                    this.resetPlayerAfterRevive(playerSessionId);
                 }
             });
 
             player.listen('isDead', (isDead) => {
                 if (isDead) this.playPlayerDeathAnimation(playerSessionId);
+                else this.resetPlayerAfterRevive(playerSessionId);
             });
 
             player.listen('facingDirection', (direction) => {
@@ -421,6 +441,10 @@ export class Game extends Phaser.Scene {
 
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
+            });
+
+            player.listen('reviveProgress', () => {
+                this.updatePlayerReviveBar(playerSessionId);
             });
 
             player.listen('attackSeq', () => {
@@ -467,6 +491,11 @@ export class Game extends Phaser.Scene {
                 healthBar.background.destroy();
                 healthBar.fill.destroy();
             }
+            const reviveBar = this.playerReviveBars.get(sessionId);
+            if (reviveBar) {
+                reviveBar.background.destroy();
+                reviveBar.fill.destroy();
+            }
             if (this.isLocalSession(sessionId)) {
                 this.localCamera.stopFollow();
                 this.localPlayerSprite = null;
@@ -475,6 +504,7 @@ export class Game extends Phaser.Scene {
             this.playerSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
+            this.playerReviveBars.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
@@ -916,6 +946,22 @@ export class Game extends Phaser.Scene {
         sprite.play(animation.key);
     }
 
+    resetPlayerAfterRevive(sessionId) {
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        const player = this.playerHealthBars.get(sessionId)?.player;
+        if (!sprite || !animationState || player?.isDead) return;
+
+        animationState.dead = false;
+        animationState.deathPlayed = false;
+        animationState.attacking = false;
+        animationState.moving = false;
+        animationState.attackVisualLockUntil = 0;
+        sprite.setVisible(true);
+        sprite.anims.stop();
+        this.setPlayerAnimation(sessionId, false, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
+    }
+
     loadMasterVolume() {
         const saved = Number(window.localStorage?.getItem(MASTER_VOLUME_STORAGE_KEY));
         return Number.isFinite(saved) ? Phaser.Math.Clamp(saved, 0, 1) : DEFAULT_MASTER_VOLUME;
@@ -1219,6 +1265,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerReviveBars() {
+        this.playerReviveBars.forEach((_reviveBar, sessionId) => {
+            this.updatePlayerReviveBar(sessionId);
+        });
+    }
+
     updateEnemyHealthBars() {
         this.enemyHealthBars.forEach((_healthBar, enemyId) => {
             this.updateEnemyHealthBar(enemyId);
@@ -1244,6 +1296,27 @@ export class Game extends Phaser.Scene {
             healthBar.fill.fillStyle(PLAYER_HEALTH_BAR_FILL_COLOR, 1);
             healthBar.fill.fillRect(x, y, fillWidth, PLAYER_HEALTH_BAR_HEIGHT);
         }
+    }
+
+    updatePlayerReviveBar(sessionId) {
+        const reviveBar = this.playerReviveBars.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        if (!reviveBar || !sprite) return;
+
+        const progress = Phaser.Math.Clamp(reviveBar.player.reviveProgress || 0, 0, 1);
+        reviveBar.background.clear();
+        reviveBar.fill.clear();
+        if (!reviveBar.player.isDead || progress <= 0) return;
+
+        const fillWidth = progress * PLAYER_REVIVE_BAR_WIDTH;
+        const x = sprite.x - PLAYER_REVIVE_BAR_WIDTH * 0.5;
+        const y = sprite.y + PLAYER_REVIVE_BAR_Y_OFFSET;
+
+        reviveBar.background.fillStyle(0x050505, 1);
+        reviveBar.background.fillRect(x, y, PLAYER_REVIVE_BAR_WIDTH, PLAYER_REVIVE_BAR_HEIGHT);
+
+        reviveBar.fill.fillStyle(PLAYER_REVIVE_BAR_FILL_COLOR, 1);
+        reviveBar.fill.fillRect(x, y, fillWidth, PLAYER_REVIVE_BAR_HEIGHT);
     }
 
     updateEnemyHealthBar(enemyId) {
@@ -1277,6 +1350,10 @@ export class Game extends Phaser.Scene {
             background.destroy();
             fill.destroy();
         });
+        this.playerReviveBars.forEach(({ background, fill }) => {
+            background.destroy();
+            fill.destroy();
+        });
         this.enemySprites.forEach(s => s.destroy());
         this.enemyHealthBars.forEach(({ background, fill }) => {
             background.destroy();
@@ -1294,6 +1371,7 @@ export class Game extends Phaser.Scene {
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
+        this.playerReviveBars.clear();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.enemyHealthBars.clear();
