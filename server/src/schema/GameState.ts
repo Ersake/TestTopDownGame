@@ -18,6 +18,7 @@ export class EnemyState extends Schema {
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
     @type("int8")    shipId: number = 0;
+    @type("int8")    enemyType: number = 1;
     @type("int8")    power: number = 1;
     @type("int8")    health: number = 1;
     @type("string")  facingDirection: string = "S";

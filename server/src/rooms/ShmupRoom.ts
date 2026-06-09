@@ -49,6 +49,7 @@ const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY1_COUNT = 3;
+const ENEMY2_COUNT = 3;
 const ENEMY1_SPEED = 135;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
@@ -63,6 +64,9 @@ const ENEMY1_ATTACK_HIT_HW = 42;
 const ENEMY1_ATTACK_HIT_HH = 36;
 const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
+const ENEMY_FOOT_RADIUS = 7;
+const ENEMY_FOOT_Y_OFFSET = 34;
+const ENEMY_SEPARATION_ITERATIONS = 2;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -747,16 +751,20 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverEnemies.clear();
 
         for (let i = 0; i < ENEMY1_COUNT; i++) {
-            this.spawnEnemy1(i);
+            this.spawnEnemy(1, i);
+        }
+        for (let i = 0; i < ENEMY2_COUNT; i++) {
+            this.spawnEnemy(2, ENEMY1_COUNT + i);
         }
     }
 
-    private spawnEnemy1(index: number) {
+    private spawnEnemy(enemyType: number, index: number) {
         const id = nextId();
         const edge = index % 4;
         const e = new EnemyState();
         e.id = id;
         e.shipId = 0;
+        e.enemyType = enemyType;
         e.power = 1;
         e.health = 3;
         e.action = "run";
@@ -857,6 +865,52 @@ export class ShmupRoom extends Room<GameRoomState> {
             enemy.y += (dy / distance) * move;
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
+        this.separateEnemyFeet();
+    }
+
+    private separateEnemyFeet() {
+        const enemies = [...this.state.enemies.entries()];
+        const minDistance = ENEMY_FOOT_RADIUS * 2;
+        const minDistanceSq = minDistance * minDistance;
+
+        for (let iteration = 0; iteration < ENEMY_SEPARATION_ITERATIONS; iteration++) {
+            for (let i = 0; i < enemies.length; i++) {
+                const [idA, enemyA] = enemies[i];
+                const serverA = this.serverEnemies.get(idA);
+                if (!serverA) continue;
+
+                for (let j = i + 1; j < enemies.length; j++) {
+                    const [idB, enemyB] = enemies[j];
+                    const serverB = this.serverEnemies.get(idB);
+                    if (!serverB) continue;
+
+                    const footAx = enemyA.x;
+                    const footAy = enemyA.y + ENEMY_FOOT_Y_OFFSET;
+                    const footBx = enemyB.x;
+                    const footBy = enemyB.y + ENEMY_FOOT_Y_OFFSET;
+                    let dx = footBx - footAx;
+                    let dy = footBy - footAy;
+                    let distanceSq = dx * dx + dy * dy;
+                    if (distanceSq >= minDistanceSq) continue;
+
+                    if (distanceSq === 0) {
+                        dx = idA < idB ? 1 : -1;
+                        dy = 0;
+                        distanceSq = 1;
+                    }
+
+                    const distance = Math.sqrt(distanceSq);
+                    const push = (minDistance - distance) * 0.5;
+                    const nx = dx / distance;
+                    const ny = dy / distance;
+
+                    enemyA.x = clamp(enemyA.x - nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+                    enemyA.y = clamp(enemyA.y - ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+                    enemyB.x = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+                    enemyB.y = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+                }
+            }
+        }
     }
 
     private findNearestAlivePlayer(x: number, y: number): { id: string; player: PlayerState; distanceSq: number } | null {

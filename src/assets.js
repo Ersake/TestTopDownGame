@@ -107,5 +107,19 @@ export default {
                 frameHeight: 128,
             }]
         },
+        enemy2Run: {
+            key: 'enemy2-run',
+            args: ['assets/Enemy2Run.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        enemy2Attack: {
+            key: 'enemy2-attack',
+            args: ['assets/Enemy2Attack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
     }
 };

@@ -36,4 +36,9 @@ export default {
         attack: createDirectionalAnimations('enemy1-attack', ASSETS.spritesheet.enemy1Attack.key, { frameRate: 18, repeat: 0 }),
         damage: createDirectionalAnimations('enemy1-damage', ASSETS.spritesheet.enemy1TakeDamage.key, { frameRate: 18, repeat: 0 }),
     },
+    enemy2: {
+        run: createDirectionalAnimations('enemy2-run', ASSETS.spritesheet.enemy2Run.key),
+        attack: createDirectionalAnimations('enemy2-attack', ASSETS.spritesheet.enemy2Attack.key, { frameRate: 18, repeat: 0 }),
+        damage: createDirectionalAnimations('enemy2-damage', ASSETS.spritesheet.enemy1TakeDamage.key, { frameRate: 18, repeat: 0 }),
+    },
 };

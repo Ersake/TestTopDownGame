@@ -255,6 +255,9 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy2.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy2.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.enemy2.damage).forEach(animation => this.createAnimation(animation));
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -531,12 +534,15 @@ export class Game extends Phaser.Scene {
         const addEnemy = (enemy, id) => {
             const enemyId = id || enemy.id;
             if (!enemyId || this.enemySprites.has(enemyId)) return;
+            const enemyAnimationKey = this.getEnemyAnimationKey(enemy);
+            const runTexture = ASSETS.spritesheet[`${enemyAnimationKey}Run`]?.key || ASSETS.spritesheet.enemy1Run.key;
 
-            const sprite = this.add.sprite(enemy.x, enemy.y, ASSETS.spritesheet.enemy1Run.key, 0)
+            const sprite = this.add.sprite(enemy.x, enemy.y, runTexture, 0)
                 .setDepth(100)
                 .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
             this.enemySprites.set(enemyId, sprite);
             this.enemyAnimationState.set(enemyId, {
+                animationKey: enemyAnimationKey,
                 direction: enemy.facingDirection || 'S',
                 action: enemy.action || 'run',
                 attacking: false,
@@ -1084,7 +1090,8 @@ export class Game extends Phaser.Scene {
         const nextDirection = direction || animationState.direction || 'S';
         animationState.direction = nextDirection;
 
-        const animation = ANIMATION.enemy1[mode]?.[nextDirection];
+        const animationKey = animationState.animationKey || 'enemy1';
+        const animation = ANIMATION[animationKey]?.[mode]?.[nextDirection] || ANIMATION.enemy1[mode]?.[nextDirection];
         if (!animation) return false;
 
         if (sprite.anims.currentAnim?.key !== animation.key || !sprite.anims.isPlaying) {
@@ -1099,12 +1106,19 @@ export class Game extends Phaser.Scene {
 
     setEnemyIdleFrame(enemyId, direction) {
         const sprite = this.enemySprites.get(enemyId);
+        const animationState = this.enemyAnimationState.get(enemyId);
         if (!sprite) return;
 
         const row = DIRECTION_ORDER.indexOf(direction);
         const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
+        const animationKey = animationState?.animationKey || 'enemy1';
+        const textureKey = ASSETS.spritesheet[`${animationKey}Run`]?.key || ASSETS.spritesheet.enemy1Run.key;
         if (sprite.anims.isPlaying) sprite.anims.stop();
-        sprite.setTexture(ASSETS.spritesheet.enemy1Run.key, frame);
+        sprite.setTexture(textureKey, frame);
+    }
+
+    getEnemyAnimationKey(enemy) {
+        return Number(enemy?.enemyType) === 2 ? 'enemy2' : 'enemy1';
     }
 
     updatePlayerHealthBars() {
