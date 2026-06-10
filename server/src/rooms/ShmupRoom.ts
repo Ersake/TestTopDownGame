@@ -52,6 +52,8 @@ const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY1_COUNT = 3;
 const ENEMY2_COUNT = 3;
+const ENEMY_WAVE_COUNT = 3;
+const ENEMY_WAVE_INTERVAL_MS = 30000;
 const ENEMY1_SPEED = 135;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
@@ -240,6 +242,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverEnemyBullets  = new Map<string, ServerBullet>();
     private serverTreeHealth    = new Map<string, number>();
     private elapsedMs           = 0;
+    private enemyWaveElapsedMs  = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -351,6 +354,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!this.state.gameStarted) {
             this.state.gameStarted = true;
             this.elapsedMs = 0;
+            this.enemyWaveElapsedMs = 0;
             this.state.elapsedSeconds = 0;
             this.spawnInitialEnemies();
         }
@@ -371,6 +375,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.teamScore = 0;
         this.elapsedMs = 0;
+        this.enemyWaveElapsedMs = 0;
         this.state.elapsedSeconds = 0;
         this.state.gameOver  = false;
         if (this.state.gameStarted) this.spawnInitialEnemies();
@@ -726,6 +731,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickPlayers(dtSec, dt);
         this.tickRevives(dt);
         this.tickPlayerBullets(dtSec);
+        this.tickEnemyWaves(dt);
         this.tickEnemies(dtSec, dt);
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
@@ -890,6 +896,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private spawnInitialEnemies() {
         this.state.enemies.clear();
         this.serverEnemies.clear();
+        this.enemyWaveElapsedMs = 0;
 
         for (let i = 0; i < ENEMY1_COUNT; i++) {
             this.spawnEnemy(1, i);
@@ -899,9 +906,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
-    private spawnEnemy(enemyType: number, index: number) {
+    private tickEnemyWaves(dtMs: number) {
+        this.enemyWaveElapsedMs += dtMs;
+        while (this.enemyWaveElapsedMs >= ENEMY_WAVE_INTERVAL_MS) {
+            this.enemyWaveElapsedMs -= ENEMY_WAVE_INTERVAL_MS;
+            this.spawnEnemyWave();
+        }
+    }
+
+    private spawnEnemyWave() {
+        for (let i = 0; i < ENEMY_WAVE_COUNT; i++) {
+            this.spawnEnemy(rndInt(1, 2), rndInt(0, 3));
+        }
+    }
+
+    private spawnEnemy(enemyType: number, edgeIndex: number) {
         const id = nextId();
-        const edge = index % 4;
+        const edge = edgeIndex % 4;
         const e = new EnemyState();
         e.id = id;
         e.shipId = 0;
