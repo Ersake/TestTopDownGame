@@ -1,206 +1,223 @@
-# AGENTS.md — Developer Guide & Best Practices
+# AGENTS.md - Developer Guide
 
-This document is the canonical reference for working on this project. Read it before making changes.
+This document is the canonical quick-start and contribution guide for this project. Read it before making changes.
+
+For a deeper system reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
-## Architecture Overview
+## Project Overview
 
-This is a **server-authoritative co-op multiplayer shmup** built with Phaser 3 and Colyseus.
+This is a server-authoritative co-op top-down multiplayer game built with Phaser 3 and Colyseus.
 
-```
-┌─────────────────────────────────┐       WebSocket (ws://)      ┌──────────────────────────────┐
-│  Browser (Phaser 3 client)      │ ◄──────────────────────────► │  Colyseus Server (Node.js)   │
-│                                 │                               │                              │
-│  src/scenes/Game.js             │   sends: "input" message      │  server/src/rooms/           │
-│    - renders sprites from state │   { left, right, up,          │    ShmupRoom.ts              │
-│    - lerps positions            │     down, fire }              │    - runs game tick at 20/s  │
-│    - sends keyboard input       │                               │    - moves players           │
-│                                 │   receives: state patches     │    - moves enemies           │
-│  src/network/RoomClient.js      │   (Colyseus schema diff)      │    - fires bullets           │
-│    - singleton Colyseus client  │                               │    - AABB collision          │
-│    - joinOrCreate("shmup_room") │                               │    - updates score           │
-└─────────────────────────────────┘                               └──────────────────────────────┘
-```
+The browser client renders the game and sends player intent. The Colyseus server owns the game state, simulation, collision, spawning, score, resources, revives, and game-over rules.
 
-### Key principle: the client never mutates game state
+### Key Principle: The Client Never Owns Game Logic
 
-The Phaser client is a **dumb renderer**. It:
-- Reads `room.state` (pushed by Colyseus schema patches)
-- Sends raw keyboard input to the server each frame (on change only)
-- Spawns/destroys/moves sprites based on state changes
+The Phaser client should stay a renderer and input collector. It may:
 
-All physics, collision, spawning, scoring, and win/loss logic lives in `ShmupRoom.ts`.
+- Render sprites, UI, animations, audio, and camera movement from server state.
+- Send raw player intent to the server, such as movement input, attack requests, and interaction input.
+- Smooth or lerp visual positions for presentation.
+
+It must not:
+
+- Decide whether enemies, trees, players, or resources are hit.
+- Mutate score, health, wood, kills, revives, enemy deaths, or game-over state.
+- Spawn authoritative gameplay objects locally.
+
+If a change affects shared gameplay truth, put it in `server/src/rooms/ShmupRoom.ts` and sync only the renderable result through `server/src/schema/GameState.ts`.
+
+---
+
+## Current Flow
+
+1. `src/main.js` launches Phaser.
+2. `Boot` starts `Preloader`.
+3. `Preloader` loads everything from `src/assets.js`, then starts `Lobby`.
+4. `Lobby` lets a player create a room or join a room by 4-letter room code.
+5. `RoomClient` creates or joins the Colyseus `"shmup_room"`.
+6. `Game` renders the synced room state and sends input/messages to the server.
+7. Game over is handled in-scene; Space returns players to `Lobby`.
+
+Do not reintroduce automatic `joinOrCreate` on load unless the lobby flow is intentionally being removed.
 
 ---
 
 ## Repository Layout
 
-```
+```text
 /
-├── src/                    Phaser client (plain JavaScript, ES modules)
-│   ├── main.js             Entry point — connects to server, then launches Phaser
-│   ├── assets.js           Asset key/path registry
-│   ├── animation.js        Animation config registry
-│   ├── network/
-│   │   └── RoomClient.js   Colyseus connection singleton
-│   ├── gameObjects/
-│   │   └── Explosion.js    Visual-only sprite (still used by Game.js)
-│   └── scenes/
-│       ├── Boot.js         → Preloader
-│       ├── Preloader.js    Loads spritesheets → Game
-│       ├── Game.js         Main scene (rendering only)
-│       ├── Start.js        Skeleton (currently unused)
-│       └── GameOver.js     Skeleton (currently unused; game over handled in-scene)
-├── server/                 Colyseus server (TypeScript)
-│   ├── src/
-│   │   ├── index.ts        Express + Colyseus server entry point
-│   │   ├── schema/
-│   │   │   └── GameState.ts  @colyseus/schema definitions (synced to all clients)
-│   │   └── rooms/
-│   │       └── ShmupRoom.ts  All game logic
-│   ├── package.json
-│   └── tsconfig.json
-├── assets/                 Game sprites (ships.png, tiles.png)
-├── index.html              Single HTML page mounting Phaser
-├── phaser.js               Phaser 3 standalone bundle (loaded as global script)
-├── vite.config.js          Vite config — base './', builds to docs/
-├── package.json            Client deps + convenience npm scripts
-├── .env                    Local env vars (do not commit secrets)
-├── .env.example            Template — commit this, not .env
-├── MULTIPLAYER_PLAN.md     Full integration plan and architecture decisions
-└── AGENTS.md               This file
++-- src/                       Phaser client (plain JavaScript, ES modules)
+|   +-- main.js                Phaser entry point
+|   +-- assets.js              Asset key/path registry loaded by Preloader
+|   +-- animation.js           Animation config registry
+|   +-- network/
+|   |   +-- RoomClient.js      Singleton Colyseus client wrapper
+|   +-- gameObjects/           Legacy/visual Phaser object classes
+|   +-- scenes/
+|       +-- Boot.js            Starts Preloader
+|       +-- Preloader.js       Loads registered assets, then starts Lobby
+|       +-- Lobby.js           Create/join room-code UI
+|       +-- Game.js            Main rendering and input scene
+|       +-- Start.js           Unused skeleton scene
+|       +-- GameOver.js        Unused skeleton scene
++-- server/                    Colyseus server (TypeScript)
+|   +-- src/
+|   |   +-- index.ts           Express + Colyseus server entry point
+|   |   +-- schema/
+|   |   |   +-- GameState.ts   Synced Colyseus schema definitions
+|   |   +-- rooms/
+|   |       +-- ShmupRoom.ts   Authoritative game simulation
+|   +-- package.json
+|   +-- tsconfig.json
++-- assets/                    Sprites, images, and audio
++-- index.html                 Single page mounting Phaser
++-- phaser.js                  Phaser global script loaded by index.html
++-- vite.config.js             Vite config; builds client to docs/
++-- ARCHITECTURE.md            Current architecture reference
++-- package.json               Client deps + convenience npm scripts
++-- AGENTS.md                  This file
 ```
 
 ---
 
 ## Running Locally
 
-You need two terminals running simultaneously.
+You need the server and client running at the same time.
 
-### Terminal 1 — Game Server
+### Terminal 1 - Game Server
 
 ```bash
 cd server
 npm install          # first time only
-npm run server:dev   # starts Colyseus on ws://localhost:2567
+npm run server:dev   # ws://localhost:2567
 ```
 
-The server uses `ts-node` to run TypeScript directly (no build step needed in dev).
+In development, the Colyseus monitor is available at:
 
-Colyseus monitor (inspect live rooms and state):
-```
+```text
 http://localhost:2567/colyseus
 ```
 
-### Terminal 2 — Client Dev Server
+The monitor is disabled when `NODE_ENV=production`.
+
+### Terminal 2 - Client Dev Server
 
 ```bash
-# from project root
-npm install          # first time only
-npm run client:dev   # starts Vite on http://localhost:5173
+npm install          # first time only, from repo root
+npm run client:dev   # http://localhost:5173
 ```
 
-Open `http://localhost:5173` in two browser tabs to test co-op locally.
+Open `http://localhost:5173`, create a room, then open a second tab and join with the displayed room code.
 
 ### Environment Variables
 
-The client reads `VITE_SERVER_URL` to find the server. The `.env` file (already created) sets it for local dev:
+The client reads `VITE_SERVER_URL` to find the Colyseus server.
 
-```
+Local development:
+
+```text
 VITE_SERVER_URL=ws://localhost:2567
 ```
 
-To point at a deployed server, change this value or set the variable in your deployment environment.
+Production should use secure WebSockets:
+
+```text
+VITE_SERVER_URL=wss://your-server.example.com
+```
+
+Use `.env.example` as the committed template. Do not commit `.env`.
 
 ---
 
 ## Making Changes
 
-### Adding a new synced state field
+### Adding a Synced State Field
 
 1. Add the field to the relevant schema class in `server/src/schema/GameState.ts` with a `@type(...)` decorator.
-2. Update `ShmupRoom.ts` to write to it in the tick or on game events.
-3. Subscribe to it in `src/scenes/Game.js` using `state.listen(...)` or `entity.onChange(...)`.
+2. Write the field from `server/src/rooms/ShmupRoom.ts`.
+3. Render or listen to it in `src/scenes/Game.js`.
 
-### Changing physics constants
+Only add fields to schema state when clients need them. Private simulation details belong in server-side `Map` objects or other room-private data structures.
 
-Both values must stay in sync:
+### Adding a New Synced Object Type
 
-| Constant | Server (`ShmupRoom.ts`) | Client |
-|---|---|---|
-| Player acceleration | `PLAYER_ACCEL = 3000` | _not needed (server-driven)_ |
-| Player max velocity | `PLAYER_MAX_VEL = 500` | _not needed_ |
-| Player drag | `PLAYER_DRAG = 1000` | _not needed_ |
-| Fire rate | `FIRE_RATE_MS = 167` | _not needed_ |
-| Bullet speed | `P_BULLET_VEL = 1000` | _not needed_ |
+1. Add a new `Schema` class in `GameState.ts`.
+2. Add a `MapSchema<NewType>` field to `GameRoomState`.
+3. Add authoritative spawn, update, collision, and cleanup logic in `ShmupRoom.ts`.
+4. Register `state.newObjects.onAdd` and `onRemove` listeners in `Game.js`.
+5. Destroy all related sprites in `clearAllSprites()`.
 
-All physics is server-side only. If you change a constant, only edit `ShmupRoom.ts`.
+### Adding Server Messages
 
-### Adding a new game object type
+Use room messages for discrete events that are not naturally represented as durable state, such as one-shot sound or impact events.
 
-1. Add a new `Schema` class in `GameState.ts` (e.g. `PowerUpState`).
-2. Add a `MapSchema<PowerUpState>` field to `GameRoomState`.
-3. Add server-side logic (spawn, tick, collision) in `ShmupRoom.ts`.
-4. In `Game.js`, register `state.powerUps.onAdd` / `onRemove` to create/destroy sprites.
+Examples already in use:
 
-### Changing the tick rate
+- Client to server: `"input"`, `"attack"`.
+- Server to client: `"treeHit"`, `"enemyHit"`, `"woodPickup"`, `"reviveStarted"`, `"playerHurt"`.
 
-Edit the interval in `ShmupRoom.ts`:
+Validate and clamp client-provided data on the server. Treat all client messages as untrusted.
 
-```ts
-this.setSimulationInterval((dt) => this.tick(dt), 50); // 50ms = 20 ticks/sec
-```
+### Adding Assets
 
-Lower values = smoother but more CPU and bandwidth. 50ms (20/s) is a good baseline for a shmup.
+1. Drop the file into `assets/`.
+2. Register it in `src/assets.js` under the correct loader type (`image`, `spritesheet`, `audio`, etc.).
+3. Use the registered asset key from scene code.
 
-### TypeScript type checking (server)
+The Preloader automatically loads everything registered in `src/assets.js`.
+
+---
+
+## Verification
+
+Run server type checking before committing server changes:
 
 ```bash
 cd server
 npx tsc --noEmit
 ```
 
-Run this before committing server changes.
+For client build/deployment checks:
+
+```bash
+npm run client:build
+```
+
+When changing gameplay behavior, test locally with at least two browser tabs so create/join, remote rendering, and shared state changes are covered.
 
 ---
 
 ## Deployment
 
-### Client → GitHub Pages
+### Client - GitHub Pages
 
-1. Set the production server URL in your CI environment (or locally before building):
-   ```bash
-   # .env (do not commit) or CI env var
-   VITE_SERVER_URL=wss://your-server.onrender.com
-   ```
-2. Build the client:
-   ```bash
-   npm run client:build   # outputs to docs/
-   ```
-3. Push to GitHub. In repo **Settings → Pages**, set source to `main` branch, `/docs` folder.
+The repo includes a GitHub Actions workflow at `.github/workflows/deploy.yml`.
 
-Alternatively, use a GitHub Actions workflow to automate the build and push to a `gh-pages` branch.
+Recommended flow:
 
-### Server → Render / Railway / Fly.io
+1. Set repository secret `VITE_SERVER_URL` to the deployed secure WebSocket URL, for example `wss://your-server.onrender.com`.
+2. Push to `main` or run the workflow manually.
+3. The workflow builds the client with `npm run client:build`, uploads `docs/`, and deploys to GitHub Pages.
 
-All three have free tiers suitable for a hobby game server. The steps below use Render as an example.
+`docs/` is a build output and is ignored by git.
 
-1. Push the repo to GitHub.
-2. In Render, create a new **Web Service** pointing at your repo.
-3. Set the root directory to `server/`.
-4. Build command: `npm install && npm run server:build`
-5. Start command: `npm run server:start`
-6. Add environment variable: `PORT=10000` (Render sets this automatically; the server reads `process.env.PORT`).
-7. Note the deployed URL (e.g. `https://shmup-server.onrender.com`) and set `VITE_SERVER_URL=wss://shmup-server.onrender.com` on the client.
+### Server - Render / Railway / Fly.io
 
-> **Note:** Render free-tier servers spin down after inactivity. For a real release, use a paid tier or Railway/Fly.io which have better cold-start behaviour.
+Deploy the `server/` directory as a Node.js service.
 
-### CORS / WebSocket notes
+Render-style settings:
 
-Colyseus uses WebSockets, not HTTP. No CORS configuration is needed for WebSocket connections. If you add REST endpoints to the Express server, configure CORS there as needed.
+```text
+Root directory: server/
+Build command: npm install && npm run server:build
+Start command: npm run server:start
+```
 
-For production, use `wss://` (secure WebSocket) — most WebSocket hosts enforce this automatically.
+The server reads `process.env.PORT` and defaults to `2567` locally.
+
+Use `NODE_ENV=production` in production so the Colyseus monitor is not exposed.
 
 ---
 
@@ -208,31 +225,26 @@ For production, use `wss://` (secure WebSocket) — most WebSocket hosts enforce
 
 ### General
 
-- **Never put game logic in the client.** If you find yourself computing a score, checking a collision, or deciding whether an enemy dies in `Game.js`, move it to `ShmupRoom.ts`.
-- **Keep `RoomClient.js` as the only Colyseus import on the client.** Other files should never import `colyseus.js` directly.
-- **Do not import `phaser.js` as an ES module.** It is loaded as a plain `<script>` tag in `index.html` and available as the global `Phaser`. Vite's `optimizeDeps` config keeps it external.
+- Keep shared gameplay authority on the server.
+- Keep `RoomClient.js` as the only client-side import of `colyseus.js`.
+- Do not import `phaser.js` as an ES module. It is loaded by `index.html` and exposed as global `Phaser`.
+- Keep `ARCHITECTURE.md` current when changing room flow, state shape, networking, deployment, or major gameplay systems.
 
 ### Server
 
-- **Always use delta time (`dt`) in the tick.** Multiply velocities by `dt / 1000` (seconds) so physics behaviour is frame-rate independent.
-- **Keep private (non-synced) server state in `Map` objects** (`serverPlayers`, `serverEnemies`, etc.). Only put data in the schema if clients need to render it — schema diffs are sent over the network on every change.
-- **Use `@type("float32")` for positions.** It gives sufficient precision for a 1280×720 game and is more compact than `float64`.
-- **Prefer `int8` / `int32` for small integers** (health, power, score, kills) to minimise patch size.
+- Use delta time (`dt`) in the tick for time-based simulation.
+- Keep non-rendered simulation state private to the room.
+- Use compact schema types where practical, such as `float32`, `int8`, and `int32`.
+- Clamp positions, directions, and target coordinates received from clients.
+- Clean up Colyseus schema objects and matching private server state together.
 
 ### Client
 
-- **Lerp sprite positions** toward server values rather than snapping. This hides the 50ms tick latency:
-  ```js
-  s.x = Phaser.Math.Linear(s.x, serverX, 0.3);
-  ```
-- **Only send input on change** (`RoomClient.sendInput` already does this via the `_lastInput` diff check). Do not send every frame unconditionally.
-- **Register all `onAdd`/`onRemove` listeners in `initNetworking()`** and clean up properly in `clearAllSprites()` when rejoining.
-
-### Adding assets
-
-1. Drop the file into `assets/`.
-2. Register it in `src/assets.js` under the correct type key (`spritesheet`, `image`, etc.).
-3. The Preloader scene automatically loads everything registered there.
+- Lerp or smooth visual positions when useful, but never use smoothing as authoritative state.
+- Only send input on change; `RoomClient.sendInput()` already diffs movement/interact state.
+- Register state listeners in `initNetworking()`.
+- Make sure all sprites, bars, and event listeners created from room state are cleaned up when leaving or re-entering the game.
+- Keep UI and audio presentation client-side, driven by synced state or server event messages.
 
 ---
 
@@ -240,9 +252,9 @@ For production, use `wss://` (secure WebSocket) — most WebSocket hosts enforce
 
 | Item | Notes |
 |---|---|
-| `Start.js` scene is unused | Fully commented out; could become a lobby/matchmaking screen |
-| `GameOver.js` scene references unloaded `'background'` asset | Never actually visited; in-scene Game Over overlay is used instead |
-| No reconnection handling | If a client drops mid-game, their player is removed; `onLeave` logic handles it server-side |
-| Enemies do not re-use IDs | IDs increment globally via `nextId()`; fine for a session but IDs grow unbounded over time |
-| No difficulty scaling | Enemy `power` and `speed` are random; could scale with `teamScore` |
-| No lobby / player-ready flow | Game starts the moment the first player joins |
+| `Start.js` scene is unused | It is still in the scene list but has no active behavior. |
+| `GameOver.js` scene is unused | In-scene game-over UI is used instead; `GameOver.js` still references an unloaded `background` asset. |
+| No reconnection handling | If a client drops mid-game, their player is removed by `onLeave`. |
+| Room code registry is process-local | Codes are unique only within the current server process. |
+| IDs grow during process lifetime | Gameplay IDs increment globally and are not reused. |
+| No ready-up flow | Rooms enter gameplay as soon as players create or join. |
