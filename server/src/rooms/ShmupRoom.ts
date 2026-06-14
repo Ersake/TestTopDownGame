@@ -50,6 +50,7 @@ const BUILD_RANGE = 192;
 const FIRST_LEVEL_UP_KILLS = 5;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
+const REVIVE_HEALTH = 3;
 const ATTACK_HIT_RADIUS = 44;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
@@ -687,6 +688,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         if (didLevelUp) {
+            player.health = PLAYER_MAX_HEALTH;
             this.broadcast("playerLevelUp", {
                 playerId,
                 level: player.level,
@@ -994,7 +996,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.attackCooldownMs = 0;
         targetSp.revivingTargetId = null;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
-        target.health = PLAYER_MAX_HEALTH;
+        target.health = REVIVE_HEALTH;
         target.isDead = false;
         target.reviveProgress = 0;
     }

@@ -22,6 +22,9 @@ const ENEMY_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const WOOD_UI_ICON_SIZE = 64;
+const OFFSCREEN_PLAYER_INDICATOR_RADIUS = 7;
+const OFFSCREEN_PLAYER_INDICATOR_COLOR = 0x89cff0;
+const OFFSCREEN_DEAD_PLAYER_INDICATOR_COLOR = 0xff9d2e;
 const BUILD_GRID_SIZE = 32;
 const BUILD_GRID_LINE_COLOR = 0xd8f5d0;
 const BUILD_GRID_LINE_ALPHA = 0.22;
@@ -125,6 +128,7 @@ export class Game extends Phaser.Scene {
         this.updatePlayerHealthBars();
         this.updatePlayerReviveBars();
         this.updatePlayerLevelLabels();
+        this.updateOffscreenPlayerIndicators();
         this.updateEnemyHealthBars();
     }
 
@@ -151,6 +155,7 @@ export class Game extends Phaser.Scene {
         this.playerHealthBars = new Map();
         this.playerReviveBars = new Map();
         this.playerLevelLabels = new Map();
+        this.offscreenPlayerIndicators = new Map();
         this.localExperienceState = null;
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
@@ -173,6 +178,7 @@ export class Game extends Phaser.Scene {
         this.attackHeldPointerId = null;
         this.attackHeldPointer = null;
         this.nextHeldAttackAt = 0;
+        this.lastEscapeToggleAt = 0;
         this.cameraZoom = CAMERA_MIN_ZOOM;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
@@ -201,13 +207,19 @@ export class Game extends Phaser.Scene {
                 this.handleTabActive();
             }
         };
+        this.handleEscapeKey = (event) => {
+            if (event?.key !== 'Escape' && event?.code !== 'Escape') return;
+            this.handleEscapeQuit(event);
+        };
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
         window.addEventListener('blur', this.handleTabInactive);
         window.addEventListener('focus', this.handleTabActive);
+        window.addEventListener('keydown', this.handleEscapeKey, true);
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             document.removeEventListener('visibilitychange', this.handleVisibilityChange);
             window.removeEventListener('blur', this.handleTabInactive);
             window.removeEventListener('focus', this.handleTabActive);
+            window.removeEventListener('keydown', this.handleEscapeKey, true);
             this.disableBuildMode();
         });
     }
@@ -365,12 +377,19 @@ export class Game extends Phaser.Scene {
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
             interact: Phaser.Input.Keyboard.KeyCodes.F,
             build: Phaser.Input.Keyboard.KeyCodes.TAB,
+            escape: Phaser.Input.Keyboard.KeyCodes.ESC,
         });
 
         this.input.mouse?.disableContextMenu();
         this.keys.build.on('down', (key, event) => {
             event?.preventDefault();
             this.toggleBuildMode();
+        });
+        this.keys.escape.on('down', (key, event) => {
+            this.handleEscapeQuit(event);
+        });
+        this.input.keyboard.on('keydown-ESC', (event) => {
+            this.handleEscapeQuit(event);
         });
 
         this.input.on('pointerdown', (pointer) => {
@@ -485,6 +504,13 @@ export class Game extends Phaser.Scene {
             if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
 
             this.playerSprites.set(playerSessionId, sprite);
+            if (!isLocal) {
+                const indicator = this.add.circle(0, 0, OFFSCREEN_PLAYER_INDICATOR_RADIUS, OFFSCREEN_PLAYER_INDICATOR_COLOR, 1)
+                    .setDepth(UI_DEPTH + 5)
+                    .setScrollFactor(0)
+                    .setVisible(false);
+                this.offscreenPlayerIndicators.set(playerSessionId, indicator);
+            }
             this.playerHealthBars.set(playerSessionId, {
                 background: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH),
                 fill: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH + 1),
@@ -644,6 +670,8 @@ export class Game extends Phaser.Scene {
             }
             const levelLabel = this.playerLevelLabels.get(sessionId);
             if (levelLabel) levelLabel.label.destroy();
+            const indicator = this.offscreenPlayerIndicators.get(sessionId);
+            if (indicator) indicator.destroy();
             if (this.isLocalSession(sessionId)) {
                 this.localCamera.stopFollow();
                 this.localPlayerSprite = null;
@@ -656,6 +684,7 @@ export class Game extends Phaser.Scene {
             this.playerHealthBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
             this.playerLevelLabels.delete(sessionId);
+            this.offscreenPlayerIndicators.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
@@ -947,7 +976,9 @@ export class Game extends Phaser.Scene {
                 this.stopHeldAttack();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
-                this.quitButton.setVisible(true);
+                this.quitButton
+                    .setPosition(this.centreX, this.centreY + 118)
+                    .setVisible(true);
             } else {
                 this.gameStarted = true;
                 this.suppressLevelResetEffects();
@@ -987,6 +1018,21 @@ export class Game extends Phaser.Scene {
     updateGameOverCountdown(countdown) {
         const safeCountdown = Math.max(0, Math.ceil(countdown || 0));
         this.gameOverText.setText(`Game Over\nRestarting in ${safeCountdown}`);
+    }
+
+    handleEscapeQuit(event) {
+        event?.preventDefault();
+        const now = performance.now();
+        if (now - this.lastEscapeToggleAt < 120) return;
+        this.lastEscapeToggleAt = now;
+        this.toggleQuitButton();
+    }
+
+    toggleQuitButton() {
+        if (RoomClient.room?.state?.gameOver) return;
+        this.quitButton
+            .setPosition(this.centreX, this.centreY)
+            .setVisible(!this.quitButton.visible);
     }
 
     // Flat world background
@@ -1699,6 +1745,38 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updateOffscreenPlayerIndicators() {
+        const camera = this.localCamera || this.cameras.main;
+        const width = this.scale.width;
+        const height = this.scale.height;
+        const edge = OFFSCREEN_PLAYER_INDICATOR_RADIUS;
+
+        this.offscreenPlayerIndicators.forEach((indicator, sessionId) => {
+            const sprite = this.playerSprites.get(sessionId);
+            const animationState = this.playerAnimationState.get(sessionId);
+            if (!sprite || !sprite.visible) {
+                indicator.setVisible(false);
+                return;
+            }
+
+            const screenX = (sprite.x - camera.scrollX) * camera.zoom;
+            const screenY = (sprite.y - camera.scrollY) * camera.zoom;
+            const isOffscreen = screenX < 0 || screenX > width || screenY < 0 || screenY > height;
+            if (!isOffscreen) {
+                indicator.setVisible(false);
+                return;
+            }
+
+            indicator
+                .setFillStyle(animationState?.dead ? OFFSCREEN_DEAD_PLAYER_INDICATOR_COLOR : OFFSCREEN_PLAYER_INDICATOR_COLOR, 1)
+                .setPosition(
+                    Phaser.Math.Clamp(screenX, edge, width - edge),
+                    Phaser.Math.Clamp(screenY, edge, height - edge),
+                )
+                .setVisible(true);
+        });
+    }
+
     updateEnemyHealthBars() {
         this.enemyHealthBars.forEach((_healthBar, enemyId) => {
             this.updateEnemyHealthBar(enemyId);
@@ -1827,6 +1905,7 @@ export class Game extends Phaser.Scene {
         this.playerLevelLabels.forEach(({ label }) => {
             label.destroy();
         });
+        this.offscreenPlayerIndicators.forEach(indicator => indicator.destroy());
         this.enemySprites.forEach(s => s.destroy());
         this.enemyHealthBars.forEach(({ background, fill }) => {
             background.destroy();
@@ -1861,6 +1940,7 @@ export class Game extends Phaser.Scene {
         this.playerHealthBars.clear();
         this.playerReviveBars.clear();
         this.playerLevelLabels.clear();
+        this.offscreenPlayerIndicators.clear();
         this.localExperienceState = null;
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
