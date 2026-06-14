@@ -22,6 +22,17 @@ const ENEMY_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const WOOD_UI_ICON_SIZE = 64;
+const BUILD_GRID_SIZE = 32;
+const BUILD_GRID_LINE_COLOR = 0xd8f5d0;
+const BUILD_GRID_LINE_ALPHA = 0.22;
+const BUILD_GRID_DOT_LENGTH = 6;
+const BUILD_GRID_DOT_GAP = 10;
+const WOOD_BLOCK_SIZE = 32;
+const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
+const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
+const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
+const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
+const BUILD_DRAG_SEND_INTERVAL_MS = 35;
 const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
@@ -66,6 +77,9 @@ const SPATIAL_MAX_VOLUME = 0.9;
 const SPATIAL_MIN_ONSCREEN_VOLUME = 0.25;
 const SPATIAL_MIN_AUDIBLE_VIEWPORT_SCALE = 0.5;
 const SPATIAL_SILENT_VIEWPORT_SCALE = 0.8;
+const CAMERA_MIN_ZOOM = 1;
+const CAMERA_MAX_ZOOM = 1.45;
+const CAMERA_ZOOM_STEP = 0.08;
 const LOG_PILE_OFFSETS = [
     { x: -18, y: -6 },
     { x: 0, y: -10 },
@@ -129,10 +143,19 @@ export class Game extends Phaser.Scene {
         this.enemyHealthBars = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
+        this.woodBlockSprites    = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
+        this.isBuildModeActive = false;
+        this.buildGridGraphics = null;
+        this.buildPreview = null;
+        this.activeBuildPointerId = null;
+        this.activeBuildButton = null;
+        this.lastBuildDragCellId = null;
+        this.lastBuildDragSentAt = 0;
+        this.cameraZoom = CAMERA_MIN_ZOOM;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
@@ -166,6 +189,7 @@ export class Game extends Phaser.Scene {
             document.removeEventListener('visibilitychange', this.handleVisibilityChange);
             window.removeEventListener('blur', this.handleTabInactive);
             window.removeEventListener('focus', this.handleTabActive);
+            this.disableBuildMode();
         });
     }
 
@@ -290,12 +314,43 @@ export class Game extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
             interact: Phaser.Input.Keyboard.KeyCodes.F,
+            build: Phaser.Input.Keyboard.KeyCodes.TAB,
+        });
+
+        this.input.mouse?.disableContextMenu();
+        this.keys.build.on('down', (key, event) => {
+            event?.preventDefault();
+            this.toggleBuildMode();
         });
 
         this.input.on('pointerdown', (pointer) => {
+            if (this.isBuildModeActive) {
+                this.handleBuildModePointerDown(pointer);
+                return;
+            }
+
             if (pointer.leftButtonDown()) {
                 this.playLocalAttackAnimation(pointer);
             }
+        });
+
+        this.input.on('pointermove', (pointer) => {
+            if (this.isBuildModeActive) {
+                this.updateBuildPreview(pointer);
+                this.handleBuildModePointerDrag(pointer);
+            }
+        });
+
+        this.input.on('pointerup', (pointer) => {
+            if (this.activeBuildPointerId === pointer.id) {
+                this.activeBuildPointerId = null;
+                this.activeBuildButton = null;
+                this.lastBuildDragCellId = null;
+            }
+        });
+
+        this.input.on('wheel', (_pointer, _gameObjects, _deltaX, deltaY) => {
+            this.handleCameraWheel(deltaY);
         });
     }
 
@@ -395,6 +450,7 @@ export class Game extends Phaser.Scene {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 const previousX = animationState ? animationState.x : player.x;
                 const previousY = animationState ? animationState.y : player.y;
+                const serverPositionChanged = player.x !== previousX || player.y !== previousY;
 
                 const visualLocked = isLocal
                     && animationState?.attacking
@@ -403,21 +459,23 @@ export class Game extends Phaser.Scene {
                 if (visualLocked) {
                     s.x = animationState.attackVisualLockX;
                     s.y = animationState.attackVisualLockY;
-                } else {
+                } else if (serverPositionChanged) {
                     // Lerp toward server position for smooth rendering
                     s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
                     s.y = Phaser.Math.Linear(s.y, player.y, 0.3);
                 }
 
                 if (animationState) {
-                    const direction = this.getDirectionFromVector(player.x - previousX, player.y - previousY);
-                    if (direction) {
-                        animationState.lastMovedAt = this.time.now;
+                    if (serverPositionChanged) {
+                        const direction = this.getDirectionFromVector(player.x - previousX, player.y - previousY);
+                        if (direction) {
+                            animationState.lastMovedAt = this.time.now;
+                        }
+                        animationState.moving = !!direction;
+                        if (!isLocal) this.setPlayerAnimation(playerSessionId, animationState.moving, direction);
+                        animationState.x = player.x;
+                        animationState.y = player.y;
                     }
-                    animationState.moving = !!direction;
-                    if (!isLocal) this.setPlayerAnimation(playerSessionId, animationState.moving, direction);
-                    animationState.x = player.x;
-                    animationState.y = player.y;
                 }
 
                 if (player.isDead) {
@@ -574,6 +632,39 @@ export class Game extends Phaser.Scene {
             const pile = this.logSprites.get(id);
             if (pile) pile.sprites.forEach((sprite) => sprite.destroy());
             this.logSprites.delete(id);
+        });
+
+        const addWoodBlock = (block, id) => {
+            const blockId = id || block.id;
+            if (!blockId || this.woodBlockSprites.has(blockId)) return;
+
+            const fill = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, WOOD_BLOCK_FILL_COLOR, 1)
+                .setOrigin(0.5)
+                .setDepth(80);
+            const outline = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE)
+                .setOrigin(0.5)
+                .setStrokeStyle(2, WOOD_BLOCK_STROKE_COLOR, 0.85)
+                .setDepth(81);
+
+            this.woodBlockSprites.set(blockId, { fill, outline, block });
+
+            block.onChange(() => {
+                const sprites = this.woodBlockSprites.get(blockId);
+                if (!sprites) return;
+                sprites.fill.setPosition(block.x, block.y);
+                sprites.outline.setPosition(block.x, block.y);
+            });
+        };
+
+        state.woodBlocks.onAdd(addWoodBlock);
+        state.woodBlocks.forEach(addWoodBlock);
+
+        state.woodBlocks.onRemove((_block, id) => {
+            const sprites = this.woodBlockSprites.get(id);
+            if (!sprites) return;
+            sprites.fill.destroy();
+            sprites.outline.destroy();
+            this.woodBlockSprites.delete(id);
         });
 
         const addEnemy = (enemy, id) => {
@@ -753,6 +844,7 @@ export class Game extends Phaser.Scene {
         state.listen('gameOver', (over) => {
             if (over) {
                 this.gameStarted = false;
+                this.disableBuildMode();
                 this.gameOverText.setVisible(true);
 
                 this.keys.fire.once('down', async () => {
@@ -799,6 +891,173 @@ export class Game extends Phaser.Scene {
             .setOrigin(0)
             .setDepth(-100);
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        this.createBuildGrid();
+    }
+
+    createBuildGrid() {
+        if (this.buildGridGraphics) this.buildGridGraphics.destroy();
+
+        const grid = this.add.graphics()
+            .setDepth(-90)
+            .setVisible(this.isBuildModeActive);
+
+        grid.lineStyle(1, BUILD_GRID_LINE_COLOR, BUILD_GRID_LINE_ALPHA);
+
+        for (let x = 0; x <= this.worldWidth; x += BUILD_GRID_SIZE) {
+            this.drawDottedLine(grid, x, 0, x, this.worldHeight);
+        }
+
+        for (let y = 0; y <= this.worldHeight; y += BUILD_GRID_SIZE) {
+            this.drawDottedLine(grid, 0, y, this.worldWidth, y);
+        }
+
+        this.buildGridGraphics = grid;
+    }
+
+    createBuildPreview() {
+        if (this.buildPreview) return;
+
+        this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
+            .setOrigin(0.5)
+            .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
+            .setDepth(82)
+            .setVisible(false);
+    }
+
+    drawDottedLine(graphics, x1, y1, x2, y2) {
+        const length = Phaser.Math.Distance.Between(x1, y1, x2, y2);
+        if (length <= 0) return;
+
+        const dx = (x2 - x1) / length;
+        const dy = (y2 - y1) / length;
+        const step = BUILD_GRID_DOT_LENGTH + BUILD_GRID_DOT_GAP;
+
+        for (let distance = 0; distance < length; distance += step) {
+            const endDistance = Math.min(distance + BUILD_GRID_DOT_LENGTH, length);
+            graphics.lineBetween(
+                x1 + dx * distance,
+                y1 + dy * distance,
+                x1 + dx * endDistance,
+                y1 + dy * endDistance,
+            );
+        }
+    }
+
+    toggleBuildMode() {
+        this.isBuildModeActive = !this.isBuildModeActive;
+        if (this.buildGridGraphics) {
+            this.buildGridGraphics.setVisible(this.isBuildModeActive);
+        }
+        this.createBuildPreview();
+        this.buildPreview?.setVisible(this.isBuildModeActive);
+        if (this.isBuildModeActive) {
+            this.updateBuildPreview(this.input.activePointer);
+        } else {
+            this.resetBuildDragState();
+        }
+    }
+
+    disableBuildMode() {
+        this.isBuildModeActive = false;
+        if (this.buildGridGraphics) {
+            this.buildGridGraphics.setVisible(false);
+        }
+        if (this.buildPreview) {
+            this.buildPreview.setVisible(false);
+        }
+        this.resetBuildDragState();
+    }
+
+    handleBuildModePointerDown(pointer) {
+        const button = this.getBuildPointerButton(pointer);
+        if (button !== 0 && button !== 2) return;
+
+        this.activeBuildPointerId = pointer.id;
+        this.activeBuildButton = button;
+        this.lastBuildDragCellId = null;
+        this.lastBuildDragSentAt = 0;
+        this.updateBuildPreview(pointer);
+        this.sendBuildIntentAtPointer(pointer, button, true);
+    }
+
+    handleBuildModePointerDrag(pointer) {
+        if (this.activeBuildPointerId !== pointer.id) return;
+        if (this.activeBuildButton !== 0 && this.activeBuildButton !== 2) return;
+
+        const now = this.time.now;
+        if (now - this.lastBuildDragSentAt < BUILD_DRAG_SEND_INTERVAL_MS) return;
+        this.sendBuildIntentAtPointer(pointer, this.activeBuildButton, false);
+    }
+
+    sendBuildIntentAtPointer(pointer, button, force = false) {
+        const cell = this.getBuildCellFromPointer(pointer);
+        if (!cell) return;
+        if (!force && cell.id === this.lastBuildDragCellId) return;
+
+        this.lastBuildDragCellId = cell.id;
+        this.lastBuildDragSentAt = this.time.now;
+
+        if (button === 0) {
+            RoomClient.sendBuildWoodBlock(cell.x, cell.y);
+        } else if (button === 2) {
+            RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
+        }
+    }
+
+    updateBuildPreview(pointer) {
+        if (!this.isBuildModeActive) return;
+        this.createBuildPreview();
+
+        const cell = this.getBuildCellFromPointer(pointer);
+        if (!cell) {
+            this.buildPreview?.setVisible(false);
+            return;
+        }
+
+        this.buildPreview
+            .setPosition(cell.x, cell.y)
+            .setVisible(true);
+    }
+
+    getBuildCellFromPointer(pointer) {
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        if (!worldPoint) return null;
+
+        const x = Phaser.Math.Clamp(worldPoint.x, 0, this.worldWidth - 1);
+        const y = Phaser.Math.Clamp(worldPoint.y, 0, this.worldHeight - 1);
+        const col = Math.floor(x / BUILD_GRID_SIZE);
+        const row = Math.floor(y / BUILD_GRID_SIZE);
+
+        return {
+            id: `${col}:${row}`,
+            x: col * BUILD_GRID_SIZE + BUILD_GRID_SIZE * 0.5,
+            y: row * BUILD_GRID_SIZE + BUILD_GRID_SIZE * 0.5,
+        };
+    }
+
+    getBuildPointerButton(pointer) {
+        const nativeButton = pointer?.event?.button;
+        if (nativeButton === 0 || nativeButton === 2) return nativeButton;
+        const nativeButtons = pointer?.event?.buttons;
+        if (typeof nativeButtons === 'number') {
+            if ((nativeButtons & 1) === 1) return 0;
+            if ((nativeButtons & 2) === 2) return 2;
+        }
+        if (pointer?.buttons) {
+            if ((pointer.buttons & 1) === 1) return 0;
+            if ((pointer.buttons & 2) === 2) return 2;
+        }
+        if (pointer?.button === 0 || pointer?.button === 2) return pointer.button;
+        if (pointer?.leftButtonDown?.()) return 0;
+        if (pointer?.rightButtonDown?.()) return 2;
+        return null;
+    }
+
+    resetBuildDragState() {
+        this.activeBuildPointerId = null;
+        this.activeBuildButton = null;
+        this.lastBuildDragCellId = null;
+        this.lastBuildDragSentAt = 0;
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -810,6 +1069,7 @@ export class Game extends Phaser.Scene {
         this.localPlayerSprite = sprite;
         this.localPlayerState = player;
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        this.localCamera.setZoom(this.cameraZoom);
         this.localCamera.centerOn(player.x, player.y);
         this.localCamera.startFollow(sprite, false, 1, 1);
     }
@@ -822,6 +1082,18 @@ export class Game extends Phaser.Scene {
         if (followedSprite !== this.localPlayerSprite) {
             this.localCamera.startFollow(this.localPlayerSprite, false, 1, 1);
         }
+    }
+
+    handleCameraWheel(deltaY) {
+        if (!this.gameStarted || !Number.isFinite(deltaY) || deltaY === 0) return;
+
+        const direction = deltaY < 0 ? 1 : -1;
+        this.cameraZoom = Phaser.Math.Clamp(
+            this.cameraZoom + direction * CAMERA_ZOOM_STEP,
+            CAMERA_MIN_ZOOM,
+            CAMERA_MAX_ZOOM,
+        );
+        this.localCamera.setZoom(this.cameraZoom);
     }
 
     createAnimation(animation) {
@@ -1366,8 +1638,22 @@ export class Game extends Phaser.Scene {
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
         });
+        this.woodBlockSprites.forEach(({ fill, outline }) => {
+            fill.destroy();
+            outline.destroy();
+        });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
+        if (this.buildGridGraphics) {
+            this.buildGridGraphics.destroy();
+            this.buildGridGraphics = null;
+        }
+        if (this.buildPreview) {
+            this.buildPreview.destroy();
+            this.buildPreview = null;
+        }
+        this.isBuildModeActive = false;
+        this.resetBuildDragState();
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
@@ -1377,6 +1663,7 @@ export class Game extends Phaser.Scene {
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
+        this.woodBlockSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }

@@ -58,6 +58,12 @@ export class LogState extends Schema {
     @type("int8")    amount: number = 5;
 }
 
+export class WoodBlockState extends Schema {
+    @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 export class GameRoomState extends Schema {
     @type({ map: PlayerState })       players      = new MapSchema<PlayerState>();
     @type({ map: EnemyState })        enemies      = new MapSchema<EnemyState>();
@@ -65,6 +71,7 @@ export class GameRoomState extends Schema {
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
     @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
     @type({ map: LogState })          logs          = new MapSchema<LogState>();
+    @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
 
     @type("int32")  worldWidth:  number = 3840;
     @type("int32")  worldHeight: number = 2160;

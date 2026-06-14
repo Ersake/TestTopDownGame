@@ -7,6 +7,7 @@ import {
     EnemyBulletState,
     TreeState,
     LogState,
+    WoodBlockState,
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
@@ -42,6 +43,10 @@ const ENEMY_ATTACK_IMPACT_DELAY_MS = 225;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 48;
+const BUILD_GRID_SIZE = 32;
+const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
+const BUILD_BLOCK_COST = 1;
+const BUILD_RANGE = 192;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const ATTACK_HIT_RADIUS = 44;
@@ -73,6 +78,10 @@ const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
+const ENEMY_PATH_BLOCKED_DELAY_MS = 150;
+const ENEMY_PATH_REFRESH_MS = 500;
+const ENEMY_PATH_WAYPOINT_RADIUS = 12;
+const ENEMY_PATH_MAX_VISITED_CELLS = 1800;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -178,7 +187,15 @@ interface ServerPlayer {
     alive: boolean;
 }
 type EnemyMode = "chase" | "windup" | "attack" | "stun";
-interface ServerEnemy   { mode: EnemyMode; modeMs: number; targetId: string | null; }
+interface PathCell { col: number; row: number; }
+interface ServerEnemy {
+    mode: EnemyMode;
+    modeMs: number;
+    targetId: string | null;
+    blockedMs: number;
+    pathRefreshMs: number;
+    path: PathCell[];
+}
 interface ServerBullet  { vy: number; }
 interface AttackOrigin {
     x: number;
@@ -319,6 +336,14 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.applyDelayedEnemyAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
             }, ENEMY_ATTACK_IMPACT_DELAY_MS);
         });
+
+        this.onMessage("buildWoodBlock", (client, data) => {
+            this.tryBuildWoodBlock(client.sessionId, data);
+        });
+
+        this.onMessage("removeWoodBlock", (client, data) => {
+            this.tryRemoveWoodBlock(client.sessionId, data);
+        });
     }
 
     onJoin(client: Client) {
@@ -371,6 +396,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enemyBullets.clear();
         this.serverEnemyBullets.clear();
         this.state.logs.clear();
+        this.state.woodBlocks.clear();
         this.generateTrees();
 
         this.state.teamScore = 0;
@@ -662,6 +688,111 @@ export class ShmupRoom extends Room<GameRoomState> {
         return true;
     }
 
+    private tryBuildWoodBlock(sessionId: string, data: unknown): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.wood < BUILD_BLOCK_COST) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+        if (this.isBuildCellOccupied(cell.id, cell.x, cell.y)) return false;
+
+        const block = new WoodBlockState();
+        block.id = cell.id;
+        block.x = cell.x;
+        block.y = cell.y;
+        this.state.woodBlocks.set(block.id, block);
+        player.wood -= BUILD_BLOCK_COST;
+        return true;
+    }
+
+    private tryRemoveWoodBlock(sessionId: string, data: unknown): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+        if (!this.state.woodBlocks.has(cell.id)) return false;
+
+        this.state.woodBlocks.delete(cell.id);
+        player.wood += BUILD_BLOCK_COST;
+        return true;
+    }
+
+    private getBuildCellFromData(data: unknown): { id: string; x: number; y: number } | null {
+        const maybePoint = data as { x?: unknown; y?: unknown } | null;
+        if (!maybePoint || typeof maybePoint.x !== "number" || typeof maybePoint.y !== "number") return null;
+        if (!Number.isFinite(maybePoint.x) || !Number.isFinite(maybePoint.y)) return null;
+
+        const col = Math.floor(clamp(maybePoint.x, 0, WORLD_WIDTH - 1) / BUILD_GRID_SIZE);
+        const row = Math.floor(clamp(maybePoint.y, 0, WORLD_HEIGHT - 1) / BUILD_GRID_SIZE);
+        const x = col * BUILD_GRID_SIZE + BUILD_BLOCK_HALF_SIZE;
+        const y = row * BUILD_GRID_SIZE + BUILD_BLOCK_HALF_SIZE;
+        if (x < BUILD_BLOCK_HALF_SIZE || y < BUILD_BLOCK_HALF_SIZE) return null;
+        if (x > WORLD_WIDTH - BUILD_BLOCK_HALF_SIZE || y > WORLD_HEIGHT - BUILD_BLOCK_HALF_SIZE) return null;
+
+        return { id: `wood-${col}-${row}`, x, y };
+    }
+
+    private isBuildCellInRange(player: PlayerState, blockX: number, blockY: number): boolean {
+        const dx = player.x - blockX;
+        const dy = (player.y + PLAYER_TREE_Y_OFFSET) - blockY;
+        return dx * dx + dy * dy <= BUILD_RANGE * BUILD_RANGE;
+    }
+
+    private isBuildCellOccupied(cellId: string, blockX: number, blockY: number): boolean {
+        if (this.state.woodBlocks.has(cellId)) return true;
+
+        let occupied = false;
+        this.state.players.forEach((player, playerId) => {
+            if (occupied) return;
+            const sp = this.serverPlayers.get(playerId);
+            if (!sp || !sp.alive || player.isDead) return;
+            occupied = circleOverlapsAabb(
+                player.x,
+                player.y + PLAYER_TREE_Y_OFFSET,
+                PLAYER_TREE_FOOT_RADIUS,
+                blockX,
+                blockY,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+        });
+        if (occupied) return true;
+
+        this.state.enemies.forEach((enemy) => {
+            if (occupied || enemy.isDead) return;
+            occupied = circleOverlapsAabb(
+                enemy.x,
+                enemy.y + ENEMY_FOOT_Y_OFFSET,
+                ENEMY_FOOT_RADIUS,
+                blockX,
+                blockY,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+        });
+        if (occupied) return true;
+
+        this.state.trees.forEach((tree) => {
+            if (occupied) return;
+            occupied = overlaps(
+                blockX,
+                blockY,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+                tree.x,
+                tree.y + TREE_TRUNK_Y_OFFSET,
+                TREE_TRUNK_HW,
+                TREE_TRUNK_HH,
+            );
+        });
+
+        return occupied;
+    }
+
     private tryStartRevive(sessionId: string, client: Client): boolean {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
@@ -815,7 +946,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 const nextX = player.x + sp.vx * dtSec;
                 const nextY = player.y + sp.vy * dtSec;
-                const resolved = this.movePlayerWithTestTree(player, nextX, nextY);
+                const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
                 if (resolved.x === player.x && nextX !== player.x) sp.vx = 0;
                 if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
                 player.x = resolved.x;
@@ -848,7 +979,32 @@ export class ShmupRoom extends Room<GameRoomState> {
         return collides;
     }
 
-    private movePlayerWithTestTree(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
+    private collidesWithWoodBlockFoot(x: number, y: number, radius: number): boolean {
+        let collides = false;
+        this.state.woodBlocks.forEach((block) => {
+            if (collides) return;
+            collides = circleOverlapsAabb(
+                x,
+                y,
+                radius,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+        });
+
+        return collides;
+    }
+
+    private collidesWithPlayerWorldColliders(playerX: number, playerY: number): boolean {
+        const footX = playerX;
+        const footY = playerY + PLAYER_TREE_Y_OFFSET;
+        return this.collidesWithTestTreeTrunk(playerX, playerY)
+            || this.collidesWithWoodBlockFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS);
+    }
+
+    private movePlayerWithWorldColliders(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
         const dx = nextX - player.x;
         const dy = nextY - player.y;
         const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / MAX_PLAYER_MOVE_STEP));
@@ -859,12 +1015,12 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         for (let i = 0; i < steps; i++) {
             const candidateX = clamp(resolvedX + stepX, PLAYER_HW, WORLD_WIDTH - PLAYER_HW);
-            if (!this.collidesWithTestTreeTrunk(candidateX, resolvedY)) {
+            if (!this.collidesWithPlayerWorldColliders(candidateX, resolvedY)) {
                 resolvedX = candidateX;
             }
 
             const candidateY = clamp(resolvedY + stepY, PLAYER_HH, WORLD_HEIGHT - PLAYER_HH);
-            if (!this.collidesWithTestTreeTrunk(resolvedX, candidateY)) {
+            if (!this.collidesWithPlayerWorldColliders(resolvedX, candidateY)) {
                 resolvedY = candidateY;
             }
         }
@@ -953,7 +1109,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         this.state.enemies.set(id, e);
-        this.serverEnemies.set(id, { mode: "chase", modeMs: 0, targetId: target?.id || null });
+        this.serverEnemies.set(id, {
+            mode: "chase",
+            modeMs: 0,
+            targetId: target?.id || null,
+            blockedMs: 0,
+            pathRefreshMs: 0,
+            path: [],
+        });
     }
 
     private tickEnemies(dtSec: number, dtMs: number) {
@@ -1031,15 +1194,242 @@ export class ShmupRoom extends Room<GameRoomState> {
                 enemy.action = "idle";
                 se.mode = "windup";
                 se.modeMs = ENEMY1_WINDUP_MS;
+                se.path = [];
+                se.blockedMs = 0;
                 return;
             }
 
             const move = Math.min(ENEMY1_SPEED * dtSec, remainingDistance);
-            enemy.x += (dx / distance) * move;
-            enemy.y += (dy / distance) * move;
+            if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+                se.path = [];
+                se.blockedMs = 0;
+                se.pathRefreshMs = 0;
+                const resolved = this.moveEnemyWithWoodBlocks(
+                    enemy,
+                    enemy.x + (dx / distance) * move,
+                    enemy.y + (dy / distance) * move,
+                );
+                enemy.x = resolved.x;
+                enemy.y = resolved.y;
+                return;
+            }
+
+            const directResolved = this.moveEnemyWithWoodBlocks(
+                enemy,
+                enemy.x + (dx / distance) * move,
+                enemy.y + (dy / distance) * move,
+            );
+            const directMoved = Math.hypot(directResolved.x - enemy.x, directResolved.y - enemy.y) > 0.1;
+            if (directMoved && se.blockedMs < ENEMY_PATH_BLOCKED_DELAY_MS) {
+                enemy.x = directResolved.x;
+                enemy.y = directResolved.y;
+                return;
+            }
+
+            se.blockedMs += dtMs;
+            se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
+            if (se.blockedMs >= ENEMY_PATH_BLOCKED_DELAY_MS && (se.path.length === 0 || se.pathRefreshMs === 0)) {
+                se.path = this.findEnemyWoodBlockPath(enemy, target.player);
+                se.pathRefreshMs = ENEMY_PATH_REFRESH_MS;
+            }
+
+            const pathMoved = this.followEnemyPath(enemy, se, move);
+            if (!pathMoved) {
+                enemy.x = directResolved.x;
+                enemy.y = directResolved.y;
+            }
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
         this.separateEnemyFeet();
+    }
+
+    private moveEnemyWithWoodBlocks(enemy: EnemyState, nextX: number, nextY: number): { x: number; y: number } {
+        let resolvedX = clamp(nextX, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+        let resolvedY = enemy.y;
+
+        if (this.collidesWithWoodBlockFoot(resolvedX, resolvedY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+            resolvedX = enemy.x;
+        }
+
+        const candidateY = clamp(nextY, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+        if (!this.collidesWithWoodBlockFoot(resolvedX, candidateY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+            resolvedY = candidateY;
+        }
+
+        return { x: resolvedX, y: resolvedY };
+    }
+
+    private hasDirectWoodBlockPath(fromX: number, fromY: number, toX: number, toY: number): boolean {
+        let clear = true;
+        this.state.woodBlocks.forEach((block) => {
+            if (!clear) return;
+            clear = !capsuleOverlapsAabb(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                ENEMY_FOOT_RADIUS,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+        });
+
+        return clear;
+    }
+
+    private followEnemyPath(enemy: EnemyState, se: ServerEnemy, moveDistance: number): boolean {
+        while (se.path.length > 0) {
+            const nextCell = se.path[0];
+            const waypoint = this.buildCellCenter(nextCell);
+            const targetX = waypoint.x;
+            const targetY = waypoint.y - ENEMY_FOOT_Y_OFFSET;
+            const dx = targetX - enemy.x;
+            const dy = targetY - enemy.y;
+            const distance = Math.hypot(dx, dy);
+
+            if (distance <= ENEMY_PATH_WAYPOINT_RADIUS) {
+                se.path.shift();
+                continue;
+            }
+
+            const step = Math.min(moveDistance, distance);
+            const resolved = this.moveEnemyWithWoodBlocks(
+                enemy,
+                enemy.x + (dx / distance) * step,
+                enemy.y + (dy / distance) * step,
+            );
+            const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
+            enemy.x = resolved.x;
+            enemy.y = resolved.y;
+            return moved;
+        }
+
+        return false;
+    }
+
+    private findEnemyWoodBlockPath(enemy: EnemyState, target: PlayerState): PathCell[] {
+        const start = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
+        const targetCenter = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
+        if (this.isBuildPathCellBlocked(start.col, start.row)) return [];
+
+        const targetCells: PathCell[] = [];
+        for (let radius = 0; radius <= 3; radius++) {
+            for (let row = targetCenter.row - radius; row <= targetCenter.row + radius; row++) {
+                for (let col = targetCenter.col - radius; col <= targetCenter.col + radius; col++) {
+                    if (Math.max(Math.abs(col - targetCenter.col), Math.abs(row - targetCenter.row)) !== radius) continue;
+                    if (!this.isBuildPathCellInside(col, row) || this.isBuildPathCellBlocked(col, row)) continue;
+                    targetCells.push({ col, row });
+                }
+            }
+            if (targetCells.length > 0) break;
+        }
+
+        if (targetCells.length === 0) return [];
+        targetCells.sort((a, b) => this.gridDistance(start, a) - this.gridDistance(start, b));
+        const targetKeys = new Set(targetCells.map(cell => this.buildCellKey(cell.col, cell.row)));
+
+        const open: Array<PathCell & { g: number; f: number }> = [{ ...start, g: 0, f: this.pathHeuristic(start, targetCells) }];
+        const cameFrom = new Map<string, string>();
+        const bestG = new Map<string, number>([[this.buildCellKey(start.col, start.row), 0]]);
+        const closed = new Set<string>();
+        let visited = 0;
+
+        while (open.length > 0 && visited < ENEMY_PATH_MAX_VISITED_CELLS) {
+            open.sort((a, b) => a.f - b.f);
+            const current = open.shift();
+            if (!current) break;
+
+            const currentKey = this.buildCellKey(current.col, current.row);
+            if (closed.has(currentKey)) continue;
+            closed.add(currentKey);
+            visited++;
+
+            if (targetKeys.has(currentKey)) {
+                return this.reconstructBuildPath(cameFrom, currentKey).slice(1);
+            }
+
+            for (const neighbor of this.getBuildPathNeighbors(current.col, current.row)) {
+                const neighborKey = this.buildCellKey(neighbor.col, neighbor.row);
+                if (closed.has(neighborKey)) continue;
+
+                const tentativeG = current.g + 1;
+                if (tentativeG >= (bestG.get(neighborKey) ?? Number.POSITIVE_INFINITY)) continue;
+
+                cameFrom.set(neighborKey, currentKey);
+                bestG.set(neighborKey, tentativeG);
+                open.push({
+                    ...neighbor,
+                    g: tentativeG,
+                    f: tentativeG + this.pathHeuristic(neighbor, targetCells),
+                });
+            }
+        }
+
+        return [];
+    }
+
+    private getBuildPathNeighbors(col: number, row: number): PathCell[] {
+        const candidates = [
+            { col: col + 1, row },
+            { col: col - 1, row },
+            { col, row: row + 1 },
+            { col, row: row - 1 },
+        ];
+
+        return candidates.filter(cell => this.isBuildPathCellInside(cell.col, cell.row)
+            && !this.isBuildPathCellBlocked(cell.col, cell.row));
+    }
+
+    private reconstructBuildPath(cameFrom: Map<string, string>, endKey: string): PathCell[] {
+        const pathKeys = [endKey];
+        let currentKey = endKey;
+        while (cameFrom.has(currentKey)) {
+            currentKey = cameFrom.get(currentKey)!;
+            pathKeys.push(currentKey);
+        }
+
+        return pathKeys.reverse().map(key => {
+            const [col, row] = key.split(":").map(Number);
+            return { col, row };
+        });
+    }
+
+    private pathHeuristic(cell: PathCell, targets: PathCell[]): number {
+        return Math.min(...targets.map(target => this.gridDistance(cell, target)));
+    }
+
+    private gridDistance(a: PathCell, b: PathCell): number {
+        return Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
+    }
+
+    private worldToBuildCell(x: number, y: number): PathCell {
+        return {
+            col: Math.floor(clamp(x, 0, WORLD_WIDTH - 1) / BUILD_GRID_SIZE),
+            row: Math.floor(clamp(y, 0, WORLD_HEIGHT - 1) / BUILD_GRID_SIZE),
+        };
+    }
+
+    private buildCellCenter(cell: PathCell): { x: number; y: number } {
+        return {
+            x: cell.col * BUILD_GRID_SIZE + BUILD_BLOCK_HALF_SIZE,
+            y: cell.row * BUILD_GRID_SIZE + BUILD_BLOCK_HALF_SIZE,
+        };
+    }
+
+    private buildCellKey(col: number, row: number): string {
+        return `${col}:${row}`;
+    }
+
+    private isBuildPathCellInside(col: number, row: number): boolean {
+        return col >= 0 && row >= 0
+            && col < Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE)
+            && row < Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
+    }
+
+    private isBuildPathCellBlocked(col: number, row: number): boolean {
+        return this.state.woodBlocks.has(`wood-${col}-${row}`);
     }
 
     private separateEnemyFeet() {
@@ -1078,10 +1468,19 @@ export class ShmupRoom extends Room<GameRoomState> {
                     const nx = dx / distance;
                     const ny = dy / distance;
 
-                    enemyA.x = clamp(enemyA.x - nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
-                    enemyA.y = clamp(enemyA.y - ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
-                    enemyB.x = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
-                    enemyB.y = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+                    const nextAx = clamp(enemyA.x - nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+                    const nextAy = clamp(enemyA.y - ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+                    const nextBx = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+                    const nextBy = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+
+                    if (!this.collidesWithWoodBlockFoot(nextAx, nextAy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+                        enemyA.x = nextAx;
+                        enemyA.y = nextAy;
+                    }
+                    if (!this.collidesWithWoodBlockFoot(nextBx, nextBy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+                        enemyB.x = nextBx;
+                        enemyB.y = nextBy;
+                    }
                 }
             }
         }
