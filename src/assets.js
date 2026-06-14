@@ -28,6 +28,10 @@ export default {
             key: 'revive-sound',
             args: ['assets/revivesound.mp3']
         },
+        levelUp: {
+            key: 'level-up',
+            args: ['assets/Level Up Sound.mp3']
+        },
     },
     'image': {
         treeBottom: {

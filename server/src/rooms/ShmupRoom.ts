@@ -47,6 +47,7 @@ const BUILD_GRID_SIZE = 32;
 const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
 const BUILD_BLOCK_COST = 1;
 const BUILD_RANGE = 192;
+const FIRST_LEVEL_UP_KILLS = 5;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const ATTACK_HIT_RADIUS = 44;
@@ -358,6 +359,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
         ps.health = PLAYER_MAX_HEALTH;
+        ps.kills = 0;
+        ps.level = 1;
+        ps.experience = 0;
+        ps.experienceToNext = FIRST_LEVEL_UP_KILLS;
         ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
@@ -506,6 +511,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         this.spawnLogsForTree(tree);
+        this.awardPlayerExperience(attackerId, 1);
         this.state.trees.delete(hitTreeId);
         this.serverTreeHealth.delete(hitTreeId);
         return hitPayload;
@@ -578,8 +584,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             });
 
             if (enemy.health <= 0) {
-                const owner = this.state.players.get(attackerId);
-                if (owner) owner.kills++;
+                this.awardPlayerKill(attackerId);
                 this.state.teamScore += 10;
                 this.killEnemy(enemyId, enemy);
             }
@@ -631,6 +636,42 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.state.enemies.delete(enemyId);
             }
         }, ENEMY_DEATH_REMOVE_MS);
+    }
+
+    private awardPlayerKill(playerId: string) {
+        const player = this.state.players.get(playerId);
+        if (!player) return;
+
+        player.kills++;
+        this.awardPlayerExperience(playerId, 1);
+    }
+
+    private awardPlayerExperience(playerId: string, amount: number) {
+        const player = this.state.players.get(playerId);
+        if (!player) return;
+        if (!Number.isFinite(amount) || amount <= 0) return;
+
+        player.experience += Math.floor(amount);
+
+        let didLevelUp = false;
+        while (player.experience >= player.experienceToNext) {
+            player.level++;
+            player.experienceToNext = this.getExperienceToNextLevel(player.level);
+            didLevelUp = true;
+        }
+
+        if (didLevelUp) {
+            this.broadcast("playerLevelUp", {
+                playerId,
+                level: player.level,
+                x: player.x,
+                y: player.y,
+            });
+        }
+    }
+
+    private getExperienceToNextLevel(level: number): number {
+        return FIRST_LEVEL_UP_KILLS * Math.pow(2, Math.max(0, level - 1));
     }
 
     private getAttackVector(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): { x: number; y: number } {
@@ -1554,8 +1595,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (deadBullets.includes(bid) || deadEnemies.includes(eid)) return;
                 if (enemy.isDead) return;
                 if (overlaps(bullet.x, bullet.y, PB_HW, PB_HH, enemy.x, enemy.y, ENEMY_HW, ENEMY_HH)) {
-                    const owner = this.state.players.get(bullet.ownerId);
-                    if (owner) owner.kills++;
+                    this.awardPlayerKill(bullet.ownerId);
                     this.state.teamScore += 10;
                     deadBullets.push(bid);
                     enemy.health -= bullet.power;

@@ -46,6 +46,7 @@ const SKELETON_HIT_BURST_WINDOW_MS = 80;
 const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
+const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
@@ -58,6 +59,14 @@ const PLAYER_REVIVE_BAR_HEIGHT = 7;
 const PLAYER_REVIVE_BAR_Y_OFFSET = -38;
 const PLAYER_REVIVE_BAR_DEPTH = 131;
 const PLAYER_REVIVE_BAR_FILL_COLOR = 0x8bdcff;
+const PLAYER_LEVEL_LABEL_Y_OFFSET = -27;
+const PLAYER_LEVEL_LABEL_DEPTH = 132;
+const EXPERIENCE_BAR_WIDTH = 720;
+const EXPERIENCE_BAR_HEIGHT = 18;
+const EXPERIENCE_BAR_BOTTOM_MARGIN = 14;
+const EXPERIENCE_BAR_BACKGROUND_COLOR = 0x050505;
+const EXPERIENCE_BAR_FILL_COLOR = 0x8a22d8;
+const EXPERIENCE_BAR_STROKE_COLOR = 0x000000;
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -112,6 +121,7 @@ export class Game extends Phaser.Scene {
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
         this.updatePlayerReviveBars();
+        this.updatePlayerLevelLabels();
         this.updateEnemyHealthBars();
     }
 
@@ -137,6 +147,8 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
         this.playerReviveBars = new Map();
+        this.playerLevelLabels = new Map();
+        this.localExperienceState = null;
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -237,7 +249,23 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
+        this.initExperienceBar();
         this.initVolumeSlider();
+    }
+
+    initExperienceBar() {
+        const x = this.centreX - EXPERIENCE_BAR_WIDTH * 0.5;
+        const y = this.scale.height - EXPERIENCE_BAR_BOTTOM_MARGIN - EXPERIENCE_BAR_HEIGHT;
+
+        this.experienceBarBackground = this.add.graphics().setDepth(UI_DEPTH).setScrollFactor(0);
+        this.experienceBarFill = this.add.graphics().setDepth(UI_DEPTH + 1).setScrollFactor(0);
+        this.experienceBarText = this.add.text(this.centreX, y - 14, 'Level 1  0 / 5', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 2).setScrollFactor(0);
+
+        this.experienceBarLayout = { x, y, width: EXPERIENCE_BAR_WIDTH, height: EXPERIENCE_BAR_HEIGHT };
+        this.updateExperienceBar(0, 5, 1);
     }
 
     initVolumeSlider() {
@@ -406,6 +434,16 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Players ──────────────────────────────────────────────────────────
+        room.onMessage('playerLevelUp', (event) => {
+            if (!this.shouldPlayWorldEventAudio()) return;
+            this.playSfx(ASSETS.audio.levelUp.key, LEVEL_UP_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(event?.playerId),
+                worldX: event?.x,
+                worldY: event?.y,
+            });
+        });
+
         const addPlayer = (player, sessionId) => {
             const playerSessionId = sessionId || player.sessionId;
             if (!playerSessionId || this.playerSprites.has(playerSessionId)) return;
@@ -428,6 +466,12 @@ export class Game extends Phaser.Scene {
                 fill: this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1),
                 player,
             });
+            const levelLabel = this.add.text(player.x, player.y + PLAYER_LEVEL_LABEL_Y_OFFSET, `${player.level || 1}`, {
+                fontFamily: 'Arial Black', fontSize: 11, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+                fixedWidth: PLAYER_HEALTH_BAR_WIDTH,
+            }).setOrigin(0, 0.5).setDepth(PLAYER_LEVEL_LABEL_DEPTH);
+            this.playerLevelLabels.set(playerSessionId, { label: levelLabel, player });
             this.playerAnimationState.set(playerSessionId, {
                 direction: DEFAULT_PLAYER_DIRECTION,
                 moving: false,
@@ -525,15 +569,30 @@ export class Game extends Phaser.Scene {
                 this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
                 this.woodText.setText(`${player.wood || 0}`);
+                this.updateLocalExperienceState(player);
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
+                    this.updateLocalExperienceState(player);
                 });
 
                 player.listen('wood', (wood) => {
                     this.woodText.setText(`${wood || 0}`);
                 });
+
+                player.listen('experience', () => {
+                    this.updateLocalExperienceState(player);
+                });
+
+                player.listen('experienceToNext', () => {
+                    this.updateLocalExperienceState(player);
+                });
             }
+
+            player.listen('level', () => {
+                this.updatePlayerLevelLabel(playerSessionId);
+                if (isLocal) this.updateLocalExperienceState(player);
+            });
 
             this.playerCountText.setText(`Players: ${state.players.size}`);
         };
@@ -554,15 +613,20 @@ export class Game extends Phaser.Scene {
                 reviveBar.background.destroy();
                 reviveBar.fill.destroy();
             }
+            const levelLabel = this.playerLevelLabels.get(sessionId);
+            if (levelLabel) levelLabel.label.destroy();
             if (this.isLocalSession(sessionId)) {
                 this.localCamera.stopFollow();
                 this.localPlayerSprite = null;
                 this.localPlayerState = null;
+                this.localExperienceState = null;
+                this.updateExperienceBar(0, 5, 1);
             }
             this.playerSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
+            this.playerLevelLabels.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
         });
 
@@ -1543,10 +1607,58 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerLevelLabels() {
+        this.playerLevelLabels.forEach((_levelLabel, sessionId) => {
+            this.updatePlayerLevelLabel(sessionId);
+        });
+    }
+
     updateEnemyHealthBars() {
         this.enemyHealthBars.forEach((_healthBar, enemyId) => {
             this.updateEnemyHealthBar(enemyId);
         });
+    }
+
+    updatePlayerLevelLabel(sessionId) {
+        const levelLabel = this.playerLevelLabels.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        if (!levelLabel || !sprite) return;
+
+        levelLabel.label
+            .setText(`${levelLabel.player.level || 1}`)
+            .setPosition(sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5, sprite.y + PLAYER_LEVEL_LABEL_Y_OFFSET)
+            .setVisible(!levelLabel.player.isDead);
+    }
+
+    updateLocalExperienceState(player) {
+        const experience = Math.max(0, player.experience || 0);
+        const experienceToNext = Math.max(1, player.experienceToNext || 5);
+        const level = Math.max(1, player.level || 1);
+        this.localExperienceState = { experience, experienceToNext, level };
+        this.updateExperienceBar(experience, experienceToNext, level);
+    }
+
+    updateExperienceBar(experience, experienceToNext, level) {
+        if (!this.experienceBarLayout || !this.experienceBarBackground || !this.experienceBarFill) return;
+
+        const { x, y, width, height } = this.experienceBarLayout;
+        const progress = Phaser.Math.Clamp(experience / Math.max(1, experienceToNext), 0, 1);
+
+        this.experienceBarBackground.clear();
+        this.experienceBarBackground.fillStyle(EXPERIENCE_BAR_BACKGROUND_COLOR, 0.9);
+        this.experienceBarBackground.fillRoundedRect(x, y, width, height, 6);
+        this.experienceBarBackground.lineStyle(3, EXPERIENCE_BAR_STROKE_COLOR, 0.95);
+        this.experienceBarBackground.strokeRoundedRect(x, y, width, height, 6);
+
+        this.experienceBarFill.clear();
+        if (progress > 0) {
+            this.experienceBarFill.fillStyle(EXPERIENCE_BAR_FILL_COLOR, 1);
+            this.experienceBarFill.fillRoundedRect(x, y, width * progress, height, 6);
+        }
+
+        if (this.experienceBarText) {
+            this.experienceBarText.setText(`Level ${level}  ${experience} / ${experienceToNext}`);
+        }
     }
 
     updatePlayerHealthBar(sessionId) {
@@ -1626,6 +1738,9 @@ export class Game extends Phaser.Scene {
             background.destroy();
             fill.destroy();
         });
+        this.playerLevelLabels.forEach(({ label }) => {
+            label.destroy();
+        });
         this.enemySprites.forEach(s => s.destroy());
         this.enemyHealthBars.forEach(({ background, fill }) => {
             background.destroy();
@@ -1658,6 +1773,8 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
         this.playerReviveBars.clear();
+        this.playerLevelLabels.clear();
+        this.localExperienceState = null;
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.enemyHealthBars.clear();

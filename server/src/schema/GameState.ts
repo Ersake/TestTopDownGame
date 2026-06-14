@@ -6,6 +6,9 @@ export class PlayerState extends Schema {
     @type("float32") y: number = 0;
     @type("int8")    health: number = 5;
     @type("int32")   kills: number = 0;
+    @type("int16")   level: number = 1;
+    @type("int32")   experience: number = 0;
+    @type("int32")   experienceToNext: number = 5;
     @type("int32")   wood: number = 0;
     @type("boolean") isDead: boolean = false;
     @type("float32") reviveProgress: number = 0;
