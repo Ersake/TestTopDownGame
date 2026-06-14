@@ -48,6 +48,7 @@ const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_DAMAGE_FLASH_MS = 90;
+const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
 const PLAYER_HEALTH_BAR_HEIGHT = 6;
@@ -117,6 +118,7 @@ export class Game extends Phaser.Scene {
         if (!this.gameStarted) return;
         this.sendInput();
         this.ensureLocalCameraFollow();
+        this.updateHeldAttack();
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
@@ -167,6 +169,9 @@ export class Game extends Phaser.Scene {
         this.activeBuildButton = null;
         this.lastBuildDragCellId = null;
         this.lastBuildDragSentAt = 0;
+        this.attackHeldPointerId = null;
+        this.attackHeldPointer = null;
+        this.nextHeldAttackAt = 0;
         this.cameraZoom = CAMERA_MIN_ZOOM;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
@@ -358,7 +363,7 @@ export class Game extends Phaser.Scene {
             }
 
             if (pointer.leftButtonDown()) {
-                this.playLocalAttackAnimation(pointer);
+                this.startHeldAttack(pointer);
             }
         });
 
@@ -374,6 +379,9 @@ export class Game extends Phaser.Scene {
                 this.activeBuildPointerId = null;
                 this.activeBuildButton = null;
                 this.lastBuildDragCellId = null;
+            }
+            if (this.attackHeldPointerId === pointer.id) {
+                this.stopHeldAttack();
             }
         });
 
@@ -1009,6 +1017,9 @@ export class Game extends Phaser.Scene {
 
     toggleBuildMode() {
         this.isBuildModeActive = !this.isBuildModeActive;
+        if (this.isBuildModeActive) {
+            this.stopHeldAttack();
+        }
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(this.isBuildModeActive);
         }
@@ -1023,6 +1034,7 @@ export class Game extends Phaser.Scene {
 
     disableBuildMode() {
         this.isBuildModeActive = false;
+        this.stopHeldAttack();
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(false);
         }
@@ -1207,11 +1219,43 @@ export class Game extends Phaser.Scene {
         return horizontal || vertical;
     }
 
+    startHeldAttack(pointer) {
+        this.attackHeldPointerId = pointer.id;
+        this.attackHeldPointer = pointer;
+        this.tryHeldAttack(pointer, true);
+    }
+
+    stopHeldAttack() {
+        this.attackHeldPointerId = null;
+        this.attackHeldPointer = null;
+    }
+
+    updateHeldAttack() {
+        if (!this.attackHeldPointer || this.isBuildModeActive) return;
+        if (this.time.now < this.nextHeldAttackAt) return;
+
+        const pointer = this.attackHeldPointer;
+        if (!pointer.leftButtonDown?.()) {
+            this.stopHeldAttack();
+            return;
+        }
+
+        this.tryHeldAttack(pointer, false);
+    }
+
+    tryHeldAttack(pointer, force = false) {
+        if (!force && this.time.now < this.nextHeldAttackAt) return;
+        const didAttack = this.playLocalAttackAnimation(pointer);
+        if (didAttack) {
+            this.nextHeldAttackAt = this.time.now + PLAYER_ATTACK_REPEAT_MS;
+        }
+    }
+
     playLocalAttackAnimation(pointer) {
         const sessionId = this.localSessionId;
         const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
-        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking || animationState.dead) return;
+        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking || animationState.dead) return false;
 
         const worldPoint = this.getPointerWorldPoint(pointer);
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
@@ -1220,6 +1264,7 @@ export class Game extends Phaser.Scene {
         animationState.attackVisualLockY = sprite.y;
         RoomClient.sendAttack(direction, worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
+        return true;
     }
 
     getPointerWorldPoint(pointer) {
@@ -1769,6 +1814,7 @@ export class Game extends Phaser.Scene {
         }
         this.isBuildModeActive = false;
         this.resetBuildDragState();
+        this.stopHeldAttack();
         this.playerSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
