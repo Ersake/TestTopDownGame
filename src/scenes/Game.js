@@ -76,6 +76,7 @@ const ENEMY_HEALTH_BAR_DEPTH = 130;
 const ENEMY_HEALTH_BAR_FILL_COLOR = 0xff1010;
 const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const INITIAL_SERVER_AUDIO_SUPPRESS_MS = 1500;
+const LEVEL_RESET_EFFECT_SUPPRESS_MS = 1200;
 const MASTER_VOLUME_STORAGE_KEY = 'testtopdown-master-volume';
 const DEFAULT_MASTER_VOLUME = 0.5;
 const MAX_EFFECTIVE_SOUND_VOLUME = 0.65;
@@ -176,6 +177,7 @@ export class Game extends Phaser.Scene {
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
+        this.suppressResetEffectsUntil = 0;
         this.isTabActive = this.isDocumentActive();
         this.remoteAttackAudioDirty = !this.isTabActive;
         this.suppressRemoteAttackAudioUntil = this.isTabActive ? 0 : Number.POSITIVE_INFINITY;
@@ -243,10 +245,25 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nPress Space for Lobby', {
+        this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nRestarting in 10', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
         }).setOrigin(0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0);
+
+        this.quitButton = this.add.text(this.centreX, this.centreY + 118, 'Quit', {
+            fontFamily: 'Arial Black', fontSize: 34, color: '#ffdddd',
+            stroke: '#000000', strokeThickness: 7, align: 'center',
+        }).setOrigin(0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        this.quitButton.on('pointerover', () => this.quitButton.setColor('#ffffff'));
+        this.quitButton.on('pointerout', () => this.quitButton.setColor('#ffdddd'));
+        this.quitButton.on('pointerdown', async () => {
+            this.gameOverText.setVisible(false);
+            this.quitButton.setVisible(false);
+            this.clearAllSprites();
+            await RoomClient.disconnect();
+            this.scene.start('Lobby');
+        });
 
         const roomCode = RoomClient.room ? RoomClient.room.id : '';
         this.roomCodeText = this.add.text(this.centreX, 20, `Room: ${roomCode}`, {
@@ -450,6 +467,10 @@ export class Game extends Phaser.Scene {
                 worldX: event?.x,
                 worldY: event?.y,
             });
+        });
+
+        room.onMessage('levelReset', () => {
+            this.suppressLevelResetEffects();
         });
 
         const addPlayer = (player, sessionId) => {
@@ -664,7 +685,7 @@ export class Game extends Phaser.Scene {
             sprites.bottom.destroy();
             sprites.top.destroy();
             this.treeSprites.delete(id);
-            if (this.shouldPlayWorldEventAudio()) {
+            if (!this.isSuppressingResetEffects() && this.shouldPlayWorldEventAudio()) {
                 this.playSfx(ASSETS.audio.treeFall.key, TREE_FALL_SOUND_VOLUME, {
                     serverEvent: true,
                     spatial: true,
@@ -841,7 +862,7 @@ export class Game extends Phaser.Scene {
                 healthBar.fill.destroy();
             }
             if (s) {
-                if (!animationState?.dead) this.addExplosion(s.x, s.y);
+                if (!animationState?.dead && !this.isSuppressingResetEffects()) this.addExplosion(s.x, s.y);
                 s.destroy();
             }
             if (animationState?.damageFlashEvent) {
@@ -906,6 +927,12 @@ export class Game extends Phaser.Scene {
             this.timerText.setText(this.formatElapsedTime(elapsedSeconds || 0));
         });
 
+        state.listen('gameOverCountdown', (countdown) => {
+            if (state.gameOver) {
+                this.updateGameOverCountdown(countdown);
+            }
+        });
+
         state.listen('gameStarted', (started) => {
             if (started) {
                 this.gameStarted = true;
@@ -917,14 +944,15 @@ export class Game extends Phaser.Scene {
             if (over) {
                 this.gameStarted = false;
                 this.disableBuildMode();
+                this.stopHeldAttack();
+                this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
-
-                this.keys.fire.once('down', async () => {
-                    this.gameOverText.setVisible(false);
-                    this.clearAllSprites();
-                    await RoomClient.disconnect();
-                    this.scene.start('Lobby');
-                });
+                this.quitButton.setVisible(true);
+            } else {
+                this.gameStarted = true;
+                this.suppressLevelResetEffects();
+                this.gameOverText.setVisible(false);
+                this.quitButton.setVisible(false);
             }
         });
 
@@ -954,6 +982,11 @@ export class Game extends Phaser.Scene {
         const minutes = Math.floor(safeSeconds / 60);
         const seconds = safeSeconds % 60;
         return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    updateGameOverCountdown(countdown) {
+        const safeCountdown = Math.max(0, Math.ceil(countdown || 0));
+        this.gameOverText.setText(`Game Over\nRestarting in ${safeCountdown}`);
     }
 
     // Flat world background
@@ -1435,7 +1468,15 @@ export class Game extends Phaser.Scene {
     }
 
     shouldPlayServerEventAudio() {
-        return performance.now() >= this.suppressServerEventAudioUntil;
+        return performance.now() >= this.suppressServerEventAudioUntil && !this.isSuppressingResetEffects();
+    }
+
+    suppressLevelResetEffects() {
+        this.suppressResetEffectsUntil = performance.now() + LEVEL_RESET_EFFECT_SUPPRESS_MS;
+    }
+
+    isSuppressingResetEffects() {
+        return performance.now() < this.suppressResetEffectsUntil;
     }
 
     shouldPlayWorldEventAudio() {

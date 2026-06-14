@@ -83,6 +83,7 @@ const ENEMY_PATH_BLOCKED_DELAY_MS = 150;
 const ENEMY_PATH_REFRESH_MS = 500;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_MAX_VISITED_CELLS = 1800;
+const GAME_OVER_RESTART_SECONDS = 10;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -261,6 +262,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverTreeHealth    = new Map<string, number>();
     private elapsedMs           = 0;
     private enemyWaveElapsedMs  = 0;
+    private gameOverRestartMs   = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -348,12 +350,6 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     onJoin(client: Client) {
-        // When the previous game ended, reset everything so the rejoining
-        // player (or a fresh page-load) starts a clean new game.
-        if (this.state.gameOver) {
-            this.resetGame();
-        }
-
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
         ps.x = WORLD_WIDTH / 2;
@@ -386,14 +382,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.elapsedMs = 0;
             this.enemyWaveElapsedMs = 0;
             this.state.elapsedSeconds = 0;
+            this.state.gameOverCountdown = 0;
             this.spawnInitialEnemies();
         }
     }
 
     // ─── Reset game state (called when a player rejoins after game over) ──────
-    private resetGame() {
-        this.state.players.clear();
-        this.serverPlayers.clear();
+    private resetLevel() {
+        this.broadcast("levelReset", {});
         this.state.enemies.clear();
         this.serverEnemies.clear();
         this.state.playerBullets.clear();
@@ -404,12 +400,42 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.woodBlocks.clear();
         this.generateTrees();
 
+        this.state.players.forEach((player, sid) => {
+            player.x = WORLD_WIDTH / 2;
+            player.y = WORLD_HEIGHT / 2;
+            player.health = PLAYER_MAX_HEALTH;
+            player.kills = 0;
+            player.level = 1;
+            player.experience = 0;
+            player.experienceToNext = FIRST_LEVEL_UP_KILLS;
+            player.isDead = false;
+            player.reviveProgress = 0;
+            player.facingDirection = "N";
+            player.attackDirection = "N";
+            player.attackSeq = 0;
+
+            const sp = this.serverPlayers.get(sid);
+            if (!sp) return;
+            sp.vx = 0;
+            sp.vy = 0;
+            sp.fireCounter = 0;
+            sp.attackLockMs = 0;
+            sp.attackLockX = player.x;
+            sp.attackLockY = player.y;
+            sp.attackCooldownMs = 0;
+            sp.revivingTargetId = null;
+            sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
+            sp.alive = true;
+        });
+
         this.state.teamScore = 0;
         this.elapsedMs = 0;
         this.enemyWaveElapsedMs = 0;
         this.state.elapsedSeconds = 0;
-        this.state.gameOver  = false;
-        if (this.state.gameStarted) this.spawnInitialEnemies();
+        this.state.gameOver = false;
+        this.state.gameOverCountdown = 0;
+        this.gameOverRestartMs = 0;
+        if (this.state.gameStarted && this.state.players.size > 0) this.spawnInitialEnemies();
     }
 
     onLeave(client: Client) {
@@ -896,7 +922,11 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     // ─── Main tick ────────────────────────────────────────────────────────────
     private tick(dt: number) {
-        if (!this.state.gameStarted || this.state.gameOver) return;
+        if (this.state.gameOver) {
+            this.tickGameOverRestart(dt);
+            return;
+        }
+        if (!this.state.gameStarted) return;
         const dtSec = dt / 1000;
 
         this.tickElapsedTime(dt);
@@ -908,6 +938,16 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
 
+    }
+
+    private tickGameOverRestart(dtMs: number) {
+        if (this.gameOverRestartMs <= 0) return;
+
+        this.gameOverRestartMs = Math.max(0, this.gameOverRestartMs - dtMs);
+        this.state.gameOverCountdown = Math.ceil(this.gameOverRestartMs / 1000);
+        if (this.gameOverRestartMs === 0) {
+            this.resetLevel();
+        }
     }
 
     private tickElapsedTime(dtMs: number) {
@@ -1665,8 +1705,20 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private checkAllDead() {
         if (this.state.gameOver) return;
-        if (this.state.players.size === 0) { this.state.gameOver = true; return; }
+        if (this.state.players.size === 0) return;
         const anyAlive = [...this.serverPlayers.values()].some(sp => sp.alive);
-        if (!anyAlive) this.state.gameOver = true;
+        if (!anyAlive) this.startGameOverCountdown();
+    }
+
+    private startGameOverCountdown() {
+        this.state.gameOver = true;
+        this.gameOverRestartMs = GAME_OVER_RESTART_SECONDS * 1000;
+        this.state.gameOverCountdown = GAME_OVER_RESTART_SECONDS;
+        this.serverPlayers.forEach((sp) => {
+            sp.vx = 0;
+            sp.vy = 0;
+            sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
+            sp.revivingTargetId = null;
+        });
     }
 }
