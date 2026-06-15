@@ -22,6 +22,27 @@ const ENEMY_DISPLAY_SIZE = 128;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const WOOD_UI_ICON_SIZE = 64;
+const PLAYER_HITBOX_HW = 56;
+const PLAYER_HITBOX_HH = 56;
+const PLAYER_FOOT_RADIUS = 5;
+const PLAYER_FOOT_Y_OFFSET = 36;
+const ENEMY_HITBOX_HW = 28;
+const ENEMY_HITBOX_HH = 28;
+const ENEMY_FOOT_RADIUS = 7;
+const ENEMY_FOOT_Y_OFFSET = 34;
+const TREE_TRUNK_Y_OFFSET = -18;
+const TREE_TRUNK_HW = 5;
+const TREE_TRUNK_HH = 18;
+const PLAYER_ATTACK_HIT_RADIUS = 44;
+const PLAYER_ATTACK_HIT_START_OFFSET = 10;
+const PLAYER_ATTACK_HIT_END_OFFSET = 40;
+const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
+const ENEMY_ATTACK_RANGE = 26;
+const ENEMY_ATTACK_HIT_OFFSET = 28;
+const ENEMY_ATTACK_HIT_HW = 42;
+const ENEMY_ATTACK_HIT_HH = 36;
+const HITBOX_DEPTH = 950;
+const HITBOX_BUTTON_SIZE = 34;
 const OFFSCREEN_PLAYER_INDICATOR_RADIUS = 7;
 const OFFSCREEN_PLAYER_INDICATOR_COLOR = 0x89cff0;
 const OFFSCREEN_DEAD_PLAYER_INDICATOR_COLOR = 0xff9d2e;
@@ -130,6 +151,7 @@ export class Game extends Phaser.Scene {
         this.updatePlayerLevelLabels();
         this.updateOffscreenPlayerIndicators();
         this.updateEnemyHealthBars();
+        this.updateHitboxOverlay();
     }
 
     // ─── Variables ────────────────────────────────────────────────────────────
@@ -179,7 +201,10 @@ export class Game extends Phaser.Scene {
         this.attackHeldPointer = null;
         this.nextHeldAttackAt = 0;
         this.lastEscapeToggleAt = 0;
+        this.isQuittingToLobby = false;
         this.cameraZoom = CAMERA_MIN_ZOOM;
+        this.showHitboxes = false;
+        this.hitboxGraphics = null;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
@@ -269,12 +294,8 @@ export class Game extends Phaser.Scene {
             .setInteractive({ useHandCursor: true });
         this.quitButton.on('pointerover', () => this.quitButton.setColor('#ffffff'));
         this.quitButton.on('pointerout', () => this.quitButton.setColor('#ffdddd'));
-        this.quitButton.on('pointerdown', async () => {
-            this.gameOverText.setVisible(false);
-            this.quitButton.setVisible(false);
-            this.clearAllSprites();
-            await RoomClient.disconnect();
-            this.scene.start('Lobby');
+        this.quitButton.on('pointerdown', () => {
+            this.quitToLobby();
         });
 
         const roomCode = RoomClient.room ? RoomClient.room.id : '';
@@ -282,6 +303,22 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.hitboxToggleButton = this.add.text(
+            this.scale.width - HITBOX_BUTTON_SIZE * 0.5 - 12,
+            this.scale.height - HITBOX_BUTTON_SIZE * 0.5 - 12,
+            'X',
+            {
+                fontFamily: 'Arial Black', fontSize: 22, color: '#ff2222',
+                stroke: '#000000', strokeThickness: 5, align: 'center',
+                fixedWidth: HITBOX_BUTTON_SIZE,
+                fixedHeight: HITBOX_BUTTON_SIZE,
+            },
+        ).setOrigin(0.5)
+            .setDepth(UI_DEPTH + 10)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
         this.initExperienceBar();
         this.initVolumeSlider();
@@ -392,7 +429,8 @@ export class Game extends Phaser.Scene {
             this.handleEscapeQuit(event);
         });
 
-        this.input.on('pointerdown', (pointer) => {
+        this.input.on('pointerdown', (pointer, gameObjects = []) => {
+            if (gameObjects.includes(this.hitboxToggleButton) || gameObjects.includes(this.quitButton)) return;
             if (this.isBuildModeActive) {
                 this.handleBuildModePointerDown(pointer);
                 return;
@@ -1020,6 +1058,27 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setText(`Game Over\nRestarting in ${safeCountdown}`);
     }
 
+    async quitToLobby() {
+        if (this.isQuittingToLobby) return;
+        this.isQuittingToLobby = true;
+
+        this.gameOverText.setVisible(false);
+        this.quitButton.setVisible(false);
+        this.clearAllSprites();
+
+        try {
+            await Promise.race([
+                RoomClient.disconnect(),
+                new Promise(resolve => window.setTimeout(resolve, 750)),
+            ]);
+        } catch (error) {
+            console.warn('[Game] quit disconnect failed:', error);
+        } finally {
+            this.isQuittingToLobby = false;
+            this.scene.start('Lobby');
+        }
+    }
+
     handleEscapeQuit(event) {
         event?.preventDefault();
         const now = performance.now();
@@ -1249,6 +1308,118 @@ export class Game extends Phaser.Scene {
             CAMERA_MAX_ZOOM,
         );
         this.localCamera.setZoom(this.cameraZoom);
+    }
+
+    toggleHitboxes() {
+        this.showHitboxes = !this.showHitboxes;
+        if (this.hitboxToggleButton) {
+            this.hitboxToggleButton.setColor(this.showHitboxes ? '#ff7777' : '#ff2222');
+        }
+        if (!this.showHitboxes && this.hitboxGraphics) {
+            this.hitboxGraphics.clear();
+        }
+    }
+
+    updateHitboxOverlay() {
+        if (!this.showHitboxes) return;
+        if (!this.hitboxGraphics) {
+            this.hitboxGraphics = this.add.graphics().setDepth(HITBOX_DEPTH);
+        }
+
+        const g = this.hitboxGraphics;
+        g.clear();
+
+        this.drawPlayerHitboxes(g);
+        this.drawEnemyHitboxes(g);
+        this.drawTreeHitboxes(g);
+    }
+
+    drawPlayerHitboxes(graphics) {
+        this.playerSprites.forEach((sprite, sessionId) => {
+            const animationState = this.playerAnimationState.get(sessionId);
+            if (!sprite.visible) return;
+
+            graphics.lineStyle(2, 0x44aaff, 0.95);
+            graphics.strokeRect(sprite.x - PLAYER_HITBOX_HW, sprite.y - PLAYER_HITBOX_HH, PLAYER_HITBOX_HW * 2, PLAYER_HITBOX_HH * 2);
+            graphics.lineStyle(2, 0xffffff, 0.95);
+            graphics.strokeCircle(sprite.x, sprite.y + PLAYER_FOOT_Y_OFFSET, PLAYER_FOOT_RADIUS);
+
+            if (animationState?.attacking) {
+                this.drawPlayerAttackHitbox(graphics, sprite.x, sprite.y, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+            }
+        });
+    }
+
+    drawEnemyHitboxes(graphics) {
+        this.enemySprites.forEach((sprite, enemyId) => {
+            const animationState = this.enemyAnimationState.get(enemyId);
+            if (!sprite.visible) return;
+
+            graphics.lineStyle(2, 0xff4444, 0.95);
+            graphics.strokeRect(sprite.x - ENEMY_HITBOX_HW, sprite.y - ENEMY_HITBOX_HH, ENEMY_HITBOX_HW * 2, ENEMY_HITBOX_HH * 2);
+            graphics.lineStyle(2, 0xffdd66, 0.95);
+            graphics.strokeCircle(sprite.x, sprite.y + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS);
+            graphics.lineStyle(1, 0xff8844, 0.65);
+            graphics.strokeCircle(sprite.x, sprite.y, ENEMY_ATTACK_RANGE);
+
+            if (animationState?.attacking) {
+                this.drawEnemyAttackHitbox(graphics, sprite.x, sprite.y, animationState.direction || 'S');
+            }
+        });
+    }
+
+    drawTreeHitboxes(graphics) {
+        this.treeSprites.forEach(({ tree }) => {
+            graphics.lineStyle(2, 0x7dff62, 0.95);
+            graphics.strokeRect(
+                tree.x - TREE_TRUNK_HW,
+                tree.y + TREE_TRUNK_Y_OFFSET - TREE_TRUNK_HH,
+                TREE_TRUNK_HW * 2,
+                TREE_TRUNK_HH * 2,
+            );
+        });
+    }
+
+    drawPlayerAttackHitbox(graphics, x, y, direction) {
+        const vector = this.getDirectionVector(direction || DEFAULT_PLAYER_DIRECTION);
+        const originY = y + PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET;
+        const startX = x + vector.x * PLAYER_ATTACK_HIT_START_OFFSET;
+        const startY = originY + vector.y * PLAYER_ATTACK_HIT_START_OFFSET;
+        const endX = x + vector.x * PLAYER_ATTACK_HIT_END_OFFSET;
+        const endY = originY + vector.y * PLAYER_ATTACK_HIT_END_OFFSET;
+
+        graphics.lineStyle(2, 0xff66ff, 0.9);
+        graphics.strokeCircle(startX, startY, PLAYER_ATTACK_HIT_RADIUS);
+        graphics.strokeCircle(endX, endY, PLAYER_ATTACK_HIT_RADIUS);
+        graphics.lineBetween(startX, startY, endX, endY);
+    }
+
+    drawEnemyAttackHitbox(graphics, x, y, direction) {
+        const vector = this.getDirectionVector(direction || 'S');
+        const hitX = x + vector.x * ENEMY_ATTACK_HIT_OFFSET;
+        const hitY = y + vector.y * ENEMY_ATTACK_HIT_OFFSET;
+
+        graphics.lineStyle(2, 0xffaa00, 0.95);
+        graphics.strokeRect(
+            hitX - ENEMY_ATTACK_HIT_HW,
+            hitY - ENEMY_ATTACK_HIT_HH,
+            ENEMY_ATTACK_HIT_HW * 2,
+            ENEMY_ATTACK_HIT_HH * 2,
+        );
+    }
+
+    getDirectionVector(direction) {
+        switch (direction) {
+            case 'E': return { x: 1, y: 0 };
+            case 'SE': return { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+            case 'S': return { x: 0, y: 1 };
+            case 'SW': return { x: -Math.SQRT1_2, y: Math.SQRT1_2 };
+            case 'W': return { x: -1, y: 0 };
+            case 'NW': return { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+            case 'N': return { x: 0, y: -1 };
+            case 'NE': return { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
+            default: return { x: 0, y: 1 };
+        }
     }
 
     createAnimation(animation) {
@@ -1931,6 +2102,14 @@ export class Game extends Phaser.Scene {
         if (this.buildPreview) {
             this.buildPreview.destroy();
             this.buildPreview = null;
+        }
+        if (this.hitboxGraphics) {
+            this.hitboxGraphics.destroy();
+            this.hitboxGraphics = null;
+        }
+        this.showHitboxes = false;
+        if (this.hitboxToggleButton) {
+            this.hitboxToggleButton.setColor('#ff2222');
         }
         this.isBuildModeActive = false;
         this.resetBuildDragState();
