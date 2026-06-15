@@ -163,6 +163,10 @@ export class Game extends Phaser.Scene {
         this.localPlayerSprite = null;
         this.localPlayerState = null;
         this.localCamera = this.cameras.main;
+        this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+        this.uiCamera.setScroll(0, 0);
+        this.uiCamera.setZoom(1);
+        this.fixedUiObjects = new Set();
         this.centreX = this.scale.width  * 0.5;
         this.centreY = this.scale.height * 0.5;
 
@@ -251,6 +255,21 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    registerFixedUi(...objects) {
+        objects.flat().forEach((object) => {
+            if (!object) return;
+            this.fixedUiObjects.add(object);
+            this.localCamera?.ignore(object);
+        });
+    }
+
+    registerWorldObject(...objects) {
+        objects.flat().forEach((object) => {
+            if (!object) return;
+            this.uiCamera?.ignore(object);
+        });
+    }
+
     // ─── UI ───────────────────────────────────────────────────────────────────
     initGameUi() {
         this.tutorialText = this.add.text(this.centreX, this.centreY, 'Waiting for server…', {
@@ -324,6 +343,18 @@ export class Game extends Phaser.Scene {
 
         this.initExperienceBar();
         this.initVolumeSlider();
+        this.registerFixedUi(
+            this.tutorialText,
+            this.timerText,
+            this.woodIcon,
+            this.woodText,
+            this.killsText,
+            this.playerCountText,
+            this.gameOverText,
+            this.quitButton,
+            this.roomCodeText,
+            this.hitboxToggleButton,
+        );
     }
 
     initExperienceBar() {
@@ -339,6 +370,7 @@ export class Game extends Phaser.Scene {
 
         this.experienceBarLayout = { x, y, width: EXPERIENCE_BAR_WIDTH, height: EXPERIENCE_BAR_HEIGHT };
         this.updateExperienceBar(0, 5, 1);
+        this.registerFixedUi(this.experienceBarBackground, this.experienceBarFill, this.experienceBarText);
     }
 
     initVolumeSlider() {
@@ -386,6 +418,12 @@ export class Game extends Phaser.Scene {
         });
 
         this.updateVolumeSliderUi();
+        this.registerFixedUi(
+            this.volumeIcon,
+            this.volumeSliderTrack,
+            this.volumeSliderFill,
+            this.volumeSliderKnob,
+        );
     }
 
     // ─── Animations ───────────────────────────────────────────────────────────
@@ -540,6 +578,7 @@ export class Game extends Phaser.Scene {
             const sprite  = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.playerIdle.key, 0)
                 .setDepth(100)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
+            this.registerWorldObject(sprite);
 
             if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
 
@@ -549,23 +588,31 @@ export class Game extends Phaser.Scene {
                     .setDepth(UI_DEPTH + 5)
                     .setScrollFactor(0)
                     .setVisible(false);
+                this.registerFixedUi(indicator);
                 this.offscreenPlayerIndicators.set(playerSessionId, indicator);
             }
+            const playerHealthBackground = this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH);
+            const playerHealthFill = this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH + 1);
             this.playerHealthBars.set(playerSessionId, {
-                background: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH),
-                fill: this.add.graphics().setDepth(PLAYER_HEALTH_BAR_DEPTH + 1),
+                background: playerHealthBackground,
+                fill: playerHealthFill,
                 player,
             });
+            this.registerWorldObject(playerHealthBackground, playerHealthFill);
+            const playerReviveBackground = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH);
+            const playerReviveFill = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1);
             this.playerReviveBars.set(playerSessionId, {
-                background: this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH),
-                fill: this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1),
+                background: playerReviveBackground,
+                fill: playerReviveFill,
                 player,
             });
+            this.registerWorldObject(playerReviveBackground, playerReviveFill);
             const levelLabel = this.add.text(player.x, player.y + PLAYER_LEVEL_LABEL_Y_OFFSET, `${player.level || 1}`, {
                 fontFamily: 'Arial Black', fontSize: 11, color: '#ffffff',
                 stroke: '#000000', strokeThickness: 4, align: 'center',
                 fixedWidth: PLAYER_HEALTH_BAR_WIDTH,
             }).setOrigin(0, 0.5).setDepth(PLAYER_LEVEL_LABEL_DEPTH);
+            this.registerWorldObject(levelLabel);
             this.playerLevelLabels.set(playerSessionId, { label: levelLabel, player });
             this.playerAnimationState.set(playerSessionId, {
                 direction: DEFAULT_PLAYER_DIRECTION,
@@ -743,6 +790,7 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5, 1)
                 .setDisplaySize(TREE_HALF_SIZE, TREE_HALF_SIZE)
                 .setDepth(110);
+            this.registerWorldObject(bottom, top);
 
             this.treeSprites.set(treeId, { bottom, top, tree });
         };
@@ -775,6 +823,7 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5, 0.5)
                 .setDisplaySize(LOG_DISPLAY_SIZE, LOG_DISPLAY_SIZE)
                 .setDepth(85));
+            this.registerWorldObject(sprites);
 
             this.logSprites.set(logId, { sprites, log });
 
@@ -809,6 +858,7 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5)
                 .setStrokeStyle(2, WOOD_BLOCK_STROKE_COLOR, 0.85)
                 .setDepth(81);
+            this.registerWorldObject(fill, outline);
 
             this.woodBlockSprites.set(blockId, { fill, outline, block });
 
@@ -840,12 +890,16 @@ export class Game extends Phaser.Scene {
             const sprite = this.add.sprite(enemy.x, enemy.y + ENEMY_VISUAL_Y_OFFSET, runTexture, 0)
                 .setDepth(100)
                 .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
+            this.registerWorldObject(sprite);
             this.enemySprites.set(enemyId, sprite);
+            const enemyHealthBackground = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH);
+            const enemyHealthFill = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH + 1);
             this.enemyHealthBars.set(enemyId, {
-                background: this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH),
-                fill: this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH + 1),
+                background: enemyHealthBackground,
+                fill: enemyHealthFill,
                 enemy,
             });
+            this.registerWorldObject(enemyHealthBackground, enemyHealthFill);
             this.enemyAnimationState.set(enemyId, {
                 animationKey: enemyAnimationKey,
                 direction: enemy.facingDirection || 'S',
@@ -958,6 +1012,7 @@ export class Game extends Phaser.Scene {
 
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, bullet.power - 1)
                 .setDepth(10);
+            this.registerWorldObject(sprite);
             this.playerBulletSprites.set(bulletId, sprite);
 
             bullet.onChange(() => {
@@ -982,6 +1037,7 @@ export class Game extends Phaser.Scene {
 
             const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, EB_TILE_OFFSET + bullet.power)
                 .setDepth(10).setFlipY(true);
+            this.registerWorldObject(sprite);
             this.enemyBulletSprites.set(bulletId, sprite);
 
             bullet.onChange(() => {
@@ -1111,6 +1167,7 @@ export class Game extends Phaser.Scene {
         this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, WORLD_BACKGROUND_COLOR)
             .setOrigin(0)
             .setDepth(-100);
+        this.registerWorldObject(this.worldBackground);
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
         this.createBuildGrid();
     }
@@ -1121,6 +1178,7 @@ export class Game extends Phaser.Scene {
         const grid = this.add.graphics()
             .setDepth(-90)
             .setVisible(this.isBuildModeActive);
+        this.registerWorldObject(grid);
 
         grid.lineStyle(1, BUILD_GRID_LINE_COLOR, BUILD_GRID_LINE_ALPHA);
 
@@ -1143,6 +1201,7 @@ export class Game extends Phaser.Scene {
             .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
             .setDepth(82)
             .setVisible(false);
+        this.registerWorldObject(this.buildPreview);
     }
 
     drawDottedLine(graphics, x1, y1, x2, y2) {
@@ -1335,6 +1394,7 @@ export class Game extends Phaser.Scene {
         if (!this.showHitboxes) return;
         if (!this.hitboxGraphics) {
             this.hitboxGraphics = this.add.graphics().setDepth(HITBOX_DEPTH);
+            this.registerWorldObject(this.hitboxGraphics);
         }
 
         const g = this.hitboxGraphics;
@@ -2095,7 +2155,8 @@ export class Game extends Phaser.Scene {
     }
 
     addExplosion(x, y) {
-        new Explosion(this, x, y);
+        const explosion = new Explosion(this, x, y);
+        this.registerWorldObject(explosion);
     }
 
     clearAllSprites() {
