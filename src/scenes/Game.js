@@ -18,7 +18,9 @@ import RoomClient from '../network/RoomClient.js';
 const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
+const PLAYER_VISUAL_Y_OFFSET = 6;
 const ENEMY_DISPLAY_SIZE = 128;
+const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const WOOD_UI_ICON_SIZE = 64;
@@ -535,7 +537,7 @@ export class Game extends Phaser.Scene {
             if (!playerSessionId || this.playerSprites.has(playerSessionId)) return;
 
             const isLocal = this.isLocalSession(playerSessionId);
-            const sprite  = this.add.sprite(player.x, player.y, ASSETS.spritesheet.playerIdle.key, 0)
+            const sprite  = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.playerIdle.key, 0)
                 .setDepth(100)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
 
@@ -573,7 +575,9 @@ export class Game extends Phaser.Scene {
                 deathPlayed: false,
                 attackVisualLockUntil: 0,
                 attackVisualLockX: player.x,
-                attackVisualLockY: player.y,
+                attackVisualLockY: player.y + PLAYER_VISUAL_Y_OFFSET,
+                attackTargetX: null,
+                attackTargetY: null,
                 lastAttackSeq: player.attackSeq || 0,
                 lastMovedAt: 0,
                 x: player.x,
@@ -599,7 +603,7 @@ export class Game extends Phaser.Scene {
                 } else if (serverPositionChanged) {
                     // Lerp toward server position for smooth rendering
                     s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
-                    s.y = Phaser.Math.Linear(s.y, player.y, 0.3);
+                    s.y = Phaser.Math.Linear(s.y, player.y + PLAYER_VISUAL_Y_OFFSET, 0.3);
                 }
 
                 if (animationState) {
@@ -833,7 +837,7 @@ export class Game extends Phaser.Scene {
             const enemyAnimationKey = this.getEnemyAnimationKey(enemy);
             const runTexture = ASSETS.spritesheet[`${enemyAnimationKey}Run`]?.key || ASSETS.spritesheet.enemy1Run.key;
 
-            const sprite = this.add.sprite(enemy.x, enemy.y, runTexture, 0)
+            const sprite = this.add.sprite(enemy.x, enemy.y + ENEMY_VISUAL_Y_OFFSET, runTexture, 0)
                 .setDepth(100)
                 .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
             this.enemySprites.set(enemyId, sprite);
@@ -854,6 +858,8 @@ export class Game extends Phaser.Scene {
                 lastAttackSeq: enemy.attackSeq || 0,
                 lastDamageSeq: enemy.damageSeq || 0,
                 lastDeathSeq: enemy.deathSeq || 0,
+                x: enemy.x,
+                y: enemy.y,
             });
             this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
 
@@ -862,7 +868,12 @@ export class Game extends Phaser.Scene {
                 if (!s) return;
 
                 s.x = Phaser.Math.Linear(s.x, enemy.x, 0.3);
-                s.y = Phaser.Math.Linear(s.y, enemy.y, 0.3);
+                s.y = Phaser.Math.Linear(s.y, enemy.y + ENEMY_VISUAL_Y_OFFSET, 0.3);
+                const animationState = this.enemyAnimationState.get(enemyId);
+                if (animationState) {
+                    animationState.x = enemy.x;
+                    animationState.y = enemy.y;
+                }
                 this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
             });
 
@@ -1338,14 +1349,16 @@ export class Game extends Phaser.Scene {
         this.playerSprites.forEach((sprite, sessionId) => {
             const animationState = this.playerAnimationState.get(sessionId);
             if (!sprite.visible) return;
+            const x = sprite.x;
+            const y = sprite.y - PLAYER_VISUAL_Y_OFFSET;
 
             graphics.lineStyle(2, 0x44aaff, 0.95);
-            graphics.strokeRect(sprite.x - PLAYER_HITBOX_HW, sprite.y - PLAYER_HITBOX_HH, PLAYER_HITBOX_HW * 2, PLAYER_HITBOX_HH * 2);
+            graphics.strokeRect(x - PLAYER_HITBOX_HW, y - PLAYER_HITBOX_HH, PLAYER_HITBOX_HW * 2, PLAYER_HITBOX_HH * 2);
             graphics.lineStyle(2, 0xffffff, 0.95);
-            graphics.strokeCircle(sprite.x, sprite.y + PLAYER_FOOT_Y_OFFSET, PLAYER_FOOT_RADIUS);
+            graphics.strokeCircle(x, y + PLAYER_FOOT_Y_OFFSET, PLAYER_FOOT_RADIUS);
 
             if (animationState?.attacking) {
-                this.drawPlayerAttackHitbox(graphics, sprite.x, sprite.y, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+                this.drawPlayerAttackHitbox(graphics, x, y, animationState);
             }
         });
     }
@@ -1354,16 +1367,18 @@ export class Game extends Phaser.Scene {
         this.enemySprites.forEach((sprite, enemyId) => {
             const animationState = this.enemyAnimationState.get(enemyId);
             if (!sprite.visible) return;
+            const x = sprite.x;
+            const y = sprite.y - ENEMY_VISUAL_Y_OFFSET;
 
             graphics.lineStyle(2, 0xff4444, 0.95);
-            graphics.strokeRect(sprite.x - ENEMY_HITBOX_HW, sprite.y - ENEMY_HITBOX_HH, ENEMY_HITBOX_HW * 2, ENEMY_HITBOX_HH * 2);
+            graphics.strokeRect(x - ENEMY_HITBOX_HW, y - ENEMY_HITBOX_HH, ENEMY_HITBOX_HW * 2, ENEMY_HITBOX_HH * 2);
             graphics.lineStyle(2, 0xffdd66, 0.95);
-            graphics.strokeCircle(sprite.x, sprite.y + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS);
+            graphics.strokeCircle(x, y + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS);
             graphics.lineStyle(1, 0xff8844, 0.65);
-            graphics.strokeCircle(sprite.x, sprite.y, ENEMY_ATTACK_RANGE);
+            graphics.strokeCircle(x, y, ENEMY_ATTACK_RANGE);
 
             if (animationState?.attacking) {
-                this.drawEnemyAttackHitbox(graphics, sprite.x, sprite.y, animationState.direction || 'S');
+                this.drawEnemyAttackHitbox(graphics, x, y, animationState.direction || 'S');
             }
         });
     }
@@ -1380,8 +1395,19 @@ export class Game extends Phaser.Scene {
         });
     }
 
-    drawPlayerAttackHitbox(graphics, x, y, direction) {
-        const vector = this.getDirectionVector(direction || DEFAULT_PLAYER_DIRECTION);
+    drawPlayerAttackHitbox(graphics, x, y, animationState) {
+        const targetX = animationState?.attackTargetX;
+        const targetY = animationState?.attackTargetY;
+        let vector = null;
+        if (Number.isFinite(targetX) && Number.isFinite(targetY)) {
+            const dx = targetX - x;
+            const dy = targetY - (y + PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET);
+            const distance = Math.hypot(dx, dy);
+            if (distance > 0) vector = { x: dx / distance, y: dy / distance };
+        }
+        if (!vector) {
+            vector = this.getDirectionVector(animationState?.direction || DEFAULT_PLAYER_DIRECTION);
+        }
         const originY = y + PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET;
         const startX = x + vector.x * PLAYER_ATTACK_HIT_START_OFFSET;
         const startY = originY + vector.y * PLAYER_ATTACK_HIT_START_OFFSET;
@@ -1508,10 +1534,13 @@ export class Game extends Phaser.Scene {
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.attacking || animationState.dead) return false;
 
         const worldPoint = this.getPointerWorldPoint(pointer);
-        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, sprite, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
+        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
         animationState.attackVisualLockUntil = this.time.now + 250;
         animationState.attackVisualLockX = sprite.x;
         animationState.attackVisualLockY = sprite.y;
+        animationState.attackTargetX = worldPoint?.x ?? null;
+        animationState.attackTargetY = worldPoint?.y ?? null;
         RoomClient.sendAttack(direction, worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
         return true;
@@ -1522,9 +1551,9 @@ export class Game extends Phaser.Scene {
         return (this.localCamera || this.cameras.main).getWorldPoint(pointer.x, pointer.y);
     }
 
-    getAttackDirectionFromWorldPoint(worldPoint, sprite, fallbackDirection) {
+    getAttackDirectionFromWorldPoint(worldPoint, origin, fallbackDirection) {
         if (!worldPoint) return fallbackDirection;
-        return this.getDirectionFromVector(worldPoint.x - sprite.x, worldPoint.y - sprite.y) || fallbackDirection;
+        return this.getDirectionFromVector(worldPoint.x - origin.x, worldPoint.y - origin.y) || fallbackDirection;
     }
 
     playPlayerAttackAnimation(sessionId, direction, { playAudio = true } = {}) {
@@ -1550,6 +1579,8 @@ export class Game extends Phaser.Scene {
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
             animationState.attacking = false;
+            animationState.attackTargetX = null;
+            animationState.attackTargetY = null;
             if (this.isLocalSession(sessionId)) {
                 this.updateLocalPlayerAnimation();
             } else {
@@ -1588,6 +1619,8 @@ export class Game extends Phaser.Scene {
         animationState.attacking = false;
         animationState.moving = false;
         animationState.attackVisualLockUntil = 0;
+        animationState.attackTargetX = null;
+        animationState.attackTargetY = null;
         sprite.setVisible(true);
         sprite.anims.stop();
         this.setPlayerAnimation(sessionId, false, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
@@ -1930,8 +1963,10 @@ export class Game extends Phaser.Scene {
                 return;
             }
 
-            const screenX = (sprite.x - camera.scrollX) * camera.zoom;
-            const screenY = (sprite.y - camera.scrollY) * camera.zoom;
+            const worldX = animationState?.x ?? sprite.x;
+            const worldY = animationState?.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET);
+            const screenX = (worldX - camera.scrollX) * camera.zoom;
+            const screenY = (worldY - camera.scrollY) * camera.zoom;
             const isOffscreen = screenX < 0 || screenX > width || screenY < 0 || screenY > height;
             if (!isOffscreen) {
                 indicator.setVisible(false);

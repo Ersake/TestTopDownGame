@@ -204,6 +204,10 @@ interface AttackOrigin {
     x: number;
     y: number;
 }
+interface AttackVector {
+    x: number;
+    y: number;
+}
 interface TreeHitPayload {
     treeId: string;
     attackerId: string;
@@ -1260,8 +1264,9 @@ export class ShmupRoom extends Room<GameRoomState> {
                     enemy.attackSeq++;
                     const attackOrigin = { x: enemy.x, y: enemy.y };
                     const attackDirection = enemy.facingDirection || "S";
+                    const attackVector = this.getEnemyAttackVector(attackOrigin, target.player, attackDirection);
                     setTimeout(() => {
-                        this.applyEnemyAttackImpact(id, attackOrigin, attackDirection);
+                        this.applyEnemyAttackImpact(id, attackOrigin, attackVector);
                     }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
                 }
                 return;
@@ -1588,10 +1593,9 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     // ─── Enemy bullets ────────────────────────────────────────────────────────
-    private applyEnemyAttackImpact(enemyId: string, attackOrigin: AttackOrigin, direction: string) {
+    private applyEnemyAttackImpact(enemyId: string, attackOrigin: AttackOrigin, vector: AttackVector) {
         if (this.state.gameOver || !this.state.enemies.has(enemyId)) return;
 
-        const vector = DIRECTION_VECTORS[direction] || DIRECTION_VECTORS.S;
         const hitX = attackOrigin.x + vector.x * ENEMY1_ATTACK_HIT_OFFSET;
         const hitY = attackOrigin.y + vector.y * ENEMY1_ATTACK_HIT_OFFSET;
 
@@ -1604,6 +1608,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
         });
+    }
+
+    private getEnemyAttackVector(attackOrigin: AttackOrigin, target: PlayerState, fallbackDirection: string): AttackVector {
+        const dx = target.x - attackOrigin.x;
+        const dy = target.y - attackOrigin.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > 0) return { x: dx / distance, y: dy / distance };
+        return DIRECTION_VECTORS[fallbackDirection] || DIRECTION_VECTORS.S;
     }
 
     private spawnEnemyBullet(x: number, y: number, power: number) {
