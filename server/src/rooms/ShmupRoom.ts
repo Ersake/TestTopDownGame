@@ -75,6 +75,7 @@ const ENEMY1_ATTACK_DAMAGE = 1;
 const ENEMY1_ATTACK_HIT_OFFSET = 28;
 const ENEMY1_ATTACK_HIT_HW = 42;
 const ENEMY1_ATTACK_HIT_HH = 36;
+const ENEMY_ATTACK_WOOD_BLOCK_PADDING = 2;
 const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
@@ -167,6 +168,42 @@ function capsuleOverlapsAabb(ax: number, ay: number, bx: number, by: number, rad
 
     const radiusSq = radius * radius;
     return candidates.some(([x, y]) => pointSegmentDistanceSq(x, y, ax, ay, bx, by) <= radiusSq);
+}
+
+function segmentAabbIntersectionT(ax: number, ay: number, bx: number, by: number,
+                                  rectX: number, rectY: number, rectHw: number, rectHh: number): number | null {
+    const dx = bx - ax;
+    const dy = by - ay;
+    let tMin = 0;
+    let tMax = 1;
+
+    const slabs: [number, number, number][] = [
+        [ax, dx, rectX - rectHw],
+        [ax, dx, rectX + rectHw],
+        [ay, dy, rectY - rectHh],
+        [ay, dy, rectY + rectHh],
+    ];
+
+    for (let i = 0; i < slabs.length; i += 2) {
+        const origin = slabs[i][0];
+        const delta = slabs[i][1];
+        const min = slabs[i][2];
+        const max = slabs[i + 1][2];
+
+        if (Math.abs(delta) < 0.0001) {
+            if (origin < min || origin > max) return null;
+            continue;
+        }
+
+        let near = (min - origin) / delta;
+        let far = (max - origin) / delta;
+        if (near > far) [near, far] = [far, near];
+        tMin = Math.max(tMin, near);
+        tMax = Math.min(tMax, far);
+        if (tMin > tMax) return null;
+    }
+
+    return tMin;
 }
 
 // ─── Enemy path data (identical to EnemyFlying.js) ────────────────────────────
@@ -1604,10 +1641,31 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (!sp || !sp.alive || player.isDead) return;
 
             if (!overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
+            if (this.isEnemyAttackBlockedByWood(attackOrigin, player)) return;
 
             const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
         });
+    }
+
+    private isEnemyAttackBlockedByWood(attackOrigin: AttackOrigin, player: PlayerState): boolean {
+        let nearestBlockT = Number.POSITIVE_INFINITY;
+
+        this.state.woodBlocks.forEach((block) => {
+            const t = segmentAabbIntersectionT(
+                attackOrigin.x,
+                attackOrigin.y,
+                player.x,
+                player.y,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
+                BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
+            );
+            if (t !== null && t < nearestBlockT) nearestBlockT = t;
+        });
+
+        return nearestBlockT < 1;
     }
 
     private getEnemyAttackVector(attackOrigin: AttackOrigin, target: PlayerState, fallbackDirection: string): AttackVector {
