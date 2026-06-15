@@ -56,6 +56,11 @@ const BUILD_GRID_DOT_GAP = 10;
 const WOOD_BLOCK_SIZE = 32;
 const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
 const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
+const WOOD_BLOCK_HEALTH_BAR_WIDTH = 28;
+const WOOD_BLOCK_HEALTH_BAR_HEIGHT = 4;
+const WOOD_BLOCK_HEALTH_BAR_Y_OFFSET = -24;
+const WOOD_BLOCK_HEALTH_BAR_FILL_COLOR = 0x22ff44;
+const WOOD_BLOCK_HIT_FLASH_MS = 90;
 const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
 const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
 const BUILD_DRAG_SEND_INTERVAL_MS = 35;
@@ -858,15 +863,32 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5)
                 .setStrokeStyle(2, WOOD_BLOCK_STROKE_COLOR, 0.85)
                 .setDepth(81);
-            this.registerWorldObject(fill, outline);
+            const healthBackground = this.add.graphics().setDepth(82);
+            const healthFill = this.add.graphics().setDepth(83);
+            this.registerWorldObject(fill, outline, healthBackground, healthFill);
 
-            this.woodBlockSprites.set(blockId, { fill, outline, block });
+            this.woodBlockSprites.set(blockId, {
+                fill,
+                outline,
+                healthBackground,
+                healthFill,
+                block,
+                lastHealth: block.health ?? block.maxHealth ?? 5,
+                flashEvent: null,
+            });
+            this.updateWoodBlockHealthBar(blockId);
 
             block.onChange(() => {
                 const sprites = this.woodBlockSprites.get(blockId);
                 if (!sprites) return;
                 sprites.fill.setPosition(block.x, block.y);
                 sprites.outline.setPosition(block.x, block.y);
+                const health = block.health ?? block.maxHealth ?? 5;
+                if (health < sprites.lastHealth) {
+                    this.flashWoodBlockHit(blockId);
+                }
+                sprites.lastHealth = health;
+                this.updateWoodBlockHealthBar(blockId);
             });
         };
 
@@ -878,6 +900,9 @@ export class Game extends Phaser.Scene {
             if (!sprites) return;
             sprites.fill.destroy();
             sprites.outline.destroy();
+            sprites.healthBackground.destroy();
+            sprites.healthFill.destroy();
+            sprites.flashEvent?.remove(false);
             this.woodBlockSprites.delete(id);
         });
 
@@ -2154,6 +2179,43 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    updateWoodBlockHealthBar(blockId) {
+        const sprites = this.woodBlockSprites.get(blockId);
+        if (!sprites) return;
+
+        const maxHealth = Math.max(1, sprites.block.maxHealth || 5);
+        const health = Phaser.Math.Clamp(sprites.block.health ?? maxHealth, 0, maxHealth);
+        sprites.healthBackground.clear();
+        sprites.healthFill.clear();
+        if (health >= maxHealth) return;
+
+        const x = sprites.block.x - WOOD_BLOCK_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprites.block.y + WOOD_BLOCK_HEALTH_BAR_Y_OFFSET;
+        const fillWidth = (health / maxHealth) * WOOD_BLOCK_HEALTH_BAR_WIDTH;
+
+        sprites.healthBackground.fillStyle(0x050505, 1);
+        sprites.healthBackground.fillRect(x, y, WOOD_BLOCK_HEALTH_BAR_WIDTH, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
+
+        if (fillWidth > 0) {
+            sprites.healthFill.fillStyle(WOOD_BLOCK_HEALTH_BAR_FILL_COLOR, 1);
+            sprites.healthFill.fillRect(x, y, fillWidth, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
+        }
+    }
+
+    flashWoodBlockHit(blockId) {
+        const sprites = this.woodBlockSprites.get(blockId);
+        if (!sprites) return;
+
+        sprites.flashEvent?.remove(false);
+        sprites.fill.setFillStyle(0xffffff, 1);
+        sprites.flashEvent = this.time.delayedCall(WOOD_BLOCK_HIT_FLASH_MS, () => {
+            const current = this.woodBlockSprites.get(blockId);
+            if (!current) return;
+            current.fill.setFillStyle(WOOD_BLOCK_FILL_COLOR, 1);
+            current.flashEvent = null;
+        });
+    }
+
     addExplosion(x, y) {
         const explosion = new Explosion(this, x, y);
         this.registerWorldObject(explosion);
@@ -2185,9 +2247,12 @@ export class Game extends Phaser.Scene {
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
         });
-        this.woodBlockSprites.forEach(({ fill, outline }) => {
+        this.woodBlockSprites.forEach(({ fill, outline, healthBackground, healthFill, flashEvent }) => {
+            flashEvent?.remove(false);
             fill.destroy();
             outline.destroy();
+            healthBackground.destroy();
+            healthFill.destroy();
         });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());

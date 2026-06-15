@@ -65,6 +65,8 @@ export class WoodBlockState extends Schema {
     @type("string")  id: string = "";
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
+    @type("int8")    health: number = 5;
+    @type("int8")    maxHealth: number = 5;
 }
 
 export class GameRoomState extends Schema {
