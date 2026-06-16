@@ -85,11 +85,10 @@ const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
-const ENEMY_PATH_REFRESH_MS = 500;
+const ENEMY_PATH_REFRESH_MS = 1500;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_TARGET_REFRESH_CELLS = 2;
-const ENEMY_CHASE_PROGRESS_EPSILON = 1;
-const ENEMY_PATH_MAX_VISITED_CELLS = 10000;
+const ENEMY_PATH_MAX_VISITED_CELLS = 2000;
 const GAME_OVER_RESTART_SECONDS = 10;
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
@@ -1303,7 +1302,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                     enemy.y + ENEMY_FOOT_Y_OFFSET,
                     target.player.x,
                     target.player.y + PLAYER_TREE_Y_OFFSET,
-                ) || (this.shouldRefreshEnemyPath(se, target.player) && this.refreshEnemyWoodBlockPath(enemy, se, target.player));
+                );
 
                 if (!block || routeOpened) {
                     se.mode = "chase";
@@ -1389,6 +1388,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                 enemy.y + (dy / distance) * move,
             );
 
+            const blockingBlock = this.findEnemyBlockingWoodBlock(enemy, target.player)
+                || this.findNearestEnemyWoodBlockInAttackRange(enemy);
+            if (blockingBlock && this.tickEnemyWoodBlockAttack(id, enemy, se, blockingBlock, dtMs, move)) return;
+
             se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
             if (this.shouldRefreshEnemyPath(se, target.player)) {
                 this.refreshEnemyWoodBlockPath(enemy, se, target.player);
@@ -1397,16 +1400,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             const pathMoved = this.followEnemyPath(enemy, se, move);
             if (pathMoved) return;
 
-            se.path = [];
-            se.pathTargetCell = null;
-            se.pathRefreshMs = 0;
-            if (this.refreshEnemyWoodBlockPath(enemy, se, target.player) && this.followEnemyPath(enemy, se, move)) {
-                return;
-            }
-
-            const blockingBlock = this.findEnemyBlockingWoodBlock(enemy, target.player)
-                || this.findNearestEnemyWoodBlockInAttackRange(enemy);
-            if (blockingBlock && this.tickEnemyWoodBlockAttack(id, enemy, se, blockingBlock, dtMs, move)) return;
             enemy.x = directResolved.x;
             enemy.y = directResolved.y;
         });
