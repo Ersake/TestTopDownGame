@@ -27,19 +27,20 @@ const TREE_SPAWN_CLEAR_RADIUS = 300;
 const TREE_TRUNK_Y_OFFSET = -18;
 
 // Half-extents used for AABB collision detection
-const PLAYER_HW  = 56;  const PLAYER_HH  = 56;
+const PLAYER_HW  = 34;  const PLAYER_HH  = 34;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
 const PLAYER_TREE_FOOT_RADIUS = 5;
 const PLAYER_TREE_Y_OFFSET = 36;
+const PLAYER_BULLET_Y_OFFSET = 56;
 const TREE_TRUNK_HW = 5;
 const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 250;
 const ATTACK_COOLDOWN_MS = 850;
-const TREE_ATTACK_IMPACT_DELAY_MS = 140;
-const ENEMY_ATTACK_IMPACT_DELAY_MS = 225;
+const TREE_ATTACK_IMPACT_DELAY_MS = 100;
+const ENEMY_ATTACK_IMPACT_DELAY_MS = 100;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
@@ -64,6 +65,7 @@ const ENEMY_WAVE_COUNT = 3;
 const ENEMY_WAVE_INTERVAL_MS = 30000;
 const ENEMY1_SPEED = 114.75;
 const ENEMY1_ATTACK_RANGE = 20;
+const ENEMY1_PLAYER_ATTACK_RANGE = 72;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
 const ENEMY1_MIN_CHASE_STEP = 1;
 const ENEMY1_WINDUP_MS = 175;
@@ -71,7 +73,7 @@ const ENEMY1_ATTACK_MS = 850;
 const ENEMY_DEATH_REMOVE_MS = 850;
 const ENEMY_HIT_STUN_MS = 250;
 const ENEMY1_EDGE_OFFSET = 96;
-const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 225;
+const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 450;
 const ENEMY1_ATTACK_DAMAGE = 1;
 const ENEMY1_ATTACK_HIT_OFFSET = 28;
 const ENEMY1_ATTACK_HIT_HW = 42;
@@ -1095,7 +1097,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
             if (fire && sp.fireCounter === 0) {
                 sp.fireCounter = FIRE_RATE_MS;
-                this.spawnPlayerBullet(player.x, player.y - PLAYER_HH, 1, sid);
+                this.spawnPlayerBullet(player.x, player.y - PLAYER_BULLET_Y_OFFSET, 1, sid);
             }
         });
     }
@@ -1291,7 +1293,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const distance = Math.hypot(dx, dy);
             const direction = directionFromInput(dx, dy);
             if (direction) enemy.facingDirection = direction;
-            const isInAttackRange = distance <= ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
+            const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
 
             if (se.mode === "woodAttack" || se.mode === "woodWindup") {
                 const block = se.targetWoodBlockId ? this.state.woodBlocks.get(se.targetWoodBlockId) : undefined;
@@ -1355,7 +1357,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             enemy.action = "run";
             if (distance <= 0) return;
 
-            const remainingDistance = Math.max(0, distance - ENEMY1_ATTACK_RANGE);
+            const remainingDistance = Math.max(0, distance - ENEMY1_PLAYER_ATTACK_RANGE);
             if (remainingDistance <= ENEMY1_MIN_CHASE_STEP) {
                 enemy.action = "idle";
                 se.mode = "windup";
