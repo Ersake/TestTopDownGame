@@ -11,7 +11,7 @@ import {
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
-const PLAYER_MAX_VEL  = 300;   // px/s
+const PLAYER_MAX_VEL  = 255;   // px/s
 const PLAYER_MAX_HEALTH = 5;
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
@@ -62,7 +62,7 @@ const ENEMY1_COUNT = 3;
 const ENEMY2_COUNT = 3;
 const ENEMY_WAVE_COUNT = 3;
 const ENEMY_WAVE_INTERVAL_MS = 30000;
-const ENEMY1_SPEED = 135;
+const ENEMY1_SPEED = 114.75;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
 const ENEMY1_MIN_CHASE_STEP = 1;
@@ -83,7 +83,6 @@ const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
-const ENEMY_PATH_BLOCKED_DELAY_MS = 150;
 const ENEMY_PATH_REFRESH_MS = 500;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_TARGET_REFRESH_CELLS = 2;
@@ -246,7 +245,6 @@ interface ServerEnemy {
     modeMs: number;
     targetId: string | null;
     targetWoodBlockId: string | null;
-    blockedMs: number;
     pathRefreshMs: number;
     pathTargetCell: PathCell | null;
     path: PathCell[];
@@ -1255,7 +1253,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             modeMs: 0,
             targetId: target?.id || null,
             targetWoodBlockId: null,
-            blockedMs: 0,
             pathRefreshMs: 0,
             pathTargetCell: null,
             path: [],
@@ -1365,7 +1362,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                 se.modeMs = ENEMY1_WINDUP_MS;
                 se.path = [];
                 se.pathTargetCell = null;
-                se.blockedMs = 0;
                 return;
             }
 
@@ -1373,7 +1369,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
                 se.path = [];
                 se.pathTargetCell = null;
-                se.blockedMs = 0;
                 se.pathRefreshMs = 0;
                 se.targetWoodBlockId = null;
                 const resolved = this.moveEnemyWithWoodBlocks(
@@ -1391,23 +1386,9 @@ export class ShmupRoom extends Room<GameRoomState> {
                 enemy.x + (dx / distance) * move,
                 enemy.y + (dy / distance) * move,
             );
-            const nextDistance = Math.hypot(target.player.x - directResolved.x, target.player.y - directResolved.y);
-            const directProgress = distance - nextDistance;
-            if (directProgress >= ENEMY_CHASE_PROGRESS_EPSILON && se.blockedMs < ENEMY_PATH_BLOCKED_DELAY_MS) {
-                enemy.x = directResolved.x;
-                enemy.y = directResolved.y;
-                return;
-            }
 
-            se.blockedMs += dtMs;
             se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
-            if (se.blockedMs < ENEMY_PATH_BLOCKED_DELAY_MS) {
-                enemy.x = directResolved.x;
-                enemy.y = directResolved.y;
-                return;
-            }
-
-            if (se.blockedMs >= ENEMY_PATH_BLOCKED_DELAY_MS && this.shouldRefreshEnemyPath(se, target.player)) {
+            if (this.shouldRefreshEnemyPath(se, target.player)) {
                 this.refreshEnemyWoodBlockPath(enemy, se, target.player);
             }
 
@@ -1421,7 +1402,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 return;
             }
 
-            const blockingBlock = this.findEnemyBlockingWoodBlock(enemy, target.player);
+            const blockingBlock = this.findEnemyBlockingWoodBlock(enemy, target.player)
+                || this.findNearestEnemyWoodBlockInAttackRange(enemy);
             if (blockingBlock && this.tickEnemyWoodBlockAttack(id, enemy, se, blockingBlock, dtMs, move)) return;
             enemy.x = directResolved.x;
             enemy.y = directResolved.y;
@@ -1549,8 +1531,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         se.path = [];
-        se.blockedMs = 0;
-
         if (se.mode === "woodAttack") {
             enemy.action = "attack";
             se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -1608,6 +1588,31 @@ export class ShmupRoom extends Room<GameRoomState> {
                 nearestBlock = block;
                 nearestT = t;
             }
+        });
+
+        return nearestBlock;
+    }
+
+    private findNearestEnemyWoodBlockInAttackRange(enemy: EnemyState): WoodBlockState | null {
+        const footX = enemy.x;
+        const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
+        const attackRange = ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON + ENEMY_FOOT_RADIUS;
+        const attackRangeSq = attackRange * attackRange;
+        let nearestBlock: WoodBlockState | null = null;
+        let nearestDistanceSq = Number.POSITIVE_INFINITY;
+
+        this.state.woodBlocks.forEach((block) => {
+            const distanceSq = pointAabbDistanceSq(
+                footX,
+                footY,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+            if (distanceSq > attackRangeSq || distanceSq >= nearestDistanceSq) return;
+            nearestBlock = block;
+            nearestDistanceSq = distanceSq;
         });
 
         return nearestBlock;
