@@ -42,7 +42,7 @@ const TREE_ATTACK_IMPACT_DELAY_MS = 140;
 const ENEMY_ATTACK_IMPACT_DELAY_MS = 225;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
-const WOOD_PICKUP_RADIUS = 48;
+const WOOD_PICKUP_RADIUS = 80;
 const BUILD_GRID_SIZE = 32;
 const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
 const BUILD_BLOCK_COST = 1;
@@ -788,7 +788,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!sp || !sp.alive || !player || this.state.gameOver) return false;
 
         const pickupX = player.x;
-        const pickupY = player.y + PLAYER_TREE_Y_OFFSET;
+        const pickupY = player.y;
         const pickupRadiusSq = WOOD_PICKUP_RADIUS * WOOD_PICKUP_RADIUS;
         let closestLogId: string | null = null;
         let closestDistanceSq = Number.POSITIVE_INFINITY;
