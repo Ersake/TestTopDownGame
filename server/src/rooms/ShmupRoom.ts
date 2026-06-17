@@ -27,7 +27,7 @@ const TREE_SPAWN_CLEAR_RADIUS = 300;
 const TREE_TRUNK_Y_OFFSET = -18;
 
 // Half-extents used for AABB collision detection
-const PLAYER_HW  = 34;  const PLAYER_HH  = 34;
+const PLAYER_HW  = 17;  const PLAYER_HH  = 17;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
