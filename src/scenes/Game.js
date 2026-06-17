@@ -41,6 +41,8 @@ const PLAYER_ATTACK_HIT_RADIUS = 44;
 const PLAYER_ATTACK_HIT_START_OFFSET = 10;
 const PLAYER_ATTACK_HIT_END_OFFSET = 40;
 const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
+const BOW_DEBUG_RAY_LENGTH = 1400;
+const BOW_DEBUG_RAY_HIT_RADIUS = 28;
 const ENEMY_ATTACK_RANGE = 26;
 const ENEMY_ATTACK_HIT_OFFSET = 28;
 const ENEMY_ATTACK_HIT_HW = 42;
@@ -82,6 +84,8 @@ const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
+const PLAYER_ATTACK_VISUAL_LOCK_MS = 400;
+const BOW_ATTACK_VISUAL_LOCK_MS = PLAYER_ATTACK_VISUAL_LOCK_MS;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
 const PLAYER_HEALTH_BAR_HEIGHT = 6;
@@ -764,9 +768,8 @@ export class Game extends Phaser.Scene {
                         weapon.y = s.y;
                     }
                 } else if (serverPositionChanged) {
-                    // Lerp toward server position for smooth rendering
-                    s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
-                    s.y = Phaser.Math.Linear(s.y, player.y + PLAYER_VISUAL_Y_OFFSET, 0.3);
+                    s.x = player.x;
+                    s.y = player.y + PLAYER_VISUAL_Y_OFFSET;
                     if (weapon) {
                         weapon.x = s.x;
                         weapon.y = s.y;
@@ -1641,6 +1644,17 @@ export class Game extends Phaser.Scene {
             vector = this.getDirectionVector(animationState?.direction || DEFAULT_PLAYER_DIRECTION);
         }
         const originY = y + PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET;
+
+        if ((animationState?.attackItem || animationState?.activeItem) === ITEM_WOOD_BOW) {
+            const endX = x + vector.x * BOW_DEBUG_RAY_LENGTH;
+            const endY = originY + vector.y * BOW_DEBUG_RAY_LENGTH;
+            graphics.lineStyle(3, 0x66e6ff, 0.9);
+            graphics.lineBetween(x, originY, endX, endY);
+            graphics.strokeCircle(x, originY, BOW_DEBUG_RAY_HIT_RADIUS);
+            graphics.strokeCircle(endX, endY, BOW_DEBUG_RAY_HIT_RADIUS);
+            return;
+        }
+
         const startX = x + vector.x * PLAYER_ATTACK_HIT_START_OFFSET;
         const startY = originY + vector.y * PLAYER_ATTACK_HIT_START_OFFSET;
         const endX = x + vector.x * PLAYER_ATTACK_HIT_END_OFFSET;
@@ -1768,12 +1782,13 @@ export class Game extends Phaser.Scene {
         const worldPoint = this.getPointerWorldPoint(pointer);
         const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
-        animationState.attackVisualLockUntil = this.time.now + 250;
+        const attackItem = animationState.activeItem || ITEM_WOOD_AXE;
+        animationState.attackVisualLockUntil = this.time.now + (attackItem === ITEM_WOOD_BOW ? BOW_ATTACK_VISUAL_LOCK_MS : PLAYER_ATTACK_VISUAL_LOCK_MS);
         animationState.attackVisualLockX = sprite.x;
         animationState.attackVisualLockY = sprite.y;
         animationState.attackTargetX = worldPoint?.x ?? null;
         animationState.attackTargetY = worldPoint?.y ?? null;
-        animationState.attackItem = animationState.activeItem || ITEM_WOOD_AXE;
+        animationState.attackItem = attackItem;
         RoomClient.sendAttack(direction, worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
         return true;

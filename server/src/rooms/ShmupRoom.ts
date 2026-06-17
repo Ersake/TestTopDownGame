@@ -37,10 +37,14 @@ const PLAYER_BULLET_Y_OFFSET = 56;
 const TREE_TRUNK_HW = 5;
 const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
-const ATTACK_LOCK_MS = 250;
+const ATTACK_LOCK_MS = 400;
+const BOW_ATTACK_LOCK_MS = ATTACK_LOCK_MS;
 const ATTACK_COOLDOWN_MS = 850;
-const TREE_ATTACK_IMPACT_DELAY_MS = 100;
-const ENEMY_ATTACK_IMPACT_DELAY_MS = 100;
+const TREE_ATTACK_IMPACT_DELAY_MS = 150;
+const ENEMY_ATTACK_IMPACT_DELAY_MS = 150;
+const BOW_ATTACK_IMPACT_DELAY_MS = 270;
+const BOW_RAY_RANGE = Math.hypot(WORLD_WIDTH, WORLD_HEIGHT);
+const BOW_RAY_HIT_RADIUS = 28;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
@@ -383,7 +387,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackDirection = attackDirection;
             player.attackItem = attackItem;
             player.attackSeq++;
-            sp.attackLockMs = ATTACK_LOCK_MS;
+            sp.attackLockMs = attackItem === ITEM_WOOD_BOW ? BOW_ATTACK_LOCK_MS : ATTACK_LOCK_MS;
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
             sp.attackCooldownMs = ATTACK_COOLDOWN_MS;
@@ -392,7 +396,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             const attackOrigin = { x: player.x, y: player.y };
             const targetX = data?.targetX;
             const targetY = data?.targetY;
-            if (attackItem === ITEM_WOOD_BOW) return;
+            if (attackItem === ITEM_WOOD_BOW) {
+                setTimeout(() => {
+                    this.applyDelayedBowAttackImpact(client.sessionId, attackDirection, targetX, targetY);
+                }, BOW_ATTACK_IMPACT_DELAY_MS);
+                return;
+            }
 
             setTimeout(() => {
                 this.applyDelayedTreeAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
@@ -596,6 +605,19 @@ export class ShmupRoom extends Room<GameRoomState> {
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
     }
 
+    private applyDelayedBowAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
+        const sp = this.serverPlayers.get(attackerId);
+        const player = this.state.players.get(attackerId);
+        if (!sp || !sp.alive || !player || this.state.gameOver) return;
+
+        const attackOrigin = { x: player.x, y: player.y };
+        const enemyId = this.findEnemyHitByBowRay(attackOrigin, direction, targetX, targetY);
+        if (!enemyId) return;
+
+        const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId);
+        if (enemyHit) this.broadcast("enemyHit", enemyHit);
+    }
+
     private damageTreeFromAttack(attackOrigin: AttackOrigin, attackerId: string, direction: string, targetX: unknown, targetY: unknown): TreeHitPayload | null {
         const hitTreeId = this.findTreeHitByAttack(attackOrigin, direction, targetX, targetY);
         if (!hitTreeId) return null;
@@ -703,6 +725,42 @@ export class ShmupRoom extends Room<GameRoomState> {
         return hitPayloads;
     }
 
+    private damageEnemyFromBowAttack(enemyId: string, attackerId: string): EnemyHitPayload | null {
+        const enemy = this.state.enemies.get(enemyId);
+        if (!enemy) {
+            this.serverEnemies.delete(enemyId);
+            return null;
+        }
+        if (enemy.isDead) return null;
+
+        enemy.health = Math.max(0, enemy.health - 1);
+        if (enemy.health > 0) {
+            enemy.damageSeq++;
+            const se = this.serverEnemies.get(enemyId);
+            if (se) {
+                se.mode = "stun";
+                se.modeMs = ENEMY_HIT_STUN_MS;
+                enemy.action = "idle";
+            }
+        }
+
+        const hitPayload = {
+            enemyId,
+            attackerId,
+            x: enemy.x,
+            y: enemy.y,
+            remainingHealth: enemy.health,
+        };
+
+        if (enemy.health <= 0) {
+            this.awardPlayerKill(attackerId);
+            this.state.teamScore += 10;
+            this.killEnemy(enemyId, enemy);
+        }
+
+        return hitPayload;
+    }
+
     private findEnemyHitsByAttack(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string[] {
         const vector = this.getAttackVector(attackOrigin, direction, targetX, targetY);
         const originX = attackOrigin.x;
@@ -730,6 +788,34 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         return hitEnemyIds;
+    }
+
+    private findEnemyHitByBowRay(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string | null {
+        const vector = this.getAttackVector(attackOrigin, direction, targetX, targetY);
+        const originX = attackOrigin.x;
+        const originY = attackOrigin.y + ATTACK_HIT_ORIGIN_Y_OFFSET;
+        let closestEnemyId: string | null = null;
+        let closestAlongRay = Number.POSITIVE_INFINITY;
+        const hitRadiusSq = BOW_RAY_HIT_RADIUS * BOW_RAY_HIT_RADIUS;
+
+        this.state.enemies.forEach((enemy, id) => {
+            if (enemy.isDead) return;
+            const dx = enemy.x - originX;
+            const dy = enemy.y - originY;
+            const alongRay = dx * vector.x + dy * vector.y;
+            if (alongRay < 0 || alongRay > BOW_RAY_RANGE || alongRay >= closestAlongRay) return;
+
+            const closestX = originX + vector.x * alongRay;
+            const closestY = originY + vector.y * alongRay;
+            const sideX = enemy.x - closestX;
+            const sideY = enemy.y - closestY;
+            if (sideX * sideX + sideY * sideY > hitRadiusSq) return;
+
+            closestEnemyId = id;
+            closestAlongRay = alongRay;
+        });
+
+        return closestEnemyId;
     }
 
     private killEnemy(enemyId: string, enemy: EnemyState) {
