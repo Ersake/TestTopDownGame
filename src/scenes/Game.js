@@ -19,6 +19,8 @@ const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const PLAYER_VISUAL_Y_OFFSET = 6;
+const PLAYER_VISUAL_MOVE_SPEED = 255;
+const PLAYER_VISUAL_SNAP_DISTANCE = 96;
 const PLAYER_BODY_DEPTH = 100;
 const PLAYER_WEAPON_DEPTH = 101;
 const ENEMY_DISPLAY_SIZE = 128;
@@ -84,8 +86,6 @@ const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
-const PLAYER_ATTACK_VISUAL_LOCK_MS = 400;
-const BOW_ATTACK_VISUAL_LOCK_MS = PLAYER_ATTACK_VISUAL_LOCK_MS;
 const PLAYER_MAX_HEALTH = 5;
 const PLAYER_HEALTH_BAR_WIDTH = 48;
 const PLAYER_HEALTH_BAR_HEIGHT = 6;
@@ -163,9 +163,10 @@ export class Game extends Phaser.Scene {
         this.initNetworking();
     }
 
-    update() {
+    update(_time, delta) {
         if (!this.gameStarted) return;
         this.sendInput();
+        this.updatePlayerVisualPositions(delta);
         this.ensureLocalCameraFollow();
         this.updateHeldAttack();
         this.updateLocalPlayerAnimation();
@@ -757,9 +758,6 @@ export class Game extends Phaser.Scene {
                 attacking: false,
                 dead: false,
                 deathPlayed: false,
-                attackVisualLockUntil: 0,
-                attackVisualLockX: player.x,
-                attackVisualLockY: player.y + PLAYER_VISUAL_Y_OFFSET,
                 attackTargetX: null,
                 attackTargetY: null,
                 activeSlot: player.activeSlot || 1,
@@ -769,6 +767,8 @@ export class Game extends Phaser.Scene {
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
+                visualTargetX: player.x,
+                visualTargetY: player.y + PLAYER_VISUAL_Y_OFFSET,
             });
             this.setPlayerAnimation(playerSessionId, false, DEFAULT_PLAYER_DIRECTION);
             this.updatePlayerWeaponIdleFrame(playerSessionId, DEFAULT_PLAYER_DIRECTION);
@@ -782,28 +782,10 @@ export class Game extends Phaser.Scene {
                 const previousY = animationState ? animationState.y : player.y;
                 const serverPositionChanged = player.x !== previousX || player.y !== previousY;
 
-                const visualLocked = isLocal
-                    && animationState?.attacking
-                    && this.time.now < animationState.attackVisualLockUntil;
-
-                if (visualLocked) {
-                    s.x = animationState.attackVisualLockX;
-                    s.y = animationState.attackVisualLockY;
-                    if (weapon) {
-                        weapon.x = s.x;
-                        weapon.y = s.y;
-                    }
-                } else if (serverPositionChanged) {
-                    s.x = player.x;
-                    s.y = player.y + PLAYER_VISUAL_Y_OFFSET;
-                    if (weapon) {
-                        weapon.x = s.x;
-                        weapon.y = s.y;
-                    }
-                }
-
                 if (animationState) {
                     if (serverPositionChanged) {
+                        animationState.visualTargetX = player.x;
+                        animationState.visualTargetY = player.y + PLAYER_VISUAL_Y_OFFSET;
                         const direction = this.getDirectionFromVector(player.x - previousX, player.y - previousY);
                         if (direction) {
                             animationState.lastMovedAt = this.time.now;
@@ -812,6 +794,13 @@ export class Game extends Phaser.Scene {
                         if (!isLocal) this.setPlayerAnimation(playerSessionId, animationState.moving, direction);
                         animationState.x = player.x;
                         animationState.y = player.y;
+                    }
+                } else if (serverPositionChanged) {
+                    s.x = player.x;
+                    s.y = player.y + PLAYER_VISUAL_Y_OFFSET;
+                    if (weapon) {
+                        weapon.x = s.x;
+                        weapon.y = s.y;
                     }
                 }
 
@@ -1733,6 +1722,36 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerVisualPositions(deltaMs = 0) {
+        const dtSec = Math.max(0, deltaMs) / 1000;
+        const maxStep = PLAYER_VISUAL_MOVE_SPEED * dtSec;
+
+        this.playerSprites.forEach((sprite, sessionId) => {
+            const animationState = this.playerAnimationState.get(sessionId);
+            const weapon = this.playerWeaponSprites.get(sessionId);
+            if (!animationState) return;
+
+            const targetX = Number.isFinite(animationState.visualTargetX) ? animationState.visualTargetX : sprite.x;
+            const targetY = Number.isFinite(animationState.visualTargetY) ? animationState.visualTargetY : sprite.y;
+            const dx = targetX - sprite.x;
+            const dy = targetY - sprite.y;
+            const distance = Math.hypot(dx, dy);
+
+            if (distance > PLAYER_VISUAL_SNAP_DISTANCE || maxStep <= 0 || distance <= maxStep) {
+                sprite.x = targetX;
+                sprite.y = targetY;
+            } else if (distance > 0) {
+                sprite.x += (dx / distance) * maxStep;
+                sprite.y += (dy / distance) * maxStep;
+            }
+
+            if (weapon) {
+                weapon.x = sprite.x;
+                weapon.y = sprite.y;
+            }
+        });
+    }
+
     updateLocalPlayerAnimation() {
         const sessionId = this.localSessionId;
         if (!sessionId || !this.playerSprites.has(sessionId)) return;
@@ -1810,9 +1829,6 @@ export class Game extends Phaser.Scene {
         const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
         const attackItem = animationState.activeItem || ITEM_WOOD_AXE;
-        animationState.attackVisualLockUntil = this.time.now + (attackItem === ITEM_WOOD_BOW ? BOW_ATTACK_VISUAL_LOCK_MS : PLAYER_ATTACK_VISUAL_LOCK_MS);
-        animationState.attackVisualLockX = sprite.x;
-        animationState.attackVisualLockY = sprite.y;
         animationState.attackTargetX = worldPoint?.x ?? null;
         animationState.attackTargetY = worldPoint?.y ?? null;
         animationState.attackItem = attackItem;
@@ -1950,15 +1966,20 @@ export class Game extends Phaser.Scene {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         const player = this.playerHealthBars.get(sessionId)?.player;
-        if (!sprite || !animationState || player?.isDead) return;
+        if (!sprite || !animationState || !player || player.isDead) return;
 
         animationState.dead = false;
         animationState.deathPlayed = false;
         animationState.attacking = false;
         animationState.moving = false;
-        animationState.attackVisualLockUntil = 0;
         animationState.attackTargetX = null;
         animationState.attackTargetY = null;
+        animationState.x = player.x;
+        animationState.y = player.y;
+        animationState.visualTargetX = player.x;
+        animationState.visualTargetY = player.y + PLAYER_VISUAL_Y_OFFSET;
+        sprite.x = animationState.visualTargetX;
+        sprite.y = animationState.visualTargetY;
         sprite.setVisible(true);
         sprite.anims.stop();
         this.setPlayerAnimation(sessionId, false, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
