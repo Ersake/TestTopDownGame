@@ -145,7 +145,8 @@ const LOG_PILE_OFFSETS = [
     { x: -9, y: 10 },
     { x: 11, y: 8 },
 ];
-const DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+const PLAYER_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+const ENEMY_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const FRAMES_PER_DIRECTION = 15;
 
 export class Game extends Phaser.Scene {
@@ -1759,13 +1760,12 @@ export class Game extends Phaser.Scene {
     }
 
     getDirectionFromVector(dx, dy) {
-        const threshold = 0.1;
-        const horizontal = Math.abs(dx) > threshold ? (dx > 0 ? 'E' : 'W') : '';
-        const vertical = Math.abs(dy) > threshold ? (dy > 0 ? 'S' : 'N') : '';
+        if (Math.hypot(dx, dy) <= 0.0001) return null;
 
-        if (!horizontal && !vertical) return null;
-        if (horizontal && vertical) return `${vertical}${horizontal}`;
-        return horizontal || vertical;
+        const angle = Math.atan2(dy, dx);
+        const octant = Math.round(angle / (Math.PI / 4));
+        const index = (octant + 8) % 8;
+        return ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'][index];
     }
 
     startHeldAttack(pointer) {
@@ -1854,7 +1854,7 @@ export class Game extends Phaser.Scene {
             this.hidePlayerWeapon(sessionId);
             return;
         }
-        const row = DIRECTION_ORDER.indexOf(nextDirection);
+        const row = PLAYER_DIRECTION_ORDER.indexOf(nextDirection);
         const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
         weapon.setVisible(true);
         if (weapon.anims.isPlaying) weapon.anims.stop();
@@ -2261,7 +2261,7 @@ export class Game extends Phaser.Scene {
         const animationState = this.enemyAnimationState.get(enemyId);
         if (!sprite) return;
 
-        const row = DIRECTION_ORDER.indexOf(direction);
+        const row = ENEMY_DIRECTION_ORDER.indexOf(direction);
         const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
         const animationKey = animationState?.animationKey || 'enemy1';
         const textureKey = ASSETS.spritesheet[`${animationKey}Run`]?.key || ASSETS.spritesheet.enemy1Run.key;

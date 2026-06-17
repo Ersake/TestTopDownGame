@@ -299,12 +299,12 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function directionFromInput(inputX: number, inputY: number): string | null {
-    const horizontal = inputX > 0 ? "E" : inputX < 0 ? "W" : "";
-    const vertical = inputY > 0 ? "S" : inputY < 0 ? "N" : "";
+    if (Math.hypot(inputX, inputY) <= 0.0001) return null;
 
-    if (!horizontal && !vertical) return null;
-    if (horizontal && vertical) return `${vertical}${horizontal}`;
-    return horizontal || vertical;
+    const angle = Math.atan2(inputY, inputX);
+    const octant = Math.round(angle / (Math.PI / 4));
+    const index = (octant + 8) % 8;
+    return ["E", "SE", "S", "SW", "W", "NW", "N", "NE"][index];
 }
 
 function normalizeAttackDirection(direction: unknown, fallback: string): string {
