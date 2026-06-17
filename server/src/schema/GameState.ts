@@ -14,6 +14,9 @@ export class PlayerState extends Schema {
     @type("float32") reviveProgress: number = 0;
     @type("string")  facingDirection: string = "N";
     @type("string")  attackDirection: string = "N";
+    @type("int8")    activeSlot: number = 1;
+    @type("string")  activeItem: string = "wood_axe";
+    @type("string")  attackItem: string = "wood_axe";
     @type("int32")   attackSeq: number = 0;
 }
 

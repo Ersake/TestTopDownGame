@@ -19,6 +19,8 @@ const EB_TILE_OFFSET    = 11;  // tiles.png: enemy bullet frame = 11 + power
 const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const PLAYER_VISUAL_Y_OFFSET = 6;
+const PLAYER_BODY_DEPTH = 100;
+const PLAYER_WEAPON_DEPTH = 101;
 const ENEMY_DISPLAY_SIZE = 128;
 const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
@@ -99,6 +101,15 @@ const EXPERIENCE_BAR_BOTTOM_MARGIN = 14;
 const EXPERIENCE_BAR_BACKGROUND_COLOR = 0x050505;
 const EXPERIENCE_BAR_FILL_COLOR = 0x8a22d8;
 const EXPERIENCE_BAR_STROKE_COLOR = 0x000000;
+const HOTBAR_SLOT_COUNT = 9;
+const HOTBAR_SLOT_SIZE = 42;
+const HOTBAR_SLOT_GAP = 6;
+const HOTBAR_ICON_SIZE = 28;
+const HOTBAR_BOTTOM_GAP = 18;
+const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
+const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
+const ITEM_WOOD_AXE = 'wood_axe';
+const ITEM_WOOD_BOW = 'wood_bow';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -184,12 +195,16 @@ export class Game extends Phaser.Scene {
         // Sprite dictionaries keyed by server-side ID
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerSprites       = new Map();
+        this.playerWeaponSprites = new Map();
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
         this.playerReviveBars = new Map();
         this.playerLevelLabels = new Map();
         this.offscreenPlayerIndicators = new Map();
         this.localExperienceState = null;
+        this.localActiveSlot = 1;
+        this.hotbarSlots = [];
+        this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, null, null, null, null, null, null, null];
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -347,6 +362,7 @@ export class Game extends Phaser.Scene {
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
         this.initExperienceBar();
+        this.initHotbar();
         this.initVolumeSlider();
         this.registerFixedUi(
             this.tutorialText,
@@ -376,6 +392,61 @@ export class Game extends Phaser.Scene {
         this.experienceBarLayout = { x, y, width: EXPERIENCE_BAR_WIDTH, height: EXPERIENCE_BAR_HEIGHT };
         this.updateExperienceBar(0, 5, 1);
         this.registerFixedUi(this.experienceBarBackground, this.experienceBarFill, this.experienceBarText);
+    }
+
+    initHotbar() {
+        this.hotbarSlots.forEach((slot) => {
+            slot.box?.destroy();
+            slot.icon?.destroy();
+            slot.label?.destroy();
+        });
+        this.hotbarSlots = [];
+
+        const totalWidth = HOTBAR_SLOT_COUNT * HOTBAR_SLOT_SIZE + (HOTBAR_SLOT_COUNT - 1) * HOTBAR_SLOT_GAP;
+        const startX = this.centreX - totalWidth * 0.5 + HOTBAR_SLOT_SIZE * 0.5;
+        const y = this.experienceBarLayout.y - HOTBAR_BOTTOM_GAP - HOTBAR_SLOT_SIZE * 0.5;
+
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            const slot = i + 1;
+            const x = startX + i * (HOTBAR_SLOT_SIZE + HOTBAR_SLOT_GAP);
+            const box = this.add.rectangle(x, y, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_FILL_COLOR, 0.22)
+                .setOrigin(0.5)
+                .setStrokeStyle(2, HOTBAR_SLOT_FILL_COLOR, 0.5)
+                .setDepth(UI_DEPTH + 3)
+                .setScrollFactor(0);
+            const label = this.add.text(x - HOTBAR_SLOT_SIZE * 0.5 + 5, y - HOTBAR_SLOT_SIZE * 0.5 + 3, `${slot}`, {
+                fontFamily: 'Arial Black', fontSize: 10, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 3,
+            }).setDepth(UI_DEPTH + 5).setScrollFactor(0);
+
+            const item = this.hotbarSlotItems[i];
+            const iconKey = item === ITEM_WOOD_AXE
+                ? ASSETS.image.woodAxeIcon.key
+                : item === ITEM_WOOD_BOW
+                    ? ASSETS.image.woodBowIcon.key
+                    : null;
+            const icon = iconKey
+                ? this.add.image(x, y + 2, iconKey)
+                    .setOrigin(0.5)
+                    .setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE)
+                    .setDepth(UI_DEPTH + 4)
+                    .setScrollFactor(0)
+                : null;
+
+            this.hotbarSlots.push({ box, icon, label, slot });
+            this.registerFixedUi(box, icon, label);
+        }
+
+        this.updateHotbarSelection();
+    }
+
+    updateHotbarSelection() {
+        this.hotbarSlots.forEach(({ box, slot }) => {
+            if (!box) return;
+            const active = slot === this.localActiveSlot;
+            box.setFillStyle(active ? HOTBAR_SLOT_ACTIVE_COLOR : HOTBAR_SLOT_FILL_COLOR, active ? 0.36 : 0.22);
+            box.setStrokeStyle(active ? 3 : 2, active ? HOTBAR_SLOT_ACTIVE_COLOR : HOTBAR_SLOT_FILL_COLOR, active ? 0.95 : 0.5);
+        });
     }
 
     initVolumeSlider() {
@@ -437,8 +508,11 @@ export class Game extends Phaser.Scene {
 
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
-        Object.values(ANIMATION.player.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.axe).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.bow).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.die).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodAxe).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodBow).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
@@ -460,6 +534,8 @@ export class Game extends Phaser.Scene {
             interact: Phaser.Input.Keyboard.KeyCodes.F,
             build: Phaser.Input.Keyboard.KeyCodes.TAB,
             escape: Phaser.Input.Keyboard.KeyCodes.ESC,
+            slot1: Phaser.Input.Keyboard.KeyCodes.ONE,
+            slot2: Phaser.Input.Keyboard.KeyCodes.TWO,
         });
 
         this.input.mouse?.disableContextMenu();
@@ -470,6 +546,8 @@ export class Game extends Phaser.Scene {
         this.keys.escape.on('down', (key, event) => {
             this.handleEscapeQuit(event);
         });
+        this.keys.slot1.on('down', () => this.equipHotbarSlot(1));
+        this.keys.slot2.on('down', () => this.equipHotbarSlot(2));
         this.input.keyboard.on('keydown-ESC', (event) => {
             this.handleEscapeQuit(event);
         });
@@ -510,6 +588,23 @@ export class Game extends Phaser.Scene {
     }
 
     // ─── Networking ───────────────────────────────────────────────────────────
+    equipHotbarSlot(slot) {
+        if (slot !== 1 && slot !== 2) return;
+        this.localActiveSlot = slot;
+        this.updateHotbarSelection();
+        RoomClient.sendEquipSlot(slot);
+
+        const sessionId = this.localSessionId;
+        const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
+        if (!animationState) return;
+
+        animationState.activeSlot = slot;
+        animationState.activeItem = slot === 2 ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
+        if (!animationState.attacking && !animationState.dead) {
+            this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        }
+    }
+
     initNetworking() {
         const room = RoomClient.room;
         if (!room) {
@@ -581,13 +676,20 @@ export class Game extends Phaser.Scene {
 
             const isLocal = this.isLocalSession(playerSessionId);
             const sprite  = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.playerIdle.key, 0)
-                .setDepth(100)
+                .setDepth(PLAYER_BODY_DEPTH)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
-            this.registerWorldObject(sprite);
+            const weaponSprite = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.woodAxe.key, 0)
+                .setDepth(PLAYER_WEAPON_DEPTH)
+                .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
+            this.registerWorldObject(sprite, weaponSprite);
 
-            if (!isLocal) sprite.setTint(0x88ffff); // tint remote players cyan
+            if (!isLocal) {
+                sprite.setTint(0x88ffff); // tint remote players cyan
+                weaponSprite.setTint(0x88ffff);
+            }
 
             this.playerSprites.set(playerSessionId, sprite);
+            this.playerWeaponSprites.set(playerSessionId, weaponSprite);
             if (!isLocal) {
                 const indicator = this.add.circle(0, 0, OFFSCREEN_PLAYER_INDICATOR_RADIUS, OFFSCREEN_PLAYER_INDICATOR_COLOR, 1)
                     .setDepth(UI_DEPTH + 5)
@@ -630,15 +732,20 @@ export class Game extends Phaser.Scene {
                 attackVisualLockY: player.y + PLAYER_VISUAL_Y_OFFSET,
                 attackTargetX: null,
                 attackTargetY: null,
+                activeSlot: player.activeSlot || 1,
+                activeItem: player.activeItem || ITEM_WOOD_AXE,
+                attackItem: player.attackItem || ITEM_WOOD_AXE,
                 lastAttackSeq: player.attackSeq || 0,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
             });
             this.setPlayerAnimation(playerSessionId, false, DEFAULT_PLAYER_DIRECTION);
+            this.updatePlayerWeaponIdleFrame(playerSessionId, DEFAULT_PLAYER_DIRECTION);
 
             player.onChange(() => {
                 const s = this.playerSprites.get(playerSessionId);
+                const weapon = this.playerWeaponSprites.get(playerSessionId);
                 if (!s) return;
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 const previousX = animationState ? animationState.x : player.x;
@@ -652,10 +759,18 @@ export class Game extends Phaser.Scene {
                 if (visualLocked) {
                     s.x = animationState.attackVisualLockX;
                     s.y = animationState.attackVisualLockY;
+                    if (weapon) {
+                        weapon.x = s.x;
+                        weapon.y = s.y;
+                    }
                 } else if (serverPositionChanged) {
                     // Lerp toward server position for smooth rendering
                     s.x = Phaser.Math.Linear(s.x, player.x, 0.3);
                     s.y = Phaser.Math.Linear(s.y, player.y + PLAYER_VISUAL_Y_OFFSET, 0.3);
+                    if (weapon) {
+                        weapon.x = s.x;
+                        weapon.y = s.y;
+                    }
                 }
 
                 if (animationState) {
@@ -687,7 +802,33 @@ export class Game extends Phaser.Scene {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState && direction) {
                     animationState.direction = direction;
+                    if (!animationState.attacking && !animationState.dead) {
+                        this.updatePlayerWeaponIdleFrame(playerSessionId, direction);
+                    }
                 }
+            });
+
+            player.listen('activeSlot', (slot) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.activeSlot = slot || 1;
+                if (isLocal) {
+                    this.localActiveSlot = slot || 1;
+                    this.updateHotbarSelection();
+                }
+            });
+
+            player.listen('activeItem', (item) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (!animationState) return;
+                animationState.activeItem = item || ITEM_WOOD_AXE;
+                if (!animationState.attacking && !animationState.dead) {
+                    this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+                }
+            });
+
+            player.listen('attackItem', (item) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.attackItem = item || ITEM_WOOD_AXE;
             });
 
             player.listen('health', () => {
@@ -704,6 +845,7 @@ export class Game extends Phaser.Scene {
 
                 animationState.lastAttackSeq = player.attackSeq;
                 if (player.attackSeq <= 0) return;
+                animationState.attackItem = player.attackItem || animationState.activeItem || ITEM_WOOD_AXE;
 
                 this.playPlayerAttackAnimation(playerSessionId, player.attackDirection, {
                     playAudio: this.shouldPlayAttackAudio(playerSessionId),
@@ -719,6 +861,8 @@ export class Game extends Phaser.Scene {
                 this.killsText.setText(`Kills: ${player.kills}`);
                 this.woodText.setText(`${player.wood || 0}`);
                 this.updateLocalExperienceState(player);
+                this.localActiveSlot = player.activeSlot || 1;
+                this.updateHotbarSelection();
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
@@ -752,6 +896,8 @@ export class Game extends Phaser.Scene {
         state.players.onRemove((_player, sessionId) => {
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
+            const weapon = this.playerWeaponSprites.get(sessionId);
+            if (weapon) weapon.destroy();
             const healthBar = this.playerHealthBars.get(sessionId);
             if (healthBar) {
                 healthBar.background.destroy();
@@ -774,6 +920,7 @@ export class Game extends Phaser.Scene {
                 this.updateExperienceBar(0, 5, 1);
             }
             this.playerSprites.delete(sessionId);
+            this.playerWeaponSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
@@ -1626,6 +1773,7 @@ export class Game extends Phaser.Scene {
         animationState.attackVisualLockY = sprite.y;
         animationState.attackTargetX = worldPoint?.x ?? null;
         animationState.attackTargetY = worldPoint?.y ?? null;
+        animationState.attackItem = animationState.activeItem || ITEM_WOOD_AXE;
         RoomClient.sendAttack(direction, worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: true });
         return true;
@@ -1641,6 +1789,59 @@ export class Game extends Phaser.Scene {
         return this.getDirectionFromVector(worldPoint.x - origin.x, worldPoint.y - origin.y) || fallbackDirection;
     }
 
+    getPlayerAttackMode(item) {
+        return item === ITEM_WOOD_BOW ? 'bow' : 'axe';
+    }
+
+    getWeaponAnimationGroup(item) {
+        return item === ITEM_WOOD_BOW ? ANIMATION.weapon.woodBow : ANIMATION.weapon.woodAxe;
+    }
+
+    getWeaponTextureKey(item) {
+        return item === ITEM_WOOD_BOW ? ASSETS.spritesheet.woodBow.key : ASSETS.spritesheet.woodAxe.key;
+    }
+
+    updatePlayerWeaponIdleFrame(sessionId, direction) {
+        const weapon = this.playerWeaponSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!weapon || !animationState || animationState.dead) return;
+
+        const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
+        const item = animationState.activeItem || ITEM_WOOD_AXE;
+        const row = DIRECTION_ORDER.indexOf(nextDirection);
+        const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
+        weapon.setVisible(true);
+        if (weapon.anims.isPlaying) weapon.anims.stop();
+        weapon.setTexture(this.getWeaponTextureKey(item), frame);
+    }
+
+    hidePlayerWeapon(sessionId) {
+        const weapon = this.playerWeaponSprites.get(sessionId);
+        if (!weapon) return;
+        if (weapon.anims.isPlaying) weapon.anims.stop();
+        weapon.setVisible(false);
+    }
+
+    playPlayerWeaponAnimation(sessionId, item, direction, { restart = false } = {}) {
+        const weapon = this.playerWeaponSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!weapon || !animationState || !weapon.visible) return false;
+
+        const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
+        const animation = this.getWeaponAnimationGroup(item)?.[nextDirection];
+        if (!animation) return false;
+
+        weapon.setVisible(true);
+        if (weapon.anims.currentAnim?.key !== animation.key || !weapon.anims.isPlaying) {
+            weapon.play(animation.key);
+        } else if (restart) {
+            weapon.anims.stop();
+            weapon.play(animation.key);
+        }
+
+        return true;
+    }
+
     playPlayerAttackAnimation(sessionId, direction, { playAudio = true } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
@@ -1648,11 +1849,15 @@ export class Game extends Phaser.Scene {
 
         animationState.attacking = true;
 
-        const didPlay = this.playPlayerAnimation(sessionId, 'attack', direction, { force: true, restart: true });
+        const attackItem = animationState.attackItem || animationState.activeItem || ITEM_WOOD_AXE;
+        const attackMode = this.getPlayerAttackMode(attackItem);
+        const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart: true });
+        const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart: true });
         if (!didPlay) {
             animationState.attacking = false;
             return;
         }
+        if (!didPlayWeapon) this.hidePlayerWeapon(sessionId);
 
         if (playAudio) {
             this.playSfx(ASSETS.audio.punchWhoosh.key, PUNCH_SOUND_VOLUME, {
@@ -1671,6 +1876,7 @@ export class Game extends Phaser.Scene {
             } else {
                 this.setPlayerAnimation(sessionId, animationState.moving, null);
             }
+            this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || direction || DEFAULT_PLAYER_DIRECTION);
         });
     }
 
@@ -1688,6 +1894,7 @@ export class Game extends Phaser.Scene {
         const animation = ANIMATION.player.die?.[direction];
         if (!animation) return;
 
+        this.hidePlayerWeapon(sessionId);
         sprite.setVisible(true);
         sprite.anims.stop();
         sprite.play(animation.key);
@@ -1709,6 +1916,7 @@ export class Game extends Phaser.Scene {
         sprite.setVisible(true);
         sprite.anims.stop();
         this.setPlayerAnimation(sessionId, false, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
+        this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
     }
 
     loadMasterVolume() {
@@ -1854,7 +2062,10 @@ export class Game extends Phaser.Scene {
         const animationState = this.playerAnimationState.get(sessionId);
         if (animationState?.dead) return;
         const mode = moving ? 'run' : 'idle';
-        this.playPlayerAnimation(sessionId, mode, direction);
+        const didPlay = this.playPlayerAnimation(sessionId, mode, direction);
+        if (didPlay && !animationState?.attacking) {
+            this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || direction || DEFAULT_PLAYER_DIRECTION);
+        }
     }
 
     playPlayerAnimation(sessionId, mode, direction, { force = false, restart = false } = {}) {
@@ -2223,6 +2434,7 @@ export class Game extends Phaser.Scene {
 
     clearAllSprites() {
         this.playerSprites.forEach(s => s.destroy());
+        this.playerWeaponSprites.forEach(s => s.destroy());
         this.playerHealthBars.forEach(({ background, fill }) => {
             background.destroy();
             fill.destroy();
@@ -2276,6 +2488,7 @@ export class Game extends Phaser.Scene {
         this.resetBuildDragState();
         this.stopHeldAttack();
         this.playerSprites.clear();
+        this.playerWeaponSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
         this.playerReviveBars.clear();

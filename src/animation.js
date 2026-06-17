@@ -28,8 +28,13 @@ export default {
     player: {
         idle: createDirectionalAnimations('idle', ASSETS.spritesheet.playerIdle.key),
         run: createDirectionalAnimations('run', ASSETS.spritesheet.playerRun.key),
-        attack: createDirectionalAnimations('attack', ASSETS.spritesheet.playerAttack.key, { frameRate: 18, repeat: 0 }),
+        axe: createDirectionalAnimations('axe', ASSETS.spritesheet.playerAxe.key, { frameRate: 18, repeat: 0 }),
+        bow: createDirectionalAnimations('bow', ASSETS.spritesheet.playerBow.key, { frameRate: 18, repeat: 0 }),
         die: createDirectionalAnimations('die', ASSETS.spritesheet.playerDie.key, { frameRate: 18, repeat: 0 }),
+    },
+    weapon: {
+        woodAxe: createDirectionalAnimations('wood-axe', ASSETS.spritesheet.woodAxe.key, { frameRate: 18, repeat: 0 }),
+        woodBow: createDirectionalAnimations('wood-bow', ASSETS.spritesheet.woodBow.key, { frameRate: 18, repeat: 0 }),
     },
     enemy1: {
         run: createDirectionalAnimations('enemy1-run', ASSETS.spritesheet.enemy1Run.key),

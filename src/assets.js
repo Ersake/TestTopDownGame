@@ -50,6 +50,14 @@ export default {
             key: 'volume',
             args: ['assets/volume.png']
         },
+        woodAxeIcon: {
+            key: 'wood-axe-icon',
+            args: ['assets/Axe - wooden.png']
+        },
+        woodBowIcon: {
+            key: 'wood-bow-icon',
+            args: ['assets/Bow - wooden.png']
+        },
     },
     'spritesheet': {
         ships: {
@@ -68,28 +76,49 @@ export default {
         },
         playerRun: {
             key: 'player-run',
-            args: ['assets/Run.png', {
+            args: ['assets/PlayerRun.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]
         },
         playerIdle: {
             key: 'player-idle',
-            args: ['assets/Idle.png', {
+            args: ['assets/PlayerIdle.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]
         },
-        playerAttack: {
-            key: 'player-attack',
-            args: ['assets/Attack1.png', {
+        playerAxe: {
+            key: 'player-axe',
+            args: ['assets/PlayerAxe.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        playerBow: {
+            key: 'player-bow',
+            args: ['assets/PlayerBow.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodAxe: {
+            key: 'wood-axe',
+            args: ['assets/WoodAxe.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodBow: {
+            key: 'wood-bow',
+            args: ['assets/WoodBow.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]
         },
         playerDie: {
             key: 'player-die',
-            args: ['assets/Playerdie.png', {
+            args: ['assets/PlayerDeath.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

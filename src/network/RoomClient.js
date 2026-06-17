@@ -99,6 +99,11 @@ class RoomClient {
         this.room.send("attack", { direction, targetX, targetY });
     }
 
+    sendEquipSlot(slot) {
+        if (!this.room) return;
+        this.room.send("equipSlot", { slot });
+    }
+
     sendBuildWoodBlock(x, y) {
         if (!this.room) return;
         this.room.send("buildWoodBlock", { x, y });

@@ -90,6 +90,8 @@ const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_TARGET_REFRESH_CELLS = 2;
 const ENEMY_PATH_MAX_VISITED_CELLS = 2000;
 const GAME_OVER_RESTART_SECONDS = 10;
+const ITEM_WOOD_AXE = "wood_axe";
+const ITEM_WOOD_BOW = "wood_bow";
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -376,8 +378,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
+            const attackItem = player.activeItem === ITEM_WOOD_BOW ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
             player.facingDirection = attackDirection;
             player.attackDirection = attackDirection;
+            player.attackItem = attackItem;
             player.attackSeq++;
             sp.attackLockMs = ATTACK_LOCK_MS;
             sp.attackLockX = player.x;
@@ -388,12 +392,18 @@ export class ShmupRoom extends Room<GameRoomState> {
             const attackOrigin = { x: player.x, y: player.y };
             const targetX = data?.targetX;
             const targetY = data?.targetY;
+            if (attackItem === ITEM_WOOD_BOW) return;
+
             setTimeout(() => {
                 this.applyDelayedTreeAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
             }, TREE_ATTACK_IMPACT_DELAY_MS);
             setTimeout(() => {
                 this.applyDelayedEnemyAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
             }, ENEMY_ATTACK_IMPACT_DELAY_MS);
+        });
+
+        this.onMessage("equipSlot", (client, data) => {
+            this.equipPlayerSlot(client.sessionId, data);
         });
 
         this.onMessage("buildWoodBlock", (client, data) => {
@@ -403,6 +413,18 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("removeWoodBlock", (client, data) => {
             this.tryRemoveWoodBlock(client.sessionId, data);
         });
+    }
+
+    private equipPlayerSlot(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
+
+        const slot = Number((data as { slot?: unknown })?.slot);
+        if (slot !== 1 && slot !== 2) return;
+
+        player.activeSlot = slot;
+        player.activeItem = slot === 2 ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
     }
 
     onJoin(client: Client) {
@@ -418,6 +440,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
+        ps.activeSlot = 1;
+        ps.activeItem = ITEM_WOOD_AXE;
+        ps.attackItem = ITEM_WOOD_AXE;
         ps.attackSeq = 0;
         this.state.players.set(client.sessionId, ps);
 
@@ -468,6 +493,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.reviveProgress = 0;
             player.facingDirection = "N";
             player.attackDirection = "N";
+            player.activeSlot = 1;
+            player.activeItem = ITEM_WOOD_AXE;
+            player.attackItem = ITEM_WOOD_AXE;
             player.attackSeq = 0;
 
             const sp = this.serverPlayers.get(sid);
