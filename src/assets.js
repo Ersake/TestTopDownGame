@@ -58,6 +58,10 @@ export default {
             key: 'wood-bow-icon',
             args: ['assets/Bow - wooden.png']
         },
+        hammerIcon: {
+            key: 'hammer-icon',
+            args: ['assets/hammer.png']
+        },
     },
     'spritesheet': {
         ships: {

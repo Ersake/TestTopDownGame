@@ -114,6 +114,7 @@ const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
 const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
+const ITEM_HAMMER = 'hammer';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -208,7 +209,7 @@ export class Game extends Phaser.Scene {
         this.localExperienceState = null;
         this.localActiveSlot = 1;
         this.hotbarSlots = [];
-        this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, null, null, null, null, null, null, null];
+        this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, null, null, null, null, null, null];
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -428,7 +429,9 @@ export class Game extends Phaser.Scene {
                 ? ASSETS.image.woodAxeIcon.key
                 : item === ITEM_WOOD_BOW
                     ? ASSETS.image.woodBowIcon.key
-                    : null;
+                    : item === ITEM_HAMMER
+                        ? ASSETS.image.hammerIcon.key
+                        : null;
             const icon = iconKey
                 ? this.add.image(x, y + 2, iconKey)
                     .setOrigin(0.5)
@@ -536,22 +539,19 @@ export class Game extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
             interact: Phaser.Input.Keyboard.KeyCodes.F,
-            build: Phaser.Input.Keyboard.KeyCodes.TAB,
             escape: Phaser.Input.Keyboard.KeyCodes.ESC,
             slot1: Phaser.Input.Keyboard.KeyCodes.ONE,
             slot2: Phaser.Input.Keyboard.KeyCodes.TWO,
+            slot3: Phaser.Input.Keyboard.KeyCodes.THREE,
         });
 
         this.input.mouse?.disableContextMenu();
-        this.keys.build.on('down', (key, event) => {
-            event?.preventDefault();
-            this.toggleBuildMode();
-        });
         this.keys.escape.on('down', (key, event) => {
             this.handleEscapeQuit(event);
         });
         this.keys.slot1.on('down', () => this.equipHotbarSlot(1));
         this.keys.slot2.on('down', () => this.equipHotbarSlot(2));
+        this.keys.slot3.on('down', () => this.equipHotbarSlot(3));
         this.input.keyboard.on('keydown-ESC', (event) => {
             this.handleEscapeQuit(event);
         });
@@ -593,7 +593,7 @@ export class Game extends Phaser.Scene {
 
     // ─── Networking ───────────────────────────────────────────────────────────
     equipHotbarSlot(slot) {
-        if (slot !== 1 && slot !== 2) return;
+        if (slot !== 1 && slot !== 2 && slot !== 3) return;
         this.localActiveSlot = slot;
         this.updateHotbarSelection();
         RoomClient.sendEquipSlot(slot);
@@ -603,9 +603,34 @@ export class Game extends Phaser.Scene {
         if (!animationState) return;
 
         animationState.activeSlot = slot;
-        animationState.activeItem = slot === 2 ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
+        animationState.activeItem = this.getItemForHotbarSlot(slot);
+        this.syncBuildModeForActiveItem(animationState.activeItem);
         if (!animationState.attacking && !animationState.dead) {
             this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        }
+    }
+
+    getItemForHotbarSlot(slot) {
+        return this.hotbarSlotItems[slot - 1] || ITEM_WOOD_AXE;
+    }
+
+    syncBuildModeForActiveItem(item) {
+        const shouldBuild = item === ITEM_HAMMER;
+        if (this.isBuildModeActive === shouldBuild) return;
+
+        this.isBuildModeActive = shouldBuild;
+        if (this.isBuildModeActive) {
+            this.stopHeldAttack();
+        }
+        if (this.buildGridGraphics) {
+            this.buildGridGraphics.setVisible(this.isBuildModeActive);
+        }
+        this.createBuildPreview();
+        this.buildPreview?.setVisible(this.isBuildModeActive);
+        if (this.isBuildModeActive) {
+            this.updateBuildPreview(this.input.activePointer);
+        } else {
+            this.resetBuildDragState();
         }
     }
 
@@ -824,6 +849,7 @@ export class Game extends Phaser.Scene {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (!animationState) return;
                 animationState.activeItem = item || ITEM_WOOD_AXE;
+                if (isLocal) this.syncBuildModeForActiveItem(animationState.activeItem);
                 if (!animationState.attacking && !animationState.dead) {
                     this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
                 }
@@ -866,6 +892,7 @@ export class Game extends Phaser.Scene {
                 this.updateLocalExperienceState(player);
                 this.localActiveSlot = player.activeSlot || 1;
                 this.updateHotbarSelection();
+                this.syncBuildModeForActiveItem(player.activeItem || ITEM_WOOD_AXE);
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
@@ -1823,6 +1850,10 @@ export class Game extends Phaser.Scene {
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
         const item = animationState.activeItem || ITEM_WOOD_AXE;
+        if (item === ITEM_HAMMER) {
+            this.hidePlayerWeapon(sessionId);
+            return;
+        }
         const row = DIRECTION_ORDER.indexOf(nextDirection);
         const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
         weapon.setVisible(true);

@@ -96,6 +96,7 @@ const ENEMY_PATH_MAX_VISITED_CELLS = 2000;
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
+const ITEM_HAMMER = "hammer";
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -379,6 +380,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
             if (sp.attackCooldownMs > 0) return;
+            if (player.activeItem === ITEM_HAMMER) return;
             this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
@@ -430,10 +432,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
 
         const slot = Number((data as { slot?: unknown })?.slot);
-        if (slot !== 1 && slot !== 2) return;
+        if (slot !== 1 && slot !== 2 && slot !== 3) return;
 
         player.activeSlot = slot;
-        player.activeItem = slot === 2 ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
+        player.activeItem = slot === 2 ? ITEM_WOOD_BOW : slot === 3 ? ITEM_HAMMER : ITEM_WOOD_AXE;
     }
 
     onJoin(client: Client) {
