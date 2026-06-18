@@ -48,6 +48,10 @@ export default {
             key: 'fireball-cast',
             args: ['assets/fireballcast.mp3']
         },
+        dkAttack: {
+            key: 'dk-attack-sound',
+            args: ['assets/DKattacksound.mp3']
+        },
     },
     'image': {
         treeBottom: {
@@ -251,6 +255,48 @@ export default {
         casterDeath: {
             key: 'caster-death',
             args: ['assets/CasterDie.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkWalk: {
+            key: 'dk-walk',
+            args: ['assets/DKWalk.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkRun: {
+            key: 'dk-run',
+            args: ['assets/DKRun.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkAttack: {
+            key: 'dk-attack',
+            args: ['assets/DKAttack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkIdle: {
+            key: 'dk-idle',
+            args: ['assets/DKIdle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkTakeDamage: {
+            key: 'dk-take-damage',
+            args: ['assets/DKTakeDamage.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        dkDeath: {
+            key: 'dk-death',
+            args: ['assets/DKDie.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

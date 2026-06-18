@@ -24,6 +24,7 @@ const PLAYER_VISUAL_SNAP_DISTANCE = 96;
 const PLAYER_BODY_DEPTH = 100;
 const PLAYER_WEAPON_DEPTH = 101;
 const ENEMY_DISPLAY_SIZE = 128;
+const DARK_KNIGHT_DISPLAY_SIZE = ENEMY_DISPLAY_SIZE * 1.5;
 const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
@@ -49,6 +50,8 @@ const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
 const ENEMY_ATTACK_RANGE = 26;
 const CASTER_CAST_RANGE = 360;
+const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
+const DARK_KNIGHT_AOE_RADIUS = 72;
 const ENEMY_ATTACK_HIT_OFFSET = 28;
 const ENEMY_ATTACK_HIT_HW = 42;
 const ENEMY_ATTACK_HIT_HH = 36;
@@ -96,6 +99,7 @@ const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
 const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
+const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.55;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_MAX_HEALTH = 5;
@@ -645,6 +649,12 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.caster.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.caster.damage).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.caster.death).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.walk).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.idle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.dk.death).forEach(animation => this.createAnimation(animation));
         this.createAnimation(ANIMATION.fireball);
     }
 
@@ -1298,10 +1308,11 @@ export class Game extends Phaser.Scene {
             if (!enemyId || this.enemySprites.has(enemyId)) return;
             const enemyAnimationKey = this.getEnemyAnimationKey(enemy);
             const runTexture = ASSETS.spritesheet[`${enemyAnimationKey}Run`]?.key || ASSETS.spritesheet.enemy1Run.key;
+            const displaySize = enemyAnimationKey === 'dk' ? DARK_KNIGHT_DISPLAY_SIZE : ENEMY_DISPLAY_SIZE;
 
             const sprite = this.add.sprite(enemy.x, enemy.y + ENEMY_VISUAL_Y_OFFSET, runTexture, 0)
                 .setDepth(100)
-                .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
+                .setDisplaySize(displaySize, displaySize);
             this.registerWorldObject(sprite);
             this.enemySprites.set(enemyId, sprite);
             const enemyHealthBackground = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH);
@@ -1932,10 +1943,14 @@ export class Game extends Phaser.Scene {
             graphics.lineStyle(2, 0xffdd66, 0.95);
             graphics.strokeCircle(x, y + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS);
             const isCaster = animationState?.enemyType === 3 || animationState?.animationKey === 'caster';
-            graphics.lineStyle(1, isCaster ? 0xff66dd : 0xff8844, 0.65);
-            graphics.strokeCircle(x, y, isCaster ? CASTER_CAST_RANGE : ENEMY_ATTACK_RANGE);
+            const isDarkKnight = this.isDarkKnightAnimationState(animationState);
+            graphics.lineStyle(1, isCaster ? 0xff66dd : isDarkKnight ? 0x8844ff : 0xff8844, 0.65);
+            graphics.strokeCircle(x, y, isCaster ? CASTER_CAST_RANGE : isDarkKnight ? DARK_KNIGHT_DETECTION_RANGE : ENEMY_ATTACK_RANGE);
 
-            if (animationState?.attacking && !isCaster) {
+            if (animationState?.attacking && isDarkKnight) {
+                graphics.lineStyle(2, 0xaa66ff, 0.95);
+                graphics.strokeCircle(x, y, DARK_KNIGHT_AOE_RADIUS);
+            } else if (animationState?.attacking && !isCaster) {
                 this.drawEnemyAttackHitbox(graphics, x, y, animationState.direction || 'S');
             }
         });
@@ -2542,6 +2557,10 @@ export class Game extends Phaser.Scene {
         return animationState?.enemyType === 3 || animationState?.animationKey === 'caster';
     }
 
+    isDarkKnightAnimationState(animationState) {
+        return animationState?.enemyType === 4 || animationState?.animationKey === 'dk';
+    }
+
     startCasterChargeSound(enemyId) {
         const animationState = this.enemyAnimationState.get(enemyId);
         if (!this.isCasterAnimationState(animationState) || animationState.dead) return;
@@ -2706,7 +2725,18 @@ export class Game extends Phaser.Scene {
         if (animationState.attacking) return;
 
         if (animationState.action === 'idle') {
+            const animationKey = animationState.animationKey || 'enemy1';
+            if (ANIMATION[animationKey]?.idle?.[nextDirection]) {
+                this.playEnemyAnimation(enemyId, 'idle', nextDirection);
+                return;
+            }
             this.setEnemyIdleFrame(enemyId, nextDirection);
+            return;
+        }
+
+        if (animationState.action === 'walk') {
+            if (this.playEnemyAnimation(enemyId, 'walk', nextDirection)) return;
+            this.playEnemyAnimation(enemyId, 'run', nextDirection);
             return;
         }
 
@@ -2732,6 +2762,14 @@ export class Game extends Phaser.Scene {
                 spatialFalloffPower: FIREBALL_SOUND_FALLOFF_POWER,
                 stackKey: ASSETS.audio.fireballCast.key,
                 stackVolumeMultiplier: FIREBALL_STACK_VOLUME_MULTIPLIER,
+            });
+        }
+        if (this.isDarkKnightAnimationState(animationState)) {
+            this.playSfx(ASSETS.audio.dkAttack.key, DARK_KNIGHT_ATTACK_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: true,
+                worldX: animationState.x,
+                worldY: animationState.y,
             });
         }
 
@@ -2846,6 +2884,7 @@ export class Game extends Phaser.Scene {
 
     getEnemyAnimationKey(enemy) {
         const enemyType = Number(enemy?.enemyType);
+        if (enemyType === 4) return 'dk';
         if (enemyType === 3) return 'caster';
         if (enemyType === 2) return 'enemy2';
         return 'enemy1';
@@ -3021,8 +3060,9 @@ export class Game extends Phaser.Scene {
         const sprite = this.enemySprites.get(enemyId);
         if (!healthBar || !sprite) return;
 
-        const health = Phaser.Math.Clamp(healthBar.enemy.health || 0, 0, ENEMY_MAX_HEALTH);
-        const fillWidth = (health / ENEMY_MAX_HEALTH) * ENEMY_HEALTH_BAR_WIDTH;
+        const maxHealth = Math.max(1, healthBar.enemy.maxHealth || ENEMY_MAX_HEALTH);
+        const health = Phaser.Math.Clamp(healthBar.enemy.health || 0, 0, maxHealth);
+        const fillWidth = (health / maxHealth) * ENEMY_HEALTH_BAR_WIDTH;
         const x = sprite.x - ENEMY_HEALTH_BAR_WIDTH * 0.5;
         const y = sprite.y + ENEMY_HEALTH_BAR_Y_OFFSET;
 

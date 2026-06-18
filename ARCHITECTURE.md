@@ -137,7 +137,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Enemy State
 
-`EnemyState` includes position, enemy type, power, health, facing direction, action, attack sequence, damage sequence, death state, and death sequence.
+`EnemyState` includes position, enemy type, power, health, max health, facing direction, action, attack sequence, damage sequence, death state, and death sequence.
 
 ### Private Server State
 

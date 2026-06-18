@@ -60,6 +60,14 @@ export default {
         damage: createDirectionalAnimations('caster-damage', ASSETS.spritesheet.casterCharge.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
         death: createDirectionalAnimations('caster-death', ASSETS.spritesheet.casterDeath.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
+    dk: {
+        walk: createDirectionalAnimations('dk-walk', ASSETS.spritesheet.dkWalk.key, ENEMY_DIRECTIONS),
+        run: createDirectionalAnimations('dk-run', ASSETS.spritesheet.dkRun.key, ENEMY_DIRECTIONS),
+        attack: createDirectionalAnimations('dk-attack', ASSETS.spritesheet.dkAttack.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        idle: createDirectionalAnimations('dk-idle', ASSETS.spritesheet.dkIdle.key, ENEMY_DIRECTIONS),
+        damage: createDirectionalAnimations('dk-damage', ASSETS.spritesheet.dkTakeDamage.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        death: createDirectionalAnimations('dk-death', ASSETS.spritesheet.dkDeath.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+    },
     fireball: {
         key: 'fireball-fly',
         texture: ASSETS.spritesheet.fireball.key,

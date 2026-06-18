@@ -68,6 +68,7 @@ const ENEMY2_COUNT = 3;
 const ENEMY_WAVE_COUNT = 3;
 const ENEMY_WAVE_INTERVAL_MS = 30000;
 const ENEMY_TYPE_CASTER = 3;
+const ENEMY_TYPE_DARK_KNIGHT = 4;
 const CASTER_INITIAL_COUNT = 1;
 const CASTER_WAVE_COUNT = 1;
 const CASTER_CAST_RANGE = 360;
@@ -75,6 +76,20 @@ const CASTER_CHARGE_MS = 1000;
 const CASTER_ATTACK_MS = 500;
 const CASTER_FIREBALL_SPEED = 225;
 const CASTER_FIREBALL_DAMAGE = 1;
+const DARK_KNIGHT_INITIAL_COUNT = 1;
+const DARK_KNIGHT_WAVE_COUNT = 1;
+const DARK_KNIGHT_WAVE_INTERVAL_MS = 60000;
+const DARK_KNIGHT_HEALTH = 10;
+const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
+const DARK_KNIGHT_WALK_SPEED = 88;
+const DARK_KNIGHT_RUSH_SPEED = 230;
+const DARK_KNIGHT_MARK_REACH_RADIUS = 12;
+const DARK_KNIGHT_WOOD_REACH_RANGE = 14;
+const DARK_KNIGHT_ATTACK_MS = 650;
+const DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS = 600;
+const DARK_KNIGHT_COOLDOWN_MS = 1560;
+const DARK_KNIGHT_AOE_RADIUS = 72;
+const DARK_KNIGHT_ATTACK_DAMAGE = 2;
 const ENEMY1_SPEED = 114.75;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_PLAYER_ATTACK_RANGE = 72;
@@ -260,13 +275,17 @@ interface ServerPlayer {
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
-type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "woodWindup" | "woodAttack" | "stun";
+type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "woodWindup" | "woodAttack" | "dkWalk" | "dkRush" | "dkAttack" | "dkCooldown" | "stun";
+type DarkKnightTargetKind = "playerMark" | "woodBlock" | null;
 interface PathCell { col: number; row: number; }
 interface ServerEnemy {
     mode: EnemyMode;
     modeMs: number;
     targetId: string | null;
     targetWoodBlockId: string | null;
+    darkKnightTargetKind: DarkKnightTargetKind;
+    darkKnightMarkX: number;
+    darkKnightMarkY: number;
     pathRefreshMs: number;
     pathTargetCell: PathCell | null;
     path: PathCell[];
@@ -349,6 +368,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverTreeHealth    = new Map<string, number>();
     private elapsedMs           = 0;
     private enemyWaveElapsedMs  = 0;
+    private darkKnightWaveElapsedMs = 0;
     private gameOverRestartMs   = 0;
 
     private generateRoomCode(): string {
@@ -602,6 +622,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.state.gameStarted = true;
             this.elapsedMs = 0;
             this.enemyWaveElapsedMs = 0;
+            this.darkKnightWaveElapsedMs = 0;
             this.state.elapsedSeconds = 0;
             this.state.gameOverCountdown = 0;
             this.spawnInitialEnemies();
@@ -664,6 +685,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.teamScore = 0;
         this.elapsedMs = 0;
         this.enemyWaveElapsedMs = 0;
+        this.darkKnightWaveElapsedMs = 0;
         this.state.elapsedSeconds = 0;
         this.state.gameOver = false;
         this.state.gameOverCountdown = 0;
@@ -1487,6 +1509,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enemies.clear();
         this.serverEnemies.clear();
         this.enemyWaveElapsedMs = 0;
+        this.darkKnightWaveElapsedMs = 0;
 
         for (let i = 0; i < ENEMY1_COUNT; i++) {
             this.spawnEnemy(1, i);
@@ -1497,6 +1520,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         for (let i = 0; i < CASTER_INITIAL_COUNT; i++) {
             this.spawnEnemy(ENEMY_TYPE_CASTER, ENEMY1_COUNT + ENEMY2_COUNT + i);
         }
+        for (let i = 0; i < DARK_KNIGHT_INITIAL_COUNT; i++) {
+            this.spawnEnemy(ENEMY_TYPE_DARK_KNIGHT, ENEMY1_COUNT + ENEMY2_COUNT + CASTER_INITIAL_COUNT + i);
+        }
     }
 
     private tickEnemyWaves(dtMs: number) {
@@ -1504,6 +1530,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         while (this.enemyWaveElapsedMs >= ENEMY_WAVE_INTERVAL_MS) {
             this.enemyWaveElapsedMs -= ENEMY_WAVE_INTERVAL_MS;
             this.spawnEnemyWave();
+        }
+
+        this.darkKnightWaveElapsedMs += dtMs;
+        while (this.darkKnightWaveElapsedMs >= DARK_KNIGHT_WAVE_INTERVAL_MS) {
+            this.darkKnightWaveElapsedMs -= DARK_KNIGHT_WAVE_INTERVAL_MS;
+            for (let i = 0; i < DARK_KNIGHT_WAVE_COUNT; i++) {
+                this.spawnEnemy(ENEMY_TYPE_DARK_KNIGHT, rndInt(0, 3));
+            }
         }
     }
 
@@ -1524,8 +1558,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         e.shipId = 0;
         e.enemyType = enemyType;
         e.power = 1;
-        e.health = 3;
-        e.action = "run";
+        e.maxHealth = enemyType === ENEMY_TYPE_DARK_KNIGHT ? DARK_KNIGHT_HEALTH : 3;
+        e.health = e.maxHealth;
+        e.action = enemyType === ENEMY_TYPE_DARK_KNIGHT ? "walk" : "run";
         e.isDead = false;
         e.deathSeq = 0;
 
@@ -1550,10 +1585,13 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.enemies.set(id, e);
         this.serverEnemies.set(id, {
-            mode: "chase",
+            mode: enemyType === ENEMY_TYPE_DARK_KNIGHT ? "dkWalk" : "chase",
             modeMs: 0,
             targetId: target?.id || null,
             targetWoodBlockId: null,
+            darkKnightTargetKind: null,
+            darkKnightMarkX: e.x,
+            darkKnightMarkY: e.y,
             pathRefreshMs: 0,
             pathTargetCell: null,
             path: [],
@@ -1571,7 +1609,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 enemy.action = "idle";
                 se.modeMs = Math.max(0, se.modeMs - dtMs);
                 if (se.modeMs === 0) {
-                    se.mode = "chase";
+                    se.mode = enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? "dkWalk" : "chase";
                 }
                 return;
             }
@@ -1596,6 +1634,11 @@ export class ShmupRoom extends Room<GameRoomState> {
 
             if (enemy.enemyType === ENEMY_TYPE_CASTER) {
                 this.tickCasterEnemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
+                return;
+            }
+
+            if (enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT) {
+                this.tickDarkKnightEnemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
                 return;
             }
 
@@ -1824,6 +1867,206 @@ export class ShmupRoom extends Room<GameRoomState> {
         enemy.y = directResolved.y;
     }
 
+    private tickDarkKnightEnemy(
+        enemyId: string,
+        enemy: EnemyState,
+        se: ServerEnemy,
+        target: { id: string; player: PlayerState; distanceSq: number },
+        dx: number,
+        dy: number,
+        distance: number,
+        dtSec: number,
+        dtMs: number,
+    ) {
+        if (se.mode === "dkAttack") {
+            enemy.action = "attack";
+            se.modeMs = Math.max(0, se.modeMs - dtMs);
+            if (se.modeMs === 0) {
+                se.mode = "dkCooldown";
+                se.modeMs = DARK_KNIGHT_COOLDOWN_MS;
+                enemy.action = "idle";
+            }
+            return;
+        }
+
+        if (se.mode === "dkCooldown") {
+            enemy.action = "idle";
+            se.modeMs = Math.max(0, se.modeMs - dtMs);
+            if (se.modeMs === 0) {
+                se.mode = "dkWalk";
+                se.targetWoodBlockId = null;
+                se.darkKnightTargetKind = null;
+                enemy.action = "walk";
+            }
+            return;
+        }
+
+        if (se.mode === "dkRush") {
+            enemy.action = "run";
+            if (this.tickDarkKnightRush(enemyId, enemy, se, dtSec)) return;
+            se.mode = "dkWalk";
+            se.targetWoodBlockId = null;
+            se.darkKnightTargetKind = null;
+        }
+
+        if (distance <= DARK_KNIGHT_DETECTION_RANGE) {
+            this.startDarkKnightRush(enemy, se, target.player);
+            return;
+        }
+
+        enemy.action = "walk";
+        se.mode = "dkWalk";
+        se.modeMs = 0;
+        if (distance <= 0) return;
+
+        const move = Math.min(DARK_KNIGHT_WALK_SPEED * dtSec, distance);
+        if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+            se.path = [];
+            se.pathTargetCell = null;
+            se.pathRefreshMs = 0;
+            se.targetWoodBlockId = null;
+            const resolved = this.moveEnemyWithWoodBlocks(
+                enemy,
+                enemy.x + (dx / distance) * move,
+                enemy.y + (dy / distance) * move,
+            );
+            enemy.x = resolved.x;
+            enemy.y = resolved.y;
+            return;
+        }
+
+        const directResolved = this.moveEnemyWithWoodBlocks(
+            enemy,
+            enemy.x + (dx / distance) * move,
+            enemy.y + (dy / distance) * move,
+        );
+
+        se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
+        if (this.shouldRefreshEnemyPath(se, target.player)) {
+            this.refreshEnemyWoodBlockPath(enemy, se, target.player);
+        }
+
+        const pathMoved = this.followEnemyPath(enemy, se, move);
+        if (pathMoved) return;
+
+        enemy.x = directResolved.x;
+        enemy.y = directResolved.y;
+    }
+
+    private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: PlayerState) {
+        se.mode = "dkRush";
+        se.modeMs = 0;
+        se.darkKnightMarkX = target.x;
+        se.darkKnightMarkY = target.y;
+        se.targetWoodBlockId = null;
+        se.darkKnightTargetKind = "playerMark";
+        se.path = [];
+        se.pathTargetCell = null;
+        se.pathRefreshMs = 0;
+
+        const blockingBlock = this.findBlockingWoodBlockToPoint(
+            enemy.x,
+            enemy.y + ENEMY_FOOT_Y_OFFSET,
+            target.x,
+            target.y + PLAYER_TREE_Y_OFFSET,
+        );
+        if (blockingBlock) {
+            se.targetWoodBlockId = blockingBlock.id;
+            se.darkKnightTargetKind = "woodBlock";
+        }
+
+        const direction = directionFromInput(
+            (blockingBlock?.x ?? target.x) - enemy.x,
+            ((blockingBlock?.y ?? target.y) - enemy.y),
+        );
+        if (direction) enemy.facingDirection = direction;
+        enemy.action = "run";
+    }
+
+    private tickDarkKnightRush(enemyId: string, enemy: EnemyState, se: ServerEnemy, dtSec: number): boolean {
+        let targetX = se.darkKnightMarkX;
+        let targetY = se.darkKnightMarkY;
+
+        if (se.darkKnightTargetKind === "woodBlock") {
+            const block = se.targetWoodBlockId ? this.state.woodBlocks.get(se.targetWoodBlockId) : undefined;
+            if (!block) return false;
+
+            const footX = enemy.x;
+            const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
+            const distanceSq = pointAabbDistanceSq(
+                footX,
+                footY,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            );
+            if (distanceSq <= DARK_KNIGHT_WOOD_REACH_RANGE * DARK_KNIGHT_WOOD_REACH_RANGE) {
+                this.startDarkKnightAttack(enemyId, enemy, se);
+                return true;
+            }
+
+            targetX = block.x;
+            targetY = block.y - ENEMY_FOOT_Y_OFFSET;
+        } else {
+            const blockingBlock = this.findBlockingWoodBlockToPoint(
+                enemy.x,
+                enemy.y + ENEMY_FOOT_Y_OFFSET,
+                se.darkKnightMarkX,
+                se.darkKnightMarkY + PLAYER_TREE_Y_OFFSET,
+            );
+            if (blockingBlock) {
+                se.targetWoodBlockId = blockingBlock.id;
+                se.darkKnightTargetKind = "woodBlock";
+                targetX = blockingBlock.x;
+                targetY = blockingBlock.y - ENEMY_FOOT_Y_OFFSET;
+            }
+        }
+
+        const dx = targetX - enemy.x;
+        const dy = targetY - enemy.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= DARK_KNIGHT_MARK_REACH_RADIUS) {
+            this.startDarkKnightAttack(enemyId, enemy, se);
+            return true;
+        }
+
+        const direction = directionFromInput(dx, dy);
+        if (direction) enemy.facingDirection = direction;
+
+        const move = Math.min(DARK_KNIGHT_RUSH_SPEED * dtSec, distance);
+        const resolved = this.moveEnemyWithWoodBlocks(
+            enemy,
+            enemy.x + (dx / distance) * move,
+            enemy.y + (dy / distance) * move,
+        );
+        const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
+        enemy.x = resolved.x;
+        enemy.y = resolved.y;
+
+        if (!moved && se.darkKnightTargetKind !== "woodBlock") {
+            const blockingBlock = this.findNearestEnemyWoodBlockInAttackRange(enemy)
+                || this.findBlockingWoodBlockToPoint(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, targetX, targetY + ENEMY_FOOT_Y_OFFSET);
+            if (blockingBlock) {
+                se.targetWoodBlockId = blockingBlock.id;
+                se.darkKnightTargetKind = "woodBlock";
+            }
+        }
+
+        return true;
+    }
+
+    private startDarkKnightAttack(enemyId: string, enemy: EnemyState, se: ServerEnemy) {
+        se.mode = "dkAttack";
+        se.modeMs = DARK_KNIGHT_ATTACK_MS;
+        enemy.action = "attack";
+        enemy.attackSeq++;
+        const attackOrigin = { x: enemy.x, y: enemy.y };
+        setTimeout(() => {
+            this.applyDarkKnightAoeImpact(enemyId, attackOrigin);
+        }, DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS);
+    }
+
     private moveEnemyWithWoodBlocks(enemy: EnemyState, nextX: number, nextY: number): { x: number; y: number } {
         let resolvedX = clamp(nextX, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
         let resolvedY = enemy.y;
@@ -1977,10 +2220,15 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private findEnemyBlockingWoodBlock(enemy: EnemyState, target: PlayerState): WoodBlockState | null {
-        const fromX = enemy.x;
-        const fromY = enemy.y + ENEMY_FOOT_Y_OFFSET;
-        const toX = target.x;
-        const toY = target.y + PLAYER_TREE_Y_OFFSET;
+        return this.findBlockingWoodBlockToPoint(
+            enemy.x,
+            enemy.y + ENEMY_FOOT_Y_OFFSET,
+            target.x,
+            target.y + PLAYER_TREE_Y_OFFSET,
+        );
+    }
+
+    private findBlockingWoodBlockToPoint(fromX: number, fromY: number, toX: number, toY: number): WoodBlockState | null {
         let nearestBlock: WoodBlockState | null = null;
         let nearestT = Number.POSITIVE_INFINITY;
 
@@ -2003,6 +2251,49 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         return nearestBlock;
+    }
+
+    private applyDarkKnightAoeImpact(enemyId: string, attackOrigin: AttackOrigin) {
+        if (this.state.gameOver) return;
+        const enemy = this.state.enemies.get(enemyId);
+        if (!enemy || enemy.isDead) return;
+
+        const impactX = Number.isFinite(enemy.x) ? enemy.x : attackOrigin.x;
+        const impactY = Number.isFinite(enemy.y) ? enemy.y : attackOrigin.y;
+        this.state.players.forEach((player, playerId) => {
+            const sp = this.serverPlayers.get(playerId);
+            if (!sp || !sp.alive || player.isDead) return;
+
+            if (!circleOverlapsAabb(
+                impactX,
+                impactY,
+                DARK_KNIGHT_AOE_RADIUS,
+                player.x,
+                player.y,
+                PLAYER_HW,
+                PLAYER_HH,
+            )) return;
+
+            const hurt = this.damagePlayer(playerId, sp, player, DARK_KNIGHT_ATTACK_DAMAGE, enemyId);
+            if (hurt) this.broadcast("playerHurt", hurt);
+        });
+
+        const destroyedWoodBlockIds: string[] = [];
+        this.state.woodBlocks.forEach((block, blockId) => {
+            if (!circleOverlapsAabb(
+                impactX,
+                impactY,
+                DARK_KNIGHT_AOE_RADIUS,
+                block.x,
+                block.y,
+                BUILD_BLOCK_HALF_SIZE,
+                BUILD_BLOCK_HALF_SIZE,
+            )) return;
+
+            block.health = Math.max(0, block.health - DARK_KNIGHT_ATTACK_DAMAGE);
+            if (block.health <= 0) destroyedWoodBlockIds.push(blockId);
+        });
+        destroyedWoodBlockIds.forEach((blockId) => this.state.woodBlocks.delete(blockId));
     }
 
     private findNearestEnemyWoodBlockInAttackRange(enemy: EnemyState): WoodBlockState | null {
