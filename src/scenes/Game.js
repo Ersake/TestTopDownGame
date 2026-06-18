@@ -973,7 +973,7 @@ export class Game extends Phaser.Scene {
                         this.playPlayerAttackAnimation(playerSessionId, direction, {
                             playAudio: false,
                             allowWhileCharging: true,
-                            restart: true,
+                            preserveProgress: true,
                         });
                         if (animationState.bowFullyCharged) this.pauseFullBowChargeAnimation(playerSessionId);
                         return;
@@ -2119,7 +2119,7 @@ export class Game extends Phaser.Scene {
             this.playPlayerAttackAnimation(sessionId, direction, {
                 playAudio: false,
                 allowWhileCharging: true,
-                restart: true,
+                preserveProgress: true,
             });
             if (animationState.bowFullyCharged) this.pauseFullBowChargeAnimation(sessionId);
         }
@@ -2249,7 +2249,27 @@ export class Game extends Phaser.Scene {
         weapon.setVisible(false);
     }
 
-    playPlayerWeaponAnimation(sessionId, item, direction, { restart = false } = {}) {
+    playDirectionalAnimation(gameObject, animationKey, { restart = false, preserveProgress = false } = {}) {
+        const animationState = gameObject?.anims;
+        if (!animationState || !animationKey) return false;
+
+        const changingAnimation = animationState.currentAnim?.key !== animationKey;
+        const progress = preserveProgress && animationState.currentAnim
+            ? Phaser.Math.Clamp(animationState.getProgress(), 0, 1)
+            : null;
+
+        if (changingAnimation || !animationState.isPlaying) {
+            gameObject.play(animationKey);
+            if (progress !== null) animationState.setProgress(progress);
+        } else if (restart) {
+            animationState.stop();
+            gameObject.play(animationKey);
+        }
+
+        return true;
+    }
+
+    playPlayerWeaponAnimation(sessionId, item, direction, { restart = false, preserveProgress = false } = {}) {
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!weapon || !animationState || !weapon.visible) return false;
@@ -2259,12 +2279,7 @@ export class Game extends Phaser.Scene {
         if (!animation) return false;
 
         weapon.setVisible(true);
-        if (weapon.anims.currentAnim?.key !== animation.key || !weapon.anims.isPlaying) {
-            weapon.play(animation.key);
-        } else if (restart) {
-            weapon.anims.stop();
-            weapon.play(animation.key);
-        }
+        this.playDirectionalAnimation(weapon, animation.key, { restart, preserveProgress });
 
         return true;
     }
@@ -2294,7 +2309,7 @@ export class Game extends Phaser.Scene {
         return true;
     }
 
-    playPlayerAttackAnimation(sessionId, direction, { playAudio = true, allowWhileCharging = false, restart = false, resumeBowRelease = false } = {}) {
+    playPlayerAttackAnimation(sessionId, direction, { playAudio = true, allowWhileCharging = false, restart = false, resumeBowRelease = false, preserveProgress = false } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || animationState.dead || !sprite.visible) return;
@@ -2306,8 +2321,8 @@ export class Game extends Phaser.Scene {
         const didResumeBowRelease = resumeBowRelease && attackItem === ITEM_WOOD_BOW && this.resumeBowReleaseAnimation(sessionId);
         if (!didResumeBowRelease) {
             const attackMode = this.getPlayerAttackMode(attackItem);
-            const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart: true });
-            const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart: true });
+            const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart, preserveProgress });
+            const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart, preserveProgress });
             if (!didPlay) {
                 animationState.attacking = false;
                 return;
@@ -2535,7 +2550,7 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    playPlayerAnimation(sessionId, mode, direction, { force = false, restart = false } = {}) {
+    playPlayerAnimation(sessionId, mode, direction, { force = false, restart = false, preserveProgress = false } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || !sprite.visible) return false;
@@ -2548,12 +2563,7 @@ export class Game extends Phaser.Scene {
         const animation = ANIMATION.player[mode]?.[nextDirection];
         if (!animation) return false;
 
-        if (sprite.anims.currentAnim?.key !== animation.key || !sprite.anims.isPlaying) {
-            sprite.play(animation.key);
-        } else if (restart) {
-            sprite.anims.stop();
-            sprite.play(animation.key);
-        }
+        this.playDirectionalAnimation(sprite, animation.key, { restart, preserveProgress });
 
         return true;
     }
