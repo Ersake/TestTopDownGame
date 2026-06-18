@@ -851,7 +851,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (enemy.health > 0) {
                 enemy.damageSeq++;
                 const se = this.serverEnemies.get(enemyId);
-                if (se) {
+                if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
                     se.mode = "stun";
                     se.modeMs = ENEMY_HIT_STUN_MS;
                     enemy.action = "idle";
@@ -887,7 +887,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (enemy.health > 0) {
             enemy.damageSeq++;
             const se = this.serverEnemies.get(enemyId);
-            if (se) {
+            if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
                 se.mode = "stun";
                 se.modeMs = ENEMY_HIT_STUN_MS;
                 enemy.action = "idle";
@@ -909,6 +909,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         return hitPayload;
+    }
+
+    private shouldPreserveDarkKnightAttackCooldown(enemy: EnemyState): boolean {
+        if (enemy.enemyType !== ENEMY_TYPE_DARK_KNIGHT) return false;
+        const se = this.serverEnemies.get(enemy.id);
+        return se?.mode === "dkAttack" || se?.mode === "dkCooldown";
     }
 
     private findEnemyHitsByAttack(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string[] {
