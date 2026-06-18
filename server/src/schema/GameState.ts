@@ -18,6 +18,9 @@ export class PlayerState extends Schema {
     @type("string")  activeItem: string = "wood_axe";
     @type("string")  attackItem: string = "wood_axe";
     @type("int32")   attackSeq: number = 0;
+    @type("boolean") bowCharging: boolean = false;
+    @type("float32") bowChargeProgress: number = 0;
+    @type("int32")   bowChargeSeq: number = 0;
 }
 
 export class EnemyState extends Schema {
@@ -42,6 +45,8 @@ export class PlayerBulletState extends Schema {
     @type("float32") y: number = 0;
     @type("int8")    power: number = 1;
     @type("string")  ownerId: string = "";
+    @type("string")  kind: string = "bullet";
+    @type("float32") angle: number = 0;
 }
 
 export class EnemyBulletState extends Schema {

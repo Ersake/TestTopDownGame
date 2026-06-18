@@ -99,6 +99,26 @@ class RoomClient {
         this.room.send("attack", { direction, targetX, targetY });
     }
 
+    sendBowChargeStart(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowChargeStart", { targetX, targetY });
+    }
+
+    sendBowAim(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowAim", { targetX, targetY });
+    }
+
+    sendBowRelease(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowRelease", { targetX, targetY });
+    }
+
+    sendBowCancel() {
+        if (!this.room) return;
+        this.room.send("bowCancel", {});
+    }
+
     sendEquipSlot(slot) {
         if (!this.room) return;
         this.room.send("equipSlot", { slot });

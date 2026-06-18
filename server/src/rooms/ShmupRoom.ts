@@ -38,13 +38,13 @@ const TREE_TRUNK_HW = 5;
 const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 350;
-const BOW_ATTACK_LOCK_MS = 400;
 const ATTACK_COOLDOWN_MS = 850;
 const TREE_ATTACK_IMPACT_DELAY_MS = 100;
 const ENEMY_ATTACK_IMPACT_DELAY_MS = 100;
-const BOW_ATTACK_IMPACT_DELAY_MS = 270;
-const BOW_RAY_RANGE = Math.hypot(WORLD_WIDTH, WORLD_HEIGHT);
-const BOW_RAY_HIT_RADIUS = 28;
+const BOW_CHARGE_MS = 700;
+const ARROW_SPEED = 900;
+const ARROW_RANGE = 1200;
+const ARROW_DAMAGE = 1;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
@@ -242,6 +242,12 @@ interface ServerPlayer {
     attackLockX: number;
     attackLockY: number;
     attackCooldownMs: number;
+    bowCharging: boolean;
+    bowChargeMs: number;
+    bowChargeX: number;
+    bowChargeY: number;
+    bowAimX: number;
+    bowAimY: number;
     revivingTargetId: string | null;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
@@ -257,7 +263,15 @@ interface ServerEnemy {
     pathTargetCell: PathCell | null;
     path: PathCell[];
 }
-interface ServerBullet  { vy: number; }
+interface ServerBullet {
+    vx: number;
+    vy: number;
+    rangeRemaining: number;
+    kind: string;
+}
+interface ServerEnemyBullet {
+    vy: number;
+}
 interface AttackOrigin {
     x: number;
     y: number;
@@ -321,7 +335,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverPlayers       = new Map<string, ServerPlayer>();
     private serverEnemies       = new Map<string, ServerEnemy>();
     private serverPlayerBullets = new Map<string, ServerBullet>();
-    private serverEnemyBullets  = new Map<string, ServerBullet>();
+    private serverEnemyBullets  = new Map<string, ServerEnemyBullet>();
     private serverTreeHealth    = new Map<string, number>();
     private elapsedMs           = 0;
     private enemyWaveElapsedMs  = 0;
@@ -380,16 +394,16 @@ export class ShmupRoom extends Room<GameRoomState> {
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
             if (sp.attackCooldownMs > 0) return;
-            if (player.activeItem === ITEM_HAMMER) return;
+            if (player.activeItem === ITEM_HAMMER || player.activeItem === ITEM_WOOD_BOW) return;
             this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
-            const attackItem = player.activeItem === ITEM_WOOD_BOW ? ITEM_WOOD_BOW : ITEM_WOOD_AXE;
+            const attackItem = ITEM_WOOD_AXE;
             player.facingDirection = attackDirection;
             player.attackDirection = attackDirection;
             player.attackItem = attackItem;
             player.attackSeq++;
-            sp.attackLockMs = attackItem === ITEM_WOOD_BOW ? BOW_ATTACK_LOCK_MS : ATTACK_LOCK_MS;
+            sp.attackLockMs = ATTACK_LOCK_MS;
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
             sp.attackCooldownMs = ATTACK_COOLDOWN_MS;
@@ -398,19 +412,31 @@ export class ShmupRoom extends Room<GameRoomState> {
             const attackOrigin = { x: player.x, y: player.y };
             const targetX = data?.targetX;
             const targetY = data?.targetY;
-            if (attackItem === ITEM_WOOD_BOW) {
-                setTimeout(() => {
-                    this.applyDelayedBowAttackImpact(client.sessionId, attackDirection, targetX, targetY);
-                }, BOW_ATTACK_IMPACT_DELAY_MS);
-                return;
-            }
 
             setTimeout(() => {
                 this.applyDelayedTreeAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
             }, TREE_ATTACK_IMPACT_DELAY_MS);
             setTimeout(() => {
-                this.applyDelayedEnemyAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
+            this.applyDelayedEnemyAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
             }, ENEMY_ATTACK_IMPACT_DELAY_MS);
+        });
+
+        this.onMessage("bowChargeStart", (client, data) => {
+            this.startBowCharge(client.sessionId, data);
+        });
+
+        this.onMessage("bowAim", (client, data) => {
+            this.updateBowAim(client.sessionId, data);
+        });
+
+        this.onMessage("bowRelease", (client, data) => {
+            this.releaseBowCharge(client.sessionId, data);
+        });
+
+        this.onMessage("bowCancel", (client) => {
+            const sp = this.serverPlayers.get(client.sessionId);
+            const player = this.state.players.get(client.sessionId);
+            if (sp && player) this.clearBowCharge(player, sp);
         });
 
         this.onMessage("equipSlot", (client, data) => {
@@ -436,6 +462,90 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         player.activeSlot = slot;
         player.activeItem = slot === 2 ? ITEM_WOOD_BOW : slot === 3 ? ITEM_HAMMER : ITEM_WOOD_AXE;
+        if (player.activeItem !== ITEM_WOOD_BOW) {
+            this.clearBowCharge(player, sp);
+        }
+    }
+
+    private startBowCharge(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
+        if (player.activeItem !== ITEM_WOOD_BOW || sp.bowCharging) return;
+
+        this.cancelRevive(sessionId);
+        const vector = this.getBowAimVector(player, data);
+        const direction = directionFromInput(vector.x, vector.y) || player.facingDirection || "N";
+        sp.bowCharging = true;
+        sp.bowChargeMs = 0;
+        sp.bowChargeX = player.x;
+        sp.bowChargeY = player.y;
+        sp.bowAimX = vector.x;
+        sp.bowAimY = vector.y;
+        sp.vx = 0;
+        sp.vy = 0;
+        sp.attackLockMs = 0;
+        player.bowCharging = true;
+        player.bowChargeProgress = 0;
+        player.bowChargeSeq++;
+        player.facingDirection = direction;
+        player.attackDirection = direction;
+        player.attackItem = ITEM_WOOD_BOW;
+    }
+
+    private updateBowAim(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.bowCharging || player.isDead) return;
+
+        const vector = this.getBowAimVector(player, data);
+        const direction = directionFromInput(vector.x, vector.y) || player.facingDirection || "N";
+        sp.bowAimX = vector.x;
+        sp.bowAimY = vector.y;
+        player.facingDirection = direction;
+        player.attackDirection = direction;
+    }
+
+    private releaseBowCharge(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.bowCharging || !sp.alive || player.isDead || this.state.gameOver) return;
+
+        this.updateBowAim(sessionId, data);
+        const charged = player.bowChargeProgress >= 1;
+        const origin = { x: player.x, y: player.y + ATTACK_HIT_ORIGIN_Y_OFFSET };
+        const vector = { x: sp.bowAimX, y: sp.bowAimY };
+        const direction = directionFromInput(vector.x, vector.y) || player.facingDirection || "N";
+        this.clearBowCharge(player, sp);
+
+        if (!charged) return;
+
+        player.facingDirection = direction;
+        player.attackDirection = direction;
+        player.attackItem = ITEM_WOOD_BOW;
+        player.attackSeq++;
+        this.spawnArrow(origin.x, origin.y, vector.x, vector.y, sessionId);
+    }
+
+    private clearBowCharge(player: PlayerState, sp: ServerPlayer) {
+        sp.bowCharging = false;
+        sp.bowChargeMs = 0;
+        sp.bowChargeX = player.x;
+        sp.bowChargeY = player.y;
+        player.bowCharging = false;
+        player.bowChargeProgress = 0;
+    }
+
+    private getBowAimVector(player: PlayerState, data: unknown): AttackVector {
+        const vector = this.getAttackVector(
+            { x: player.x, y: player.y },
+            player.facingDirection || "N",
+            (data as { targetX?: unknown })?.targetX,
+            (data as { targetY?: unknown })?.targetY,
+        );
+        const length = Math.hypot(vector.x, vector.y);
+        if (length <= 0.0001) return DIRECTION_VECTORS[player.facingDirection] || DIRECTION_VECTORS.N;
+        return { x: vector.x / length, y: vector.y / length };
     }
 
     onJoin(client: Client) {
@@ -455,6 +565,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.activeItem = ITEM_WOOD_AXE;
         ps.attackItem = ITEM_WOOD_AXE;
         ps.attackSeq = 0;
+        ps.bowCharging = false;
+        ps.bowChargeProgress = 0;
+        ps.bowChargeSeq = 0;
         this.state.players.set(client.sessionId, ps);
 
         this.serverPlayers.set(client.sessionId, {
@@ -464,6 +577,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockX: ps.x,
             attackLockY: ps.y,
             attackCooldownMs: 0,
+            bowCharging: false,
+            bowChargeMs: 0,
+            bowChargeX: ps.x,
+            bowChargeY: ps.y,
+            bowAimX: 0,
+            bowAimY: -1,
             revivingTargetId: null,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
@@ -508,6 +627,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.activeItem = ITEM_WOOD_AXE;
             player.attackItem = ITEM_WOOD_AXE;
             player.attackSeq = 0;
+            player.bowCharging = false;
+            player.bowChargeProgress = 0;
+            player.bowChargeSeq = 0;
 
             const sp = this.serverPlayers.get(sid);
             if (!sp) return;
@@ -518,6 +640,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
             sp.attackCooldownMs = 0;
+            sp.bowCharging = false;
+            sp.bowChargeMs = 0;
+            sp.bowChargeX = player.x;
+            sp.bowChargeY = player.y;
+            sp.bowAimX = 0;
+            sp.bowAimY = -1;
             sp.revivingTargetId = null;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.alive = true;
@@ -605,19 +733,6 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const enemyHits = this.damageEnemiesFromAttack(attackOrigin, attackerId, direction, targetX, targetY);
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
-    }
-
-    private applyDelayedBowAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
-        const sp = this.serverPlayers.get(attackerId);
-        const player = this.state.players.get(attackerId);
-        if (!sp || !sp.alive || !player || this.state.gameOver) return;
-
-        const attackOrigin = { x: player.x, y: player.y };
-        const enemyId = this.findEnemyHitByBowRay(attackOrigin, direction, targetX, targetY);
-        if (!enemyId) return;
-
-        const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId);
-        if (enemyHit) this.broadcast("enemyHit", enemyHit);
     }
 
     private damageTreeFromAttack(attackOrigin: AttackOrigin, attackerId: string, direction: string, targetX: unknown, targetY: unknown): TreeHitPayload | null {
@@ -790,34 +905,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         return hitEnemyIds;
-    }
-
-    private findEnemyHitByBowRay(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string | null {
-        const vector = this.getAttackVector(attackOrigin, direction, targetX, targetY);
-        const originX = attackOrigin.x;
-        const originY = attackOrigin.y + ATTACK_HIT_ORIGIN_Y_OFFSET;
-        let closestEnemyId: string | null = null;
-        let closestAlongRay = Number.POSITIVE_INFINITY;
-        const hitRadiusSq = BOW_RAY_HIT_RADIUS * BOW_RAY_HIT_RADIUS;
-
-        this.state.enemies.forEach((enemy, id) => {
-            if (enemy.isDead) return;
-            const dx = enemy.x - originX;
-            const dy = enemy.y - originY;
-            const alongRay = dx * vector.x + dy * vector.y;
-            if (alongRay < 0 || alongRay > BOW_RAY_RANGE || alongRay >= closestAlongRay) return;
-
-            const closestX = originX + vector.x * alongRay;
-            const closestY = originY + vector.y * alongRay;
-            const sideX = enemy.x - closestX;
-            const sideY = enemy.y - closestY;
-            if (sideX * sideX + sideY * sideY > hitRadiusSq) return;
-
-            closestEnemyId = id;
-            closestAlongRay = alongRay;
-        });
-
-        return closestEnemyId;
     }
 
     private killEnemy(enemyId: string, enemy: EnemyState) {
@@ -1168,10 +1255,18 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.attackLockMs = 0;
         targetSp.attackCooldownMs = 0;
         targetSp.revivingTargetId = null;
+        targetSp.bowCharging = false;
+        targetSp.bowChargeMs = 0;
+        targetSp.bowChargeX = target.x;
+        targetSp.bowChargeY = target.y;
+        targetSp.bowAimX = 0;
+        targetSp.bowAimY = -1;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
         target.isDead = false;
         target.reviveProgress = 0;
+        target.bowCharging = false;
+        target.bowChargeProgress = 0;
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
@@ -1187,6 +1282,20 @@ export class ShmupRoom extends Room<GameRoomState> {
             const inputX = Number(right) - Number(left);
             const inputY = Number(down) - Number(up);
             const inputLength = Math.hypot(inputX, inputY);
+
+            if (sp.bowCharging) {
+                if (player.activeItem !== ITEM_WOOD_BOW) {
+                    this.clearBowCharge(player, sp);
+                } else {
+                    sp.bowChargeMs = Math.min(BOW_CHARGE_MS, sp.bowChargeMs + dtMs);
+                    player.bowChargeProgress = clamp(sp.bowChargeMs / BOW_CHARGE_MS, 0, 1);
+                    sp.vx = 0;
+                    sp.vy = 0;
+                    player.x = sp.bowChargeX;
+                    player.y = sp.bowChargeY;
+                    return;
+                }
+            }
 
             if (isAttackLocked) {
                 sp.vx = 0;
@@ -1289,8 +1398,27 @@ export class ShmupRoom extends Room<GameRoomState> {
         const id = nextId();
         const b  = new PlayerBulletState();
         b.id = id; b.x = x; b.y = y; b.power = power; b.ownerId = ownerId;
+        b.kind = "bullet";
+        b.angle = -Math.PI / 2;
         this.state.playerBullets.set(id, b);
-        this.serverPlayerBullets.set(id, { vy: -P_BULLET_VEL });
+        this.serverPlayerBullets.set(id, { vx: 0, vy: -P_BULLET_VEL, rangeRemaining: Number.POSITIVE_INFINITY, kind: "bullet" });
+    }
+
+    private spawnArrow(x: number, y: number, dx: number, dy: number, ownerId: string) {
+        const length = Math.hypot(dx, dy);
+        const vx = length > 0 ? (dx / length) * ARROW_SPEED : 0;
+        const vy = length > 0 ? (dy / length) * ARROW_SPEED : -ARROW_SPEED;
+        const id = nextId();
+        const arrow = new PlayerBulletState();
+        arrow.id = id;
+        arrow.x = x;
+        arrow.y = y;
+        arrow.power = ARROW_DAMAGE;
+        arrow.ownerId = ownerId;
+        arrow.kind = "arrow";
+        arrow.angle = Math.atan2(vy, vx);
+        this.state.playerBullets.set(id, arrow);
+        this.serverPlayerBullets.set(id, { vx, vy, rangeRemaining: ARROW_RANGE, kind: "arrow" });
     }
 
     private tickPlayerBullets(dtSec: number) {
@@ -1298,10 +1426,50 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.playerBullets.forEach((b, id) => {
             const sb = this.serverPlayerBullets.get(id);
             if (!sb) { dead.push(id); return; }
+            const prevX = b.x;
+            const prevY = b.y;
+            const distance = Math.hypot(sb.vx * dtSec, sb.vy * dtSec);
+            b.x += sb.vx * dtSec;
             b.y += sb.vy * dtSec;
+            b.angle = Math.atan2(sb.vy, sb.vx);
+            if (Number.isFinite(sb.rangeRemaining)) sb.rangeRemaining -= distance;
+            if (sb.kind === "arrow") {
+                const enemyId = this.findEnemyHitByArrowSegment(prevX, prevY, b.x, b.y);
+                if (enemyId) {
+                    const enemyHit = this.damageEnemyFromBowAttack(enemyId, b.ownerId);
+                    if (enemyHit) this.broadcast("enemyHit", enemyHit);
+                    dead.push(id);
+                    return;
+                }
+            }
+            if (sb.rangeRemaining <= 0) dead.push(id);
             if (b.y < -PB_HH || b.y > WORLD_HEIGHT + PB_HH || b.x < -PB_HW || b.x > WORLD_WIDTH + PB_HW) dead.push(id);
         });
         dead.forEach(id => { this.state.playerBullets.delete(id); this.serverPlayerBullets.delete(id); });
+    }
+
+    private findEnemyHitByArrowSegment(fromX: number, fromY: number, toX: number, toY: number): string | null {
+        let closestEnemyId: string | null = null;
+        let closestT = Number.POSITIVE_INFINITY;
+
+        this.state.enemies.forEach((enemy, id) => {
+            if (enemy.isDead) return;
+            const t = segmentAabbIntersectionT(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                enemy.x,
+                enemy.y,
+                ENEMY_HW,
+                ENEMY_HH,
+            );
+            if (t === null || t >= closestT) return;
+            closestEnemyId = id;
+            closestT = t;
+        });
+
+        return closestEnemyId;
     }
 
     // ─── Enemies ──────────────────────────────────────────────────────────────
@@ -2027,6 +2195,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         // Player bullets vs enemies
         this.state.playerBullets.forEach((bullet, bid) => {
             if (deadBullets.includes(bid)) return;
+            if (bullet.kind === "arrow") return;
             this.state.enemies.forEach((enemy, eid) => {
                 if (deadBullets.includes(bid) || deadEnemies.includes(eid)) return;
                 if (enemy.isDead) return;
@@ -2091,6 +2260,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.alive   = false;
         sp.vx = 0;
         sp.vy = 0;
+        this.clearBowCharge(player, sp);
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
         player.health = 0;
@@ -2113,8 +2283,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverPlayers.forEach((sp) => {
             sp.vx = 0;
             sp.vy = 0;
+            sp.bowCharging = false;
+            sp.bowChargeMs = 0;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.revivingTargetId = null;
+        });
+        this.state.players.forEach((player) => {
+            player.bowCharging = false;
+            player.bowChargeProgress = 0;
         });
     }
 }

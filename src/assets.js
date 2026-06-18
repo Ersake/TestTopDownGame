@@ -4,6 +4,14 @@ export default {
             key: 'punch-whoosh',
             args: ['assets/jofae-swing-whoosh-110410.mp3']
         },
+        arrowPull: {
+            key: 'arrow-pull',
+            args: ['assets/arrowpull.mp3']
+        },
+        arrowLaunch: {
+            key: 'arrow-launch',
+            args: ['assets/arrowlaunch.mp3']
+        },
         woodHit: {
             key: 'wood-hit',
             args: ['assets/woodhit.mp3']
@@ -146,6 +154,13 @@ export default {
             args: ['assets/WoodBowAttack.png', {
                 frameWidth: 128,
                 frameHeight: 128,
+            }]
+        },
+        arrowsPack: {
+            key: 'arrows-pack',
+            args: ['assets/Arrows_pack.png', {
+                frameWidth: 1024,
+                frameHeight: 1024,
             }]
         },
         playerDie: {
