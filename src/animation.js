@@ -34,8 +34,12 @@ export default {
         die: createDirectionalAnimations('die', ASSETS.spritesheet.playerDie.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
     weapon: {
-        woodAxe: createDirectionalAnimations('wood-axe', ASSETS.spritesheet.woodAxe.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
-        woodBow: createDirectionalAnimations('wood-bow', ASSETS.spritesheet.woodBow.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        woodAxeIdle: createDirectionalAnimations('wood-axe-idle', ASSETS.spritesheet.woodAxeIdle.key, PLAYER_DIRECTIONS),
+        woodAxeRun: createDirectionalAnimations('wood-axe-run', ASSETS.spritesheet.woodAxeRun.key, PLAYER_DIRECTIONS),
+        woodAxeAttack: createDirectionalAnimations('wood-axe-attack', ASSETS.spritesheet.woodAxeAttack.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        woodBowIdle: createDirectionalAnimations('wood-bow-idle', ASSETS.spritesheet.woodBowIdle.key, PLAYER_DIRECTIONS),
+        woodBowRun: createDirectionalAnimations('wood-bow-run', ASSETS.spritesheet.woodBowRun.key, PLAYER_DIRECTIONS),
+        woodBowAttack: createDirectionalAnimations('wood-bow-attack', ASSETS.spritesheet.woodBowAttack.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
     enemy1: {
         run: createDirectionalAnimations('enemy1-run', ASSETS.spritesheet.enemy1Run.key, ENEMY_DIRECTIONS),

@@ -106,16 +106,44 @@ export default {
                 frameHeight: 128,
             }]
         },
-        woodAxe: {
-            key: 'wood-axe',
-            args: ['assets/WoodAxe.png', {
+        woodAxeIdle: {
+            key: 'wood-axe-idle',
+            args: ['assets/WoodAxeIdle.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]
         },
-        woodBow: {
-            key: 'wood-bow',
-            args: ['assets/WoodBow.png', {
+        woodAxeRun: {
+            key: 'wood-axe-run',
+            args: ['assets/WoodAxeRun.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodAxeAttack: {
+            key: 'wood-axe-attack',
+            args: ['assets/WoodAxeAttack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodBowIdle: {
+            key: 'wood-bow-idle',
+            args: ['assets/WoodBowIdle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodBowRun: {
+            key: 'wood-bow-run',
+            args: ['assets/WoodBowRun.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodBowAttack: {
+            key: 'wood-bow-attack',
+            args: ['assets/WoodBowAttack.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

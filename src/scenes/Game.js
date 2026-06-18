@@ -520,8 +520,12 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.player.axe).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.bow).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.die).forEach(animation => this.createAnimation(animation));
-        Object.values(ANIMATION.weapon.woodAxe).forEach(animation => this.createAnimation(animation));
-        Object.values(ANIMATION.weapon.woodBow).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodAxeIdle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodAxeRun).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodAxeAttack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodBowIdle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodBowRun).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodBowAttack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
@@ -709,7 +713,7 @@ export class Game extends Phaser.Scene {
             const sprite  = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.playerIdle.key, 0)
                 .setDepth(PLAYER_BODY_DEPTH)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
-            const weaponSprite = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.woodAxe.key, 0)
+            const weaponSprite = this.add.sprite(player.x, player.y + PLAYER_VISUAL_Y_OFFSET, ASSETS.spritesheet.woodAxeIdle.key, 0)
                 .setDepth(PLAYER_WEAPON_DEPTH)
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
             this.registerWorldObject(sprite, weaponSprite);
@@ -1851,15 +1855,19 @@ export class Game extends Phaser.Scene {
         return item === ITEM_WOOD_BOW ? 'bow' : 'axe';
     }
 
-    getWeaponAnimationGroup(item) {
-        return item === ITEM_WOOD_BOW ? ANIMATION.weapon.woodBow : ANIMATION.weapon.woodAxe;
+    getWeaponAnimationGroup(item, mode = 'idle') {
+        const suffix = mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
+        const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
+        return ANIMATION.weapon[`${prefix}${suffix}`];
     }
 
-    getWeaponTextureKey(item) {
-        return item === ITEM_WOOD_BOW ? ASSETS.spritesheet.woodBow.key : ASSETS.spritesheet.woodAxe.key;
+    getWeaponTextureKey(item, mode = 'idle') {
+        const suffix = mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
+        const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
+        return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodAxeIdle.key;
     }
 
-    updatePlayerWeaponIdleFrame(sessionId, direction) {
+    updatePlayerWeaponAnimation(sessionId, moving, direction) {
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!weapon || !animationState || animationState.dead) return;
@@ -1870,11 +1878,25 @@ export class Game extends Phaser.Scene {
             this.hidePlayerWeapon(sessionId);
             return;
         }
-        const row = PLAYER_DIRECTION_ORDER.indexOf(nextDirection);
-        const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
+        const mode = moving ? 'run' : 'idle';
+        const animation = this.getWeaponAnimationGroup(item, mode)?.[nextDirection];
         weapon.setVisible(true);
-        if (weapon.anims.isPlaying) weapon.anims.stop();
-        weapon.setTexture(this.getWeaponTextureKey(item), frame);
+        if (!animation) {
+            const row = PLAYER_DIRECTION_ORDER.indexOf(nextDirection);
+            const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
+            if (weapon.anims.isPlaying) weapon.anims.stop();
+            weapon.setTexture(this.getWeaponTextureKey(item, mode), frame);
+            return;
+        }
+
+        if (weapon.anims.currentAnim?.key !== animation.key || !weapon.anims.isPlaying) {
+            weapon.play(animation.key);
+        }
+    }
+
+    updatePlayerWeaponIdleFrame(sessionId, direction) {
+        const animationState = this.playerAnimationState.get(sessionId);
+        this.updatePlayerWeaponAnimation(sessionId, !!animationState?.moving, direction);
     }
 
     hidePlayerWeapon(sessionId) {
@@ -1890,7 +1912,7 @@ export class Game extends Phaser.Scene {
         if (!weapon || !animationState || !weapon.visible) return false;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
-        const animation = this.getWeaponAnimationGroup(item)?.[nextDirection];
+        const animation = this.getWeaponAnimationGroup(item, 'attack')?.[nextDirection];
         if (!animation) return false;
 
         weapon.setVisible(true);
@@ -2131,7 +2153,8 @@ export class Game extends Phaser.Scene {
         const mode = moving ? 'run' : 'idle';
         const didPlay = this.playPlayerAnimation(sessionId, mode, direction);
         if (didPlay && !animationState?.attacking) {
-            this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || direction || DEFAULT_PLAYER_DIRECTION);
+            animationState.moving = moving;
+            this.updatePlayerWeaponAnimation(sessionId, moving, animationState.direction || direction || DEFAULT_PLAYER_DIRECTION);
         }
     }
 
