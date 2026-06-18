@@ -75,6 +75,11 @@ const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7d32;
 const WORLD_BACKGROUND_CSS = '#2f7d32';
+const GRASS_NOISE_DEPTH = -99;
+const GRASS_NOISE_DARK_COLOR = 0x1f5f27;
+const GRASS_NOISE_CELL_SIZE = 96;
+const GRASS_NOISE_PATCH_COUNT = 24;
+const GRASS_NOISE_FLECK_COUNT = 460;
 const PUNCH_SOUND_VOLUME = 0.6;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
@@ -230,6 +235,7 @@ export class Game extends Phaser.Scene {
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
+        this.grassNoiseLayer = null;
         this.isBuildModeActive = false;
         this.buildGridGraphics = null;
         this.buildPreview = null;
@@ -730,6 +736,7 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
+            this.createGrassNoiseLayer();
         });
 
         const addPlayer = (player, sessionId) => {
@@ -1485,8 +1492,46 @@ export class Game extends Phaser.Scene {
             .setOrigin(0)
             .setDepth(-100);
         this.registerWorldObject(this.worldBackground);
+        this.createGrassNoiseLayer();
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
         this.createBuildGrid();
+    }
+
+    createGrassNoiseLayer() {
+        if (this.grassNoiseLayer) this.grassNoiseLayer.destroy();
+
+        const grass = this.add.graphics().setDepth(GRASS_NOISE_DEPTH);
+        this.registerWorldObject(grass);
+
+        for (let y = 0; y < this.worldHeight; y += GRASS_NOISE_CELL_SIZE) {
+            for (let x = 0; x < this.worldWidth; x += GRASS_NOISE_CELL_SIZE) {
+                const alpha = Phaser.Math.FloatBetween(0.012, 0.055);
+                grass.fillStyle(GRASS_NOISE_DARK_COLOR, alpha);
+                grass.fillRect(x, y, GRASS_NOISE_CELL_SIZE + 1, GRASS_NOISE_CELL_SIZE + 1);
+            }
+        }
+
+        for (let i = 0; i < GRASS_NOISE_PATCH_COUNT; i++) {
+            grass.fillStyle(GRASS_NOISE_DARK_COLOR, Phaser.Math.FloatBetween(0.025, 0.075));
+            grass.fillEllipse(
+                Phaser.Math.Between(0, this.worldWidth),
+                Phaser.Math.Between(0, this.worldHeight),
+                Phaser.Math.Between(360, 920),
+                Phaser.Math.Between(220, 680),
+            );
+        }
+
+        for (let i = 0; i < GRASS_NOISE_FLECK_COUNT; i++) {
+            grass.fillStyle(GRASS_NOISE_DARK_COLOR, Phaser.Math.FloatBetween(0.035, 0.12));
+            grass.fillRect(
+                Phaser.Math.Between(0, this.worldWidth),
+                Phaser.Math.Between(0, this.worldHeight),
+                Phaser.Math.Between(18, 95),
+                Phaser.Math.Between(8, 42),
+            );
+        }
+
+        this.grassNoiseLayer = grass;
     }
 
     createBuildGrid() {
@@ -2801,6 +2846,10 @@ export class Game extends Phaser.Scene {
         });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
+        if (this.grassNoiseLayer) {
+            this.grassNoiseLayer.destroy();
+            this.grassNoiseLayer = null;
+        }
         if (this.buildGridGraphics) {
             this.buildGridGraphics.destroy();
             this.buildGridGraphics = null;
