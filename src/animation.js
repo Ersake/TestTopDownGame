@@ -53,4 +53,18 @@ export default {
         damage: createDirectionalAnimations('enemy2-damage', ASSETS.spritesheet.enemy1TakeDamage.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
         death: createDirectionalAnimations('enemy2-death', ASSETS.spritesheet.enemy2Death.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
+    caster: {
+        run: createDirectionalAnimations('caster-run', ASSETS.spritesheet.casterWalk.key, ENEMY_DIRECTIONS),
+        charge: createDirectionalAnimations('caster-charge', ASSETS.spritesheet.casterCharge.key, ENEMY_DIRECTIONS),
+        attack: createDirectionalAnimations('caster-attack', ASSETS.spritesheet.casterAttack.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        damage: createDirectionalAnimations('caster-damage', ASSETS.spritesheet.casterCharge.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        death: createDirectionalAnimations('caster-death', ASSETS.spritesheet.casterDeath.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+    },
+    fireball: {
+        key: 'fireball-fly',
+        texture: ASSETS.spritesheet.fireball.key,
+        frameRate: 8,
+        repeat: -1,
+        config: { start: 0, end: 1 },
+    },
 };

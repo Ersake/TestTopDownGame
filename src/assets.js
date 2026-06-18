@@ -219,5 +219,40 @@ export default {
                 frameHeight: 128,
             }]
         },
+        casterWalk: {
+            key: 'caster-walk',
+            args: ['assets/CasterWalk.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        casterCharge: {
+            key: 'caster-charge',
+            args: ['assets/CasterCharge.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        casterAttack: {
+            key: 'caster-attack',
+            args: ['assets/CasterAttack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        casterDeath: {
+            key: 'caster-death',
+            args: ['assets/CasterDie.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        fireball: {
+            key: 'fireball',
+            args: ['assets/fireball-Sheet.png', {
+                frameWidth: 32,
+                frameHeight: 32,
+            }]
+        },
     }
 };

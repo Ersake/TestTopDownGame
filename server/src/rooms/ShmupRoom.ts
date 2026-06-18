@@ -67,6 +67,14 @@ const ENEMY1_COUNT = 3;
 const ENEMY2_COUNT = 3;
 const ENEMY_WAVE_COUNT = 3;
 const ENEMY_WAVE_INTERVAL_MS = 30000;
+const ENEMY_TYPE_CASTER = 3;
+const CASTER_INITIAL_COUNT = 1;
+const CASTER_WAVE_COUNT = 1;
+const CASTER_CAST_RANGE = 360;
+const CASTER_CHARGE_MS = 1000;
+const CASTER_ATTACK_MS = 500;
+const CASTER_FIREBALL_SPEED = 225;
+const CASTER_FIREBALL_DAMAGE = 1;
 const ENEMY1_SPEED = 114.75;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_PLAYER_ATTACK_RANGE = 72;
@@ -252,7 +260,7 @@ interface ServerPlayer {
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
-type EnemyMode = "chase" | "windup" | "attack" | "woodWindup" | "woodAttack" | "stun";
+type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "woodWindup" | "woodAttack" | "stun";
 interface PathCell { col: number; row: number; }
 interface ServerEnemy {
     mode: EnemyMode;
@@ -270,7 +278,9 @@ interface ServerBullet {
     kind: string;
 }
 interface ServerEnemyBullet {
+    vx: number;
     vy: number;
+    kind: string;
 }
 interface AttackOrigin {
     x: number;
@@ -1484,6 +1494,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         for (let i = 0; i < ENEMY2_COUNT; i++) {
             this.spawnEnemy(2, ENEMY1_COUNT + i);
         }
+        for (let i = 0; i < CASTER_INITIAL_COUNT; i++) {
+            this.spawnEnemy(ENEMY_TYPE_CASTER, ENEMY1_COUNT + ENEMY2_COUNT + i);
+        }
     }
 
     private tickEnemyWaves(dtMs: number) {
@@ -1497,6 +1510,9 @@ export class ShmupRoom extends Room<GameRoomState> {
     private spawnEnemyWave() {
         for (let i = 0; i < ENEMY_WAVE_COUNT; i++) {
             this.spawnEnemy(rndInt(1, 2), rndInt(0, 3));
+        }
+        for (let i = 0; i < CASTER_WAVE_COUNT; i++) {
+            this.spawnEnemy(ENEMY_TYPE_CASTER, rndInt(0, 3));
         }
     }
 
@@ -1577,6 +1593,11 @@ export class ShmupRoom extends Room<GameRoomState> {
             const direction = directionFromInput(dx, dy);
             if (direction) enemy.facingDirection = direction;
             const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
+
+            if (enemy.enemyType === ENEMY_TYPE_CASTER) {
+                this.tickCasterEnemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
+                return;
+            }
 
             if (se.mode === "woodAttack" || se.mode === "woodWindup") {
                 const block = se.targetWoodBlockId ? this.state.woodBlocks.get(se.targetWoodBlockId) : undefined;
@@ -1695,6 +1716,112 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
         this.separateEnemyFeet();
+    }
+
+    private tickCasterEnemy(
+        enemyId: string,
+        enemy: EnemyState,
+        se: ServerEnemy,
+        target: { id: string; player: PlayerState; distanceSq: number },
+        dx: number,
+        dy: number,
+        distance: number,
+        dtSec: number,
+        dtMs: number,
+    ) {
+        const isInCastRange = distance <= CASTER_CAST_RANGE;
+
+        if (se.mode === "casterAttack") {
+            enemy.action = "attack";
+            se.modeMs = Math.max(0, se.modeMs - dtMs);
+            if (se.modeMs === 0) {
+                se.mode = isInCastRange ? "casterCharge" : "chase";
+                se.modeMs = isInCastRange ? CASTER_CHARGE_MS : 0;
+                enemy.action = isInCastRange ? "charge" : "run";
+            }
+            return;
+        }
+
+        if (se.mode === "casterCharge") {
+            enemy.action = "charge";
+            se.modeMs = Math.max(0, se.modeMs - dtMs);
+            if (se.modeMs === 0) {
+                const launchTarget = this.findNearestAlivePlayer(enemy.x, enemy.y);
+                if (!launchTarget) {
+                    se.mode = "chase";
+                    enemy.action = "idle";
+                    return;
+                }
+
+                const launchDx = launchTarget.player.x - enemy.x;
+                const launchDy = launchTarget.player.y - enemy.y;
+                const launchDirection = directionFromInput(launchDx, launchDy);
+                if (launchDirection) enemy.facingDirection = launchDirection;
+
+                se.mode = "casterAttack";
+                se.modeMs = CASTER_ATTACK_MS;
+                enemy.action = "attack";
+                enemy.attackSeq++;
+                this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.player);
+            }
+            return;
+        }
+
+        if (isInCastRange) {
+            se.targetWoodBlockId = null;
+            se.path = [];
+            se.pathTargetCell = null;
+            enemy.action = "charge";
+            se.mode = "casterCharge";
+            se.modeMs = CASTER_CHARGE_MS;
+            return;
+        }
+
+        se.mode = "chase";
+        se.modeMs = 0;
+        enemy.action = "run";
+        if (distance <= 0) return;
+
+        const remainingDistance = Math.max(0, distance - CASTER_CAST_RANGE);
+        const move = Math.min(ENEMY1_SPEED * dtSec, remainingDistance);
+        if (move <= 0) {
+            enemy.action = "charge";
+            se.mode = "casterCharge";
+            se.modeMs = CASTER_CHARGE_MS;
+            return;
+        }
+
+        if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+            se.path = [];
+            se.pathTargetCell = null;
+            se.pathRefreshMs = 0;
+            se.targetWoodBlockId = null;
+            const resolved = this.moveEnemyWithWoodBlocks(
+                enemy,
+                enemy.x + (dx / distance) * move,
+                enemy.y + (dy / distance) * move,
+            );
+            enemy.x = resolved.x;
+            enemy.y = resolved.y;
+            return;
+        }
+
+        const directResolved = this.moveEnemyWithWoodBlocks(
+            enemy,
+            enemy.x + (dx / distance) * move,
+            enemy.y + (dy / distance) * move,
+        );
+
+        se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
+        if (this.shouldRefreshEnemyPath(se, target.player)) {
+            this.refreshEnemyWoodBlockPath(enemy, se, target.player);
+        }
+
+        const pathMoved = this.followEnemyPath(enemy, se, move);
+        if (pathMoved) return;
+
+        enemy.x = directResolved.x;
+        enemy.y = directResolved.y;
     }
 
     private moveEnemyWithWoodBlocks(enemy: EnemyState, nextX: number, nextY: number): { x: number; y: number } {
@@ -2173,7 +2300,30 @@ export class ShmupRoom extends Room<GameRoomState> {
         const b  = new EnemyBulletState();
         b.id = id; b.x = x; b.y = y; b.power = power;
         this.state.enemyBullets.set(id, b);
-        this.serverEnemyBullets.set(id, { vy: 200 * power * 0.5 });
+        this.serverEnemyBullets.set(id, { vx: 0, vy: 200 * power * 0.5, kind: "bullet" });
+    }
+
+    private spawnCasterFireball(x: number, y: number, target: PlayerState) {
+        const dx = target.x - x;
+        const dy = target.y - y;
+        const distance = Math.hypot(dx, dy);
+        const vector = distance > 0
+            ? { x: dx / distance, y: dy / distance }
+            : DIRECTION_VECTORS.S;
+        const id = nextId();
+        const b = new EnemyBulletState();
+        b.id = id;
+        b.x = x;
+        b.y = y;
+        b.power = CASTER_FIREBALL_DAMAGE;
+        b.kind = "fireball";
+        b.angle = Math.atan2(vector.y, vector.x);
+        this.state.enemyBullets.set(id, b);
+        this.serverEnemyBullets.set(id, {
+            vx: vector.x * CASTER_FIREBALL_SPEED,
+            vy: vector.y * CASTER_FIREBALL_SPEED,
+            kind: "fireball",
+        });
     }
 
     private tickEnemyBullets(dtSec: number) {
@@ -2181,6 +2331,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enemyBullets.forEach((b, id) => {
             const sb = this.serverEnemyBullets.get(id);
             if (!sb) { dead.push(id); return; }
+            b.x += sb.vx * dtSec;
             b.y += sb.vy * dtSec;
             if (b.y > WORLD_HEIGHT + EB_HH || b.y < -EB_HH || b.x < -EB_HW || b.x > WORLD_WIDTH + EB_HW) dead.push(id);
         });

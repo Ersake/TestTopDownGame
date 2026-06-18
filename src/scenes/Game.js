@@ -44,8 +44,11 @@ const PLAYER_ATTACK_HIT_START_OFFSET = 10;
 const PLAYER_ATTACK_HIT_END_OFFSET = 40;
 const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ARROW_DISPLAY_SIZE = 64;
+const FIREBALL_DISPLAY_SIZE = 48;
+const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
 const ENEMY_ATTACK_RANGE = 26;
+const CASTER_CAST_RANGE = 360;
 const ENEMY_ATTACK_HIT_OFFSET = 28;
 const ENEMY_ATTACK_HIT_HW = 42;
 const ENEMY_ATTACK_HIT_HH = 36;
@@ -630,6 +633,12 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.enemy2.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy2.damage).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy2.death).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.caster.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.caster.charge).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.caster.attack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.caster.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.caster.death).forEach(animation => this.createAnimation(animation));
+        this.createAnimation(ANIMATION.fireball);
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -1298,6 +1307,7 @@ export class Game extends Phaser.Scene {
             this.registerWorldObject(enemyHealthBackground, enemyHealthFill);
             this.enemyAnimationState.set(enemyId, {
                 animationKey: enemyAnimationKey,
+                enemyType: Number(enemy.enemyType) || 1,
                 direction: enemy.facingDirection || 'S',
                 action: enemy.action || 'run',
                 attacking: false,
@@ -1445,14 +1455,31 @@ export class Game extends Phaser.Scene {
             const bulletId = id || bullet.id;
             if (!bulletId || this.enemyBulletSprites.has(bulletId)) return;
 
-            const sprite = this.add.sprite(bullet.x, bullet.y, ASSETS.spritesheet.tiles.key, EB_TILE_OFFSET + bullet.power)
-                .setDepth(10).setFlipY(true);
+            const isFireball = bullet.kind === 'fireball';
+            const sprite = this.add.sprite(
+                bullet.x,
+                bullet.y,
+                isFireball ? ASSETS.spritesheet.fireball.key : ASSETS.spritesheet.tiles.key,
+                isFireball ? 0 : EB_TILE_OFFSET + bullet.power,
+            ).setDepth(10);
+            if (isFireball) {
+                sprite
+                    .setDisplaySize(FIREBALL_DISPLAY_SIZE, FIREBALL_DISPLAY_SIZE)
+                    .setRotation((bullet.angle || 0) + FIREBALL_ROTATION_OFFSET)
+                    .play(ANIMATION.fireball.key);
+            } else {
+                sprite.setFlipY(true);
+            }
             this.registerWorldObject(sprite);
             this.enemyBulletSprites.set(bulletId, sprite);
 
             bullet.onChange(() => {
                 const s = this.enemyBulletSprites.get(bulletId);
-                if (s) { s.x = bullet.x; s.y = bullet.y; }
+                if (s) {
+                    s.x = bullet.x;
+                    s.y = bullet.y;
+                    if (bullet.kind === 'fireball') s.setRotation((bullet.angle || 0) + FIREBALL_ROTATION_OFFSET);
+                }
             });
         };
 
@@ -1885,10 +1912,11 @@ export class Game extends Phaser.Scene {
             graphics.strokeRect(x - ENEMY_HITBOX_HW, y - ENEMY_HITBOX_HH, ENEMY_HITBOX_HW * 2, ENEMY_HITBOX_HH * 2);
             graphics.lineStyle(2, 0xffdd66, 0.95);
             graphics.strokeCircle(x, y + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS);
-            graphics.lineStyle(1, 0xff8844, 0.65);
-            graphics.strokeCircle(x, y, ENEMY_ATTACK_RANGE);
+            const isCaster = animationState?.enemyType === 3 || animationState?.animationKey === 'caster';
+            graphics.lineStyle(1, isCaster ? 0xff66dd : 0xff8844, 0.65);
+            graphics.strokeCircle(x, y, isCaster ? CASTER_CAST_RANGE : ENEMY_ATTACK_RANGE);
 
-            if (animationState?.attacking) {
+            if (animationState?.attacking && !isCaster) {
                 this.drawEnemyAttackHitbox(graphics, x, y, animationState.direction || 'S');
             }
         });
@@ -2546,6 +2574,11 @@ export class Game extends Phaser.Scene {
             return;
         }
 
+        if (animationState.action === 'charge') {
+            this.playEnemyAnimation(enemyId, 'charge', nextDirection);
+            return;
+        }
+
         this.playEnemyAnimation(enemyId, 'run', nextDirection);
     }
 
@@ -2663,7 +2696,10 @@ export class Game extends Phaser.Scene {
     }
 
     getEnemyAnimationKey(enemy) {
-        return Number(enemy?.enemyType) === 2 ? 'enemy2' : 'enemy1';
+        const enemyType = Number(enemy?.enemyType);
+        if (enemyType === 3) return 'caster';
+        if (enemyType === 2) return 'enemy2';
+        return 'enemy1';
     }
 
     updatePlayerHealthBars() {

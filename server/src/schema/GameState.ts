@@ -54,6 +54,8 @@ export class EnemyBulletState extends Schema {
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
     @type("int8")    power: number = 1;
+    @type("string")  kind: string = "bullet";
+    @type("float32") angle: number = 0;
 }
 
 export class TreeState extends Schema {
