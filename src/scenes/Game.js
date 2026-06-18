@@ -46,6 +46,7 @@ const PLAYER_ATTACK_HIT_END_OFFSET = 40;
 const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ARROW_DISPLAY_SIZE = 64;
 const FIREBALL_DISPLAY_SIZE = 48;
+const FIREBALL_DEPTH = 84;
 const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
 const ENEMY_ATTACK_RANGE = 26;
@@ -1491,7 +1492,7 @@ export class Game extends Phaser.Scene {
                 bullet.y,
                 isFireball ? ASSETS.spritesheet.fireball.key : ASSETS.spritesheet.tiles.key,
                 isFireball ? 0 : EB_TILE_OFFSET + bullet.power,
-            ).setDepth(10);
+            ).setDepth(isFireball ? FIREBALL_DEPTH : 10);
             if (isFireball) {
                 sprite
                     .setDisplaySize(FIREBALL_DISPLAY_SIZE, FIREBALL_DISPLAY_SIZE)
@@ -2790,6 +2791,10 @@ export class Game extends Phaser.Scene {
     playEnemyDamageAnimation(enemyId, direction) {
         const animationState = this.enemyAnimationState.get(enemyId);
         if (!animationState || animationState.dead) return;
+        if (this.isDarkKnightAnimationState(animationState) && animationState.attacking) {
+            this.flashEnemyDamage(enemyId);
+            return;
+        }
 
         animationState.takingDamage = true;
         animationState.attacking = false;
