@@ -83,6 +83,7 @@ const DARK_KNIGHT_HEALTH = 10;
 const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
 const DARK_KNIGHT_WALK_SPEED = 88;
 const DARK_KNIGHT_RUSH_SPEED = 230;
+const DARK_KNIGHT_MIN_RUSH_MS = 500;
 const DARK_KNIGHT_MARK_REACH_RADIUS = 12;
 const DARK_KNIGHT_WOOD_REACH_RANGE = 14;
 const DARK_KNIGHT_ATTACK_MS = 650;
@@ -1903,7 +1904,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (se.mode === "dkRush") {
             enemy.action = "run";
-            if (this.tickDarkKnightRush(enemyId, enemy, se, dtSec)) return;
+            if (this.tickDarkKnightRush(enemyId, enemy, se, dtSec, dtMs)) return;
             se.mode = "dkWalk";
             se.targetWoodBlockId = null;
             se.darkKnightTargetKind = null;
@@ -1955,7 +1956,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: PlayerState) {
         se.mode = "dkRush";
-        se.modeMs = 0;
+        se.modeMs = DARK_KNIGHT_MIN_RUSH_MS;
         se.darkKnightMarkX = target.x;
         se.darkKnightMarkY = target.y;
         se.targetWoodBlockId = null;
@@ -1983,7 +1984,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         enemy.action = "run";
     }
 
-    private tickDarkKnightRush(enemyId: string, enemy: EnemyState, se: ServerEnemy, dtSec: number): boolean {
+    private tickDarkKnightRush(enemyId: string, enemy: EnemyState, se: ServerEnemy, dtSec: number, dtMs: number): boolean {
+        se.modeMs = Math.max(0, se.modeMs - dtMs);
+        const canAttack = se.modeMs === 0;
         let targetX = se.darkKnightMarkX;
         let targetY = se.darkKnightMarkY;
 
@@ -2002,6 +2005,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 BUILD_BLOCK_HALF_SIZE,
             );
             if (distanceSq <= DARK_KNIGHT_WOOD_REACH_RANGE * DARK_KNIGHT_WOOD_REACH_RANGE) {
+                if (!canAttack) return true;
                 this.startDarkKnightAttack(enemyId, enemy, se);
                 return true;
             }
@@ -2027,6 +2031,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const dy = targetY - enemy.y;
         const distance = Math.hypot(dx, dy);
         if (distance <= DARK_KNIGHT_MARK_REACH_RADIUS) {
+            if (!canAttack) return true;
             this.startDarkKnightAttack(enemyId, enemy, se);
             return true;
         }
