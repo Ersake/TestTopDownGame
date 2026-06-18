@@ -1,8 +1,0 @@
-
-> shmup-server@1.0.0 server:dev
-> cross-env NODE_ENV=development ts-node src/index.ts
-
-Colyseus monitor → http://localhost:2567/colyseus
-Shmup server listening on port 2567
-
-C:\Users\17034\Documents\GitHub\TestTopDownGame>

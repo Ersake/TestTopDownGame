@@ -121,6 +121,18 @@ const HOTBAR_ICON_SIZE = 28;
 const HOTBAR_BOTTOM_GAP = 18;
 const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
+const OUTFIT_TAN_INDEX = 4;
+const OUTFIT_COLOR_BUTTON_RADIUS = 11;
+const OUTFIT_COLOR_BUTTON_X = 40;
+const OUTFIT_COLOR_BUTTON_START_Y = 118;
+const OUTFIT_COLOR_BUTTON_GAP = 36;
+const OUTFIT_COLOR_BUTTONS = [
+    { color: 0x7954b8, tint: 0xa477ff },
+    { color: 0x2477a6, tint: 0x2f9cff },
+    { color: 0x43b4ba, tint: 0x5ee8f0 },
+    { color: 0x82bd4c, tint: 0xa8f05c },
+    { color: 0xa99d83, tint: null },
+];
 const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
@@ -224,6 +236,9 @@ export class Game extends Phaser.Scene {
         this.localActiveSlot = 1;
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, null, null, null, null, null, null];
+        this.outfitColorIndex = OUTFIT_TAN_INDEX;
+        this.outfitColorButtons = [];
+        this.outfitColorButtonObjects = new Set();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
@@ -386,6 +401,7 @@ export class Game extends Phaser.Scene {
 
         this.initExperienceBar();
         this.initHotbar();
+        this.initOutfitColorPicker();
         this.initVolumeSlider();
         this.registerFixedUi(
             this.tutorialText,
@@ -399,6 +415,70 @@ export class Game extends Phaser.Scene {
             this.roomCodeText,
             this.hitboxToggleButton,
         );
+    }
+
+    initOutfitColorPicker() {
+        this.outfitColorButtons.forEach(({ fill, selection }) => {
+            fill?.destroy();
+            selection?.destroy();
+        });
+        this.outfitColorButtons = [];
+        this.outfitColorButtonObjects.clear();
+
+        OUTFIT_COLOR_BUTTONS.forEach((option, index) => {
+            const y = OUTFIT_COLOR_BUTTON_START_Y + index * OUTFIT_COLOR_BUTTON_GAP;
+            const selection = this.add.circle(
+                OUTFIT_COLOR_BUTTON_X,
+                y,
+                OUTFIT_COLOR_BUTTON_RADIUS + 4,
+            )
+                .setStrokeStyle(2, 0xffffff, 0.85)
+                .setDepth(UI_DEPTH + 2)
+                .setScrollFactor(0)
+                .setVisible(index === this.outfitColorIndex);
+            const fill = this.add.circle(
+                OUTFIT_COLOR_BUTTON_X,
+                y,
+                OUTFIT_COLOR_BUTTON_RADIUS,
+                option.color,
+                1,
+            )
+                .setDepth(UI_DEPTH + 3)
+                .setScrollFactor(0)
+                .setInteractive({ useHandCursor: true });
+
+            fill.on('pointerdown', (pointer, _localX, _localY, event) => {
+                event?.stopPropagation();
+                this.setLocalOutfitColor(index);
+            });
+
+            this.outfitColorButtons.push({ fill, selection, index });
+            this.outfitColorButtonObjects.add(fill);
+            this.outfitColorButtonObjects.add(selection);
+            this.registerFixedUi(fill, selection);
+        });
+    }
+
+    setLocalOutfitColor(index) {
+        if (!OUTFIT_COLOR_BUTTONS[index]) return;
+
+        this.outfitColorIndex = index;
+        this.outfitColorButtons.forEach(({ selection, index: buttonIndex }) => {
+            selection?.setVisible(buttonIndex === index);
+        });
+        this.applyLocalOutfitTint();
+    }
+
+    applyLocalOutfitTint() {
+        const sprite = this.localSessionId ? this.playerSprites.get(this.localSessionId) : null;
+        if (!sprite) return;
+
+        const tint = OUTFIT_COLOR_BUTTONS[this.outfitColorIndex]?.tint;
+        if (tint == null) {
+            sprite.clearTint();
+        } else {
+            sprite.setTint(tint);
+        }
     }
 
     initExperienceBar() {
@@ -579,7 +659,13 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointerdown', (pointer, gameObjects = []) => {
-            if (gameObjects.includes(this.hitboxToggleButton) || gameObjects.includes(this.quitButton)) return;
+            if (
+                gameObjects.includes(this.hitboxToggleButton)
+                || gameObjects.includes(this.quitButton)
+                || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
+            ) {
+                return;
+            }
             if (this.isBuildModeActive) {
                 this.handleBuildModePointerDown(pointer);
                 return;
@@ -759,6 +845,7 @@ export class Game extends Phaser.Scene {
 
             this.playerSprites.set(playerSessionId, sprite);
             this.playerWeaponSprites.set(playerSessionId, weaponSprite);
+            if (isLocal) this.applyLocalOutfitTint();
             if (!isLocal) {
                 const indicator = this.add.circle(0, 0, OFFSCREEN_PLAYER_INDICATOR_RADIUS, OFFSCREEN_PLAYER_INDICATOR_COLOR, 1)
                     .setDepth(UI_DEPTH + 5)
