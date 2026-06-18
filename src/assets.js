@@ -40,6 +40,14 @@ export default {
             key: 'level-up',
             args: ['assets/Level Up Sound.mp3']
         },
+        fireballCharge: {
+            key: 'fireball-charge',
+            args: ['assets/fireballcharge.mp3']
+        },
+        fireballCast: {
+            key: 'fireball-cast',
+            args: ['assets/fireballcast.mp3']
+        },
     },
     'image': {
         treeBottom: {

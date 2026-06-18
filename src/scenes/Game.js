@@ -92,6 +92,10 @@ const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
+const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
+const FIREBALL_CAST_SOUND_VOLUME = 0.375;
+const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
+const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_MAX_HEALTH = 5;
@@ -246,6 +250,7 @@ export class Game extends Phaser.Scene {
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
         this.enemyHealthBars = new Map();
+        this.casterChargeSounds = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
         this.woodBlockSprites    = new Map();
@@ -274,6 +279,7 @@ export class Game extends Phaser.Scene {
         this.hitboxGraphics = null;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
+        this.activeSfxStacks = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.suppressResetEffectsUntil = 0;
         this.isTabActive = this.isDocumentActive();
@@ -313,6 +319,7 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('focus', this.handleTabActive);
             window.removeEventListener('keydown', this.handleEscapeKey, true);
             this.disableBuildMode();
+            this.stopAllCasterChargeSounds();
         });
     }
 
@@ -1322,6 +1329,7 @@ export class Game extends Phaser.Scene {
                 y: enemy.y,
             });
             this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
+            if (enemy.action === 'charge') this.startCasterChargeSound(enemyId);
 
             enemy.onChange(() => {
                 const s = this.enemySprites.get(enemyId);
@@ -1340,6 +1348,11 @@ export class Game extends Phaser.Scene {
             enemy.listen('action', (action) => {
                 const animationState = this.enemyAnimationState.get(enemyId);
                 this.setEnemyAnimation(enemyId, action || 'run', enemy.facingDirection || animationState?.direction || 'S');
+                if (action === 'charge') {
+                    this.startCasterChargeSound(enemyId);
+                } else if (action !== 'attack') {
+                    this.stopCasterChargeSound(enemyId);
+                }
             });
 
             enemy.listen('facingDirection', (direction) => {
@@ -1357,6 +1370,7 @@ export class Game extends Phaser.Scene {
 
                 animationState.lastAttackSeq = enemy.attackSeq;
                 if (enemy.attackSeq <= 0) return;
+                this.stopCasterChargeSound(enemyId);
                 this.playEnemyAttackAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
             });
 
@@ -1380,10 +1394,14 @@ export class Game extends Phaser.Scene {
             });
 
             enemy.listen('isDead', (isDead) => {
-                if (isDead) this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
+                if (isDead) {
+                    this.stopCasterChargeSound(enemyId);
+                    this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
+                }
             });
 
             if (enemy.isDead) {
+                this.stopCasterChargeSound(enemyId);
                 this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
             }
         };
@@ -1403,6 +1421,7 @@ export class Game extends Phaser.Scene {
                 if (!animationState?.dead && !this.isSuppressingResetEffects()) this.addExplosion(s.x, s.y);
                 s.destroy();
             }
+            this.stopCasterChargeSound(id);
             if (animationState?.damageFlashEvent) {
                 animationState.damageFlashEvent.remove(false);
             }
@@ -2425,35 +2444,142 @@ export class Game extends Phaser.Scene {
         this.volumeSliderKnob.y = this.volumeSliderTrack.y;
     }
 
+    getSfxVolume(baseVolume, {
+        spatial = false,
+        worldX = null,
+        worldY = null,
+        spatialFalloffPower = 1,
+    } = {}) {
+        const spatialMultiplier = spatial ? this.getSpatialVolumeMultiplier(worldX, worldY) : 1;
+        if (spatialMultiplier <= 0) return 0;
+        const adjustedSpatialMultiplier = spatial
+            ? Math.pow(spatialMultiplier, Math.max(1, spatialFalloffPower))
+            : 1;
+
+        return Math.min(
+            MAX_EFFECTIVE_SOUND_VOLUME,
+            Phaser.Math.Clamp(baseVolume, 0, 1)
+                * Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1)
+                * adjustedSpatialMultiplier,
+        );
+    }
+
     playSfx(key, baseVolume, {
         serverEvent = false,
         spatial = false,
         worldX = null,
         worldY = null,
+        spatialFalloffPower = 1,
+        stackKey = null,
+        stackVolumeMultiplier = 1,
         groupKey = null,
         groupWindowMs = 0,
     } = {}) {
-        if (serverEvent && !this.shouldPlayServerEventAudio()) return;
+        if (serverEvent && !this.shouldPlayServerEventAudio()) return null;
 
-        const spatialMultiplier = spatial ? this.getSpatialVolumeMultiplier(worldX, worldY) : 1;
-        if (spatialMultiplier <= 0) return;
-
-        const volume = Math.min(
-            MAX_EFFECTIVE_SOUND_VOLUME,
-            Phaser.Math.Clamp(baseVolume, 0, 1)
-                * Phaser.Math.Clamp(this.masterVolume ?? DEFAULT_MASTER_VOLUME, 0, 1)
-                * spatialMultiplier,
-        );
-        if (volume <= 0) return;
+        let volume = this.getSfxVolume(baseVolume, { spatial, worldX, worldY, spatialFalloffPower });
+        if (volume <= 0) return null;
 
         if (groupKey && groupWindowMs > 0) {
             const now = performance.now();
             const lastPlayedAt = this.sfxGroupLastPlayedAt.get(groupKey) || 0;
-            if (now - lastPlayedAt < groupWindowMs) return;
+            if (now - lastPlayedAt < groupWindowMs) return null;
             this.sfxGroupLastPlayedAt.set(groupKey, now);
         }
 
-        this.sound.play(key, { volume });
+        const sound = this.sound.add(key, { volume });
+        const stackRecord = stackKey ? {
+            sound,
+            volume,
+            stackVolumeMultiplier: Phaser.Math.Clamp(stackVolumeMultiplier, 0, 1),
+        } : null;
+        if (stackRecord) {
+            const stack = this.activeSfxStacks.get(stackKey) || new Set();
+            stack.add(stackRecord);
+            this.activeSfxStacks.set(stackKey, stack);
+            this.updateSfxStackVolumes(stackKey);
+        }
+
+        let cleanedUp = false;
+        const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            if (stackRecord) {
+                const stack = this.activeSfxStacks.get(stackKey);
+                stack?.delete(stackRecord);
+                if (stack?.size) this.updateSfxStackVolumes(stackKey);
+                else this.activeSfxStacks.delete(stackKey);
+            }
+            sound.destroy();
+        };
+        sound.once('complete', cleanup);
+        sound.once('stop', cleanup);
+        const didPlay = sound.play();
+        if (!didPlay) {
+            cleanup();
+            return null;
+        }
+        return sound;
+    }
+
+    updateSfxStackVolumes(stackKey) {
+        const stack = this.activeSfxStacks.get(stackKey);
+        if (!stack?.size) return;
+
+        const stackCount = stack.size;
+        stack.forEach((record) => {
+            const multiplier = Math.pow(record.stackVolumeMultiplier, Math.max(0, stackCount - 1));
+            const volume = record.volume * multiplier;
+            if (typeof record.sound?.setVolume === 'function') {
+                record.sound.setVolume(volume);
+            } else if (record.sound) {
+                record.sound.volume = volume;
+            }
+        });
+    }
+
+    isCasterAnimationState(animationState) {
+        return animationState?.enemyType === 3 || animationState?.animationKey === 'caster';
+    }
+
+    startCasterChargeSound(enemyId) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!this.isCasterAnimationState(animationState) || animationState.dead) return;
+        if (this.casterChargeSounds.get(enemyId)?.isPlaying) return;
+
+        const sound = this.playSfx(ASSETS.audio.fireballCharge.key, FIREBALL_CHARGE_SOUND_VOLUME, {
+            serverEvent: true,
+            spatial: true,
+            worldX: animationState.x,
+            worldY: animationState.y,
+            spatialFalloffPower: FIREBALL_SOUND_FALLOFF_POWER,
+            stackKey: ASSETS.audio.fireballCharge.key,
+            stackVolumeMultiplier: FIREBALL_STACK_VOLUME_MULTIPLIER,
+        });
+        if (!sound) return;
+
+        this.casterChargeSounds.set(enemyId, sound);
+        sound.once('complete', () => {
+            if (this.casterChargeSounds.get(enemyId) === sound) {
+                this.casterChargeSounds.delete(enemyId);
+            }
+        });
+    }
+
+    stopCasterChargeSound(enemyId) {
+        const sound = this.casterChargeSounds.get(enemyId);
+        if (!sound) return;
+
+        if (sound.isPlaying || sound.isPaused) {
+            sound.stop();
+        } else {
+            sound.destroy();
+        }
+        this.casterChargeSounds.delete(enemyId);
+    }
+
+    stopAllCasterChargeSounds() {
+        Array.from(this.casterChargeSounds.keys()).forEach((enemyId) => this.stopCasterChargeSound(enemyId));
     }
 
     getSpatialVolumeMultiplier(worldX, worldY) {
@@ -2595,6 +2721,19 @@ export class Game extends Phaser.Scene {
     playEnemyAttackAnimation(enemyId, direction) {
         const animationState = this.enemyAnimationState.get(enemyId);
         if (!animationState || animationState.attacking || animationState.dead) return;
+
+        if (this.isCasterAnimationState(animationState)) {
+            this.stopCasterChargeSound(enemyId);
+            this.playSfx(ASSETS.audio.fireballCast.key, FIREBALL_CAST_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: true,
+                worldX: animationState.x,
+                worldY: animationState.y,
+                spatialFalloffPower: FIREBALL_SOUND_FALLOFF_POWER,
+                stackKey: ASSETS.audio.fireballCast.key,
+                stackVolumeMultiplier: FIREBALL_STACK_VOLUME_MULTIPLIER,
+            });
+        }
 
         animationState.attacking = true;
         const didPlay = this.playEnemyAnimation(enemyId, 'attack', direction, { restart: true });
@@ -2941,6 +3080,7 @@ export class Game extends Phaser.Scene {
     }
 
     clearAllSprites() {
+        this.stopAllCasterChargeSounds();
         this.playerSprites.forEach(s => s.destroy());
         this.playerWeaponSprites.forEach(s => s.destroy());
         this.playerHealthBars.forEach(({ background, fill }) => {
