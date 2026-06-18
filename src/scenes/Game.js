@@ -100,7 +100,7 @@ const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
 const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
-const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.55;
+const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.495;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_MAX_HEALTH = 5;
@@ -1091,9 +1091,10 @@ export class Game extends Phaser.Scene {
                 animationState.lastAttackSeq = player.attackSeq;
                 if (player.attackSeq <= 0) return;
                 animationState.attackItem = player.attackItem || animationState.activeItem || ITEM_WOOD_AXE;
+                const isLocalPredictedAttack = this.isLocalSession(playerSessionId) && animationState.attackItem !== ITEM_WOOD_BOW;
 
                 this.playPlayerAttackAnimation(playerSessionId, player.attackDirection, {
-                    playAudio: this.shouldPlayAttackAudio(playerSessionId),
+                    playAudio: !isLocalPredictedAttack && this.shouldPlayAttackAudio(playerSessionId),
                     resumeBowRelease: animationState.attackItem === ITEM_WOOD_BOW,
                     restart: animationState.attackItem !== ITEM_WOOD_BOW,
                 });
