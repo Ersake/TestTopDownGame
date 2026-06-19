@@ -129,17 +129,19 @@ const PLAYER_REVIVE_BAR_DEPTH = 131;
 const PLAYER_REVIVE_BAR_FILL_COLOR = 0x8bdcff;
 const PLAYER_LEVEL_LABEL_Y_OFFSET = -27;
 const PLAYER_LEVEL_LABEL_DEPTH = 132;
-const EXPERIENCE_BAR_WIDTH = 720;
-const EXPERIENCE_BAR_HEIGHT = 18;
-const EXPERIENCE_BAR_BOTTOM_MARGIN = 14;
+const HUD_BAR_WIDTH = 360;
+const HUD_BAR_HEIGHT = 16;
+const HUD_STACK_GAP = 8;
+const HUD_BOTTOM_MARGIN = 14;
 const EXPERIENCE_BAR_BACKGROUND_COLOR = 0x050505;
 const EXPERIENCE_BAR_FILL_COLOR = 0x8a22d8;
 const EXPERIENCE_BAR_STROKE_COLOR = 0x000000;
+const HUD_HEALTH_BAR_FILL_COLOR = 0xff2020;
 const HOTBAR_SLOT_COUNT = 9;
-const HOTBAR_SLOT_SIZE = 42;
-const HOTBAR_SLOT_GAP = 6;
-const HOTBAR_ICON_SIZE = 28;
-const HOTBAR_BOTTOM_GAP = 18;
+const HOTBAR_SLOT_SIZE = 53;
+const HOTBAR_SLOT_GAP = 8;
+const HOTBAR_ICON_SIZE = 35;
+const HOTBAR_BOTTOM_GAP = 12;
 const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
 const OUTFIT_TAN_INDEX = 4;
@@ -424,6 +426,7 @@ export class Game extends Phaser.Scene {
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
         this.initExperienceBar();
+        this.initHudHealthBar();
         this.initHotbar();
         this.initOutfitColorPicker();
         this.initVolumeSlider();
@@ -504,19 +507,35 @@ export class Game extends Phaser.Scene {
     }
 
     initExperienceBar() {
-        const x = this.centreX - EXPERIENCE_BAR_WIDTH * 0.5;
-        const y = this.scale.height - EXPERIENCE_BAR_BOTTOM_MARGIN - EXPERIENCE_BAR_HEIGHT;
+        const x = this.centreX - HUD_BAR_WIDTH * 0.5;
+        const y = this.scale.height - HUD_BOTTOM_MARGIN - HUD_BAR_HEIGHT;
 
         this.experienceBarBackground = this.add.graphics().setDepth(UI_DEPTH).setScrollFactor(0);
         this.experienceBarFill = this.add.graphics().setDepth(UI_DEPTH + 1).setScrollFactor(0);
-        this.experienceBarText = this.add.text(this.centreX, y - 14, 'Level 1  0 / 5', {
-            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 5,
+        this.experienceBarText = this.add.text(this.centreX, y + HUD_BAR_HEIGHT * 0.5, 'XP: 0 / 5', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 3,
         }).setOrigin(0.5).setDepth(UI_DEPTH + 2).setScrollFactor(0);
 
-        this.experienceBarLayout = { x, y, width: EXPERIENCE_BAR_WIDTH, height: EXPERIENCE_BAR_HEIGHT };
+        this.experienceBarLayout = { x, y, width: HUD_BAR_WIDTH, height: HUD_BAR_HEIGHT };
         this.updateExperienceBar(0, 5, 1);
         this.registerFixedUi(this.experienceBarBackground, this.experienceBarFill, this.experienceBarText);
+    }
+
+    initHudHealthBar() {
+        const x = this.centreX - HUD_BAR_WIDTH * 0.5;
+        const y = this.experienceBarLayout.y - HUD_STACK_GAP - HUD_BAR_HEIGHT;
+
+        this.hudHealthBarBackground = this.add.graphics().setDepth(UI_DEPTH).setScrollFactor(0);
+        this.hudHealthBarFill = this.add.graphics().setDepth(UI_DEPTH + 1).setScrollFactor(0);
+        this.hudHealthBarText = this.add.text(this.centreX, y + HUD_BAR_HEIGHT * 0.5, 'HP: 5 / 5', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 3,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 2).setScrollFactor(0);
+
+        this.hudHealthBarLayout = { x, y, width: HUD_BAR_WIDTH, height: HUD_BAR_HEIGHT };
+        this.updateHudHealthBar(PLAYER_MAX_HEALTH);
+        this.registerFixedUi(this.hudHealthBarBackground, this.hudHealthBarFill, this.hudHealthBarText);
     }
 
     initHotbar() {
@@ -530,7 +549,7 @@ export class Game extends Phaser.Scene {
 
         const totalWidth = HOTBAR_SLOT_COUNT * HOTBAR_SLOT_SIZE + (HOTBAR_SLOT_COUNT - 1) * HOTBAR_SLOT_GAP;
         const startX = this.centreX - totalWidth * 0.5 + HOTBAR_SLOT_SIZE * 0.5;
-        const y = this.experienceBarLayout.y - HOTBAR_BOTTOM_GAP - HOTBAR_SLOT_SIZE * 0.5;
+        const y = this.hudHealthBarLayout.y - HOTBAR_BOTTOM_GAP - HOTBAR_SLOT_SIZE * 0.5;
 
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
             const slot = i + 1;
@@ -1271,6 +1290,7 @@ export class Game extends Phaser.Scene {
 
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
+                if (isLocal) this.updateHudHealthBar(player.health);
             });
 
             player.listen('reviveProgress', () => {
@@ -1306,6 +1326,7 @@ export class Game extends Phaser.Scene {
                 this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
                 this.updateLocalExperienceState(player);
+                this.updateHudHealthBar(player.health);
                 this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
                 this.syncLocalHotbarFromPlayer(player);
@@ -1384,6 +1405,7 @@ export class Game extends Phaser.Scene {
                 this.localPendingUpgradeChoices = 0;
                 this.clearUpgradeUi();
                 this.updateExperienceBar(0, 5, 1);
+                this.updateHudHealthBar(PLAYER_MAX_HEALTH);
             }
             this.playerSprites.delete(sessionId);
             this.playerWeaponSprites.delete(sessionId);
@@ -3370,8 +3392,30 @@ export class Game extends Phaser.Scene {
         }
 
         if (this.experienceBarText) {
-            this.experienceBarText.setText(`Level ${level}  ${experience} / ${experienceToNext}`);
+            this.experienceBarText.setText(`XP: ${experience} / ${experienceToNext}   Lv. ${level}`);
         }
+    }
+
+    updateHudHealthBar(health) {
+        if (!this.hudHealthBarLayout || !this.hudHealthBarBackground || !this.hudHealthBarFill) return;
+
+        const { x, y, width, height } = this.hudHealthBarLayout;
+        const currentHealth = Phaser.Math.Clamp(health || 0, 0, PLAYER_MAX_HEALTH);
+        const progress = currentHealth / PLAYER_MAX_HEALTH;
+
+        this.hudHealthBarBackground.clear();
+        this.hudHealthBarBackground.fillStyle(EXPERIENCE_BAR_BACKGROUND_COLOR, 0.9);
+        this.hudHealthBarBackground.fillRoundedRect(x, y, width, height, 6);
+        this.hudHealthBarBackground.lineStyle(3, EXPERIENCE_BAR_STROKE_COLOR, 0.95);
+        this.hudHealthBarBackground.strokeRoundedRect(x, y, width, height, 6);
+
+        this.hudHealthBarFill.clear();
+        if (progress > 0) {
+            this.hudHealthBarFill.fillStyle(HUD_HEALTH_BAR_FILL_COLOR, 1);
+            this.hudHealthBarFill.fillRoundedRect(x, y, width * progress, height, 6);
+        }
+
+        this.hudHealthBarText?.setText(`HP: ${currentHealth} / ${PLAYER_MAX_HEALTH}`);
     }
 
     updatePlayerHealthBar(sessionId) {
