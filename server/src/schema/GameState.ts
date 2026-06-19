@@ -4,7 +4,8 @@ export class PlayerState extends Schema {
     @type("string")  sessionId: string = "";
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
-    @type("int8")    health: number = 5;
+    @type("int16")   health: number = 5;
+    @type("int16")   maxHealth: number = 5;
     @type("int32")   kills: number = 0;
     @type("int16")   level: number = 1;
     @type("int32")   experience: number = 0;

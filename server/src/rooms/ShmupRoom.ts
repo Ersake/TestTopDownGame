@@ -834,6 +834,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.sessionId = client.sessionId;
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
+        ps.maxHealth = PLAYER_MAX_HEALTH;
         ps.health = PLAYER_MAX_HEALTH;
         ps.kills = 0;
         ps.level = 1;
@@ -896,6 +897,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.players.forEach((player, sid) => {
             player.x = WORLD_WIDTH / 2;
             player.y = WORLD_HEIGHT / 2;
+            player.maxHealth = PLAYER_MAX_HEALTH;
             player.health = PLAYER_MAX_HEALTH;
             player.kills = 0;
             player.level = 1;
@@ -1130,7 +1132,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             });
 
             if (enemy.health <= 0) {
-                this.awardPlayerKill(attackerId);
+                this.awardPlayerKill(attackerId, enemy);
                 this.state.teamScore += 10;
                 this.killEnemy(enemyId, enemy);
             }
@@ -1167,7 +1169,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         };
 
         if (enemy.health <= 0) {
-            this.awardPlayerKill(attackerId);
+            this.awardPlayerKill(attackerId, enemy);
             this.state.teamScore += 10;
             this.killEnemy(enemyId, enemy);
         }
@@ -1226,12 +1228,13 @@ export class ShmupRoom extends Room<GameRoomState> {
         }, ENEMY_DEATH_REMOVE_MS);
     }
 
-    private awardPlayerKill(playerId: string) {
+    private awardPlayerKill(playerId: string, enemy: EnemyState) {
         const player = this.state.players.get(playerId);
         if (!player) return;
 
         player.kills++;
-        this.awardPlayerExperience(playerId, 1);
+        const experience = enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? 2 : 1;
+        this.awardPlayerExperience(playerId, experience);
     }
 
     private awardPlayerExperience(playerId: string, amount: number) {
@@ -1250,7 +1253,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (levelUps > 0) {
             player.pendingUpgradeChoices += levelUps;
-            player.health = PLAYER_MAX_HEALTH;
+            player.maxHealth += levelUps;
+            player.health = player.maxHealth;
             this.broadcast("playerLevelUp", {
                 playerId,
                 level: player.level,
@@ -1599,11 +1603,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.campfires.forEach((campfire) => {
             this.state.players.forEach((player, playerId) => {
                 const sp = this.serverPlayers.get(playerId);
-                if (!sp?.alive || player.isDead || player.health >= PLAYER_MAX_HEALTH) return;
+                if (!sp?.alive || player.isDead || player.health >= player.maxHealth) return;
                 const dx = player.x - campfire.x;
                 const dy = (player.y + PLAYER_TREE_Y_OFFSET) - campfire.y;
                 if (dx * dx + dy * dy > radiusSq) return;
-                player.health = Math.min(PLAYER_MAX_HEALTH, player.health + CAMPFIRE_HEAL_AMOUNT);
+                player.health = Math.min(player.maxHealth, player.health + CAMPFIRE_HEAL_AMOUNT);
             });
         });
     }
@@ -3027,7 +3031,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (deadBullets.includes(bid) || deadEnemies.includes(eid)) return;
                 if (enemy.isDead) return;
                 if (overlaps(bullet.x, bullet.y, PB_HW, PB_HH, enemy.x, enemy.y, ENEMY_HW, ENEMY_HH)) {
-                    this.awardPlayerKill(bullet.ownerId);
+                    this.awardPlayerKill(bullet.ownerId, enemy);
                     this.state.teamScore += 10;
                     deadBullets.push(bid);
                     enemy.health -= bullet.power;

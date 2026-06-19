@@ -1290,7 +1290,12 @@ export class Game extends Phaser.Scene {
 
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
-                if (isLocal) this.updateHudHealthBar(player.health);
+                if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
+            });
+
+            player.listen('maxHealth', () => {
+                this.updatePlayerHealthBar(playerSessionId);
+                if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
             });
 
             player.listen('reviveProgress', () => {
@@ -1326,7 +1331,7 @@ export class Game extends Phaser.Scene {
                 this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
                 this.updateLocalExperienceState(player);
-                this.updateHudHealthBar(player.health);
+                this.updateHudHealthBar(player.health, player.maxHealth);
                 this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
                 this.syncLocalHotbarFromPlayer(player);
@@ -3396,12 +3401,13 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    updateHudHealthBar(health) {
+    updateHudHealthBar(health, maxHealth = PLAYER_MAX_HEALTH) {
         if (!this.hudHealthBarLayout || !this.hudHealthBarBackground || !this.hudHealthBarFill) return;
 
         const { x, y, width, height } = this.hudHealthBarLayout;
-        const currentHealth = Phaser.Math.Clamp(health || 0, 0, PLAYER_MAX_HEALTH);
-        const progress = currentHealth / PLAYER_MAX_HEALTH;
+        const currentMaxHealth = Math.max(1, maxHealth || PLAYER_MAX_HEALTH);
+        const currentHealth = Phaser.Math.Clamp(health || 0, 0, currentMaxHealth);
+        const progress = currentHealth / currentMaxHealth;
 
         this.hudHealthBarBackground.clear();
         this.hudHealthBarBackground.fillStyle(EXPERIENCE_BAR_BACKGROUND_COLOR, 0.9);
@@ -3415,7 +3421,7 @@ export class Game extends Phaser.Scene {
             this.hudHealthBarFill.fillRoundedRect(x, y, width * progress, height, 6);
         }
 
-        this.hudHealthBarText?.setText(`HP: ${currentHealth} / ${PLAYER_MAX_HEALTH}`);
+        this.hudHealthBarText?.setText(`HP: ${currentHealth} / ${currentMaxHealth}`);
     }
 
     updatePlayerHealthBar(sessionId) {
@@ -3423,8 +3429,9 @@ export class Game extends Phaser.Scene {
         const sprite = this.playerSprites.get(sessionId);
         if (!healthBar || !sprite) return;
 
-        const health = Phaser.Math.Clamp(healthBar.player.health || 0, 0, PLAYER_MAX_HEALTH);
-        const fillWidth = (health / PLAYER_MAX_HEALTH) * PLAYER_HEALTH_BAR_WIDTH;
+        const maxHealth = Math.max(1, healthBar.player.maxHealth || PLAYER_MAX_HEALTH);
+        const health = Phaser.Math.Clamp(healthBar.player.health || 0, 0, maxHealth);
+        const fillWidth = (health / maxHealth) * PLAYER_HEALTH_BAR_WIDTH;
         const x = sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5;
         const y = sprite.y + PLAYER_HEALTH_BAR_Y_OFFSET;
 
