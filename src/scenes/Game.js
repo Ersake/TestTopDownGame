@@ -159,6 +159,7 @@ const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
 const ITEM_CAMPFIRE = 'campfire';
 const ITEM_WOOD = 'wood';
+const BOW_RELEASE_FALLBACK_MS = 350;
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -935,6 +936,7 @@ export class Game extends Phaser.Scene {
         const nextItem = this.getItemForHotbarSlot(slot);
         if (animationState.activeItem === ITEM_WOOD_BOW && nextItem !== ITEM_WOOD_BOW) {
             this.cancelBowCharge();
+            this.clearBowPresentationState(sessionId, { updateAnimation: false });
         }
         animationState.activeSlot = slot;
         animationState.activeItem = nextItem;
@@ -1117,6 +1119,7 @@ export class Game extends Phaser.Scene {
                 bowChargeProgress: player.bowChargeProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
+                bowReleaseFallbackEvent: null,
                 axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
                 lastMovedAt: 0,
                 x: player.x,
@@ -1203,8 +1206,12 @@ export class Game extends Phaser.Scene {
             player.listen('activeItem', (item) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (!animationState) return;
+                const wasBow = animationState.activeItem === ITEM_WOOD_BOW;
                 animationState.activeItem = item || '';
-                if (animationState.activeItem !== ITEM_WOOD_BOW && isLocal) this.cancelBowCharge();
+                if (wasBow && animationState.activeItem !== ITEM_WOOD_BOW) {
+                    if (isLocal) this.cancelBowCharge();
+                    this.clearBowPresentationState(playerSessionId, { updateAnimation: false });
+                }
                 if (isLocal) this.syncBuildModeForActiveItem(animationState.activeItem);
                 if (!animationState.attacking && !animationState.dead) {
                     this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
@@ -1223,16 +1230,13 @@ export class Game extends Phaser.Scene {
                 if (!charging) {
                     this.updatePlayerBowChargeBar(playerSessionId);
                     if (animationState.bowFullyCharged && animationState.attackItem === ITEM_WOOD_BOW) {
+                        this.scheduleBowReleaseFallback(playerSessionId);
                         return;
                     }
-                    animationState.bowChargeProgress = 0;
-                    animationState.bowAnimationPaused = false;
-                    if (animationState.attacking && animationState.attackItem === ITEM_WOOD_BOW) {
-                        animationState.attacking = false;
-                    }
-                    this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+                    this.clearBowPresentationState(playerSessionId, { updateAnimation: true });
                     return;
                 }
+                this.cancelBowReleaseFallback(playerSessionId);
                 animationState.attackItem = ITEM_WOOD_BOW;
                 animationState.bowFullyCharged = false;
                 animationState.bowAnimationPaused = false;
@@ -1351,6 +1355,7 @@ export class Game extends Phaser.Scene {
         state.players.forEach(addPlayer);
 
         state.players.onRemove((_player, sessionId) => {
+            this.cancelBowReleaseFallback(sessionId);
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
             const weapon = this.playerWeaponSprites.get(sessionId);
@@ -2645,12 +2650,60 @@ export class Game extends Phaser.Scene {
         animationState.bowAnimationPaused = true;
     }
 
+    cancelBowReleaseFallback(sessionId) {
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!animationState?.bowReleaseFallbackEvent) return;
+        animationState.bowReleaseFallbackEvent.remove(false);
+        animationState.bowReleaseFallbackEvent = null;
+    }
+
+    scheduleBowReleaseFallback(sessionId) {
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!animationState || animationState.bowReleaseFallbackEvent) return;
+
+        animationState.bowReleaseFallbackEvent = this.time.delayedCall(BOW_RELEASE_FALLBACK_MS, () => {
+            animationState.bowReleaseFallbackEvent = null;
+            if (animationState.bowCharging || animationState.attackItem !== ITEM_WOOD_BOW) return;
+            this.clearBowPresentationState(sessionId, { updateAnimation: true });
+        });
+    }
+
+    clearBowPresentationState(sessionId, { updateAnimation = true } = {}) {
+        const sprite = this.playerSprites.get(sessionId);
+        const weapon = this.playerWeaponSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!animationState) return;
+
+        this.cancelBowReleaseFallback(sessionId);
+        animationState.bowCharging = false;
+        animationState.bowChargeProgress = 0;
+        animationState.bowFullyCharged = false;
+        animationState.bowAnimationPaused = false;
+        if (animationState.attackItem === ITEM_WOOD_BOW) {
+            animationState.attacking = false;
+            animationState.attackTargetX = null;
+            animationState.attackTargetY = null;
+        }
+
+        if (sprite?.anims?.isPaused) sprite.anims.resume();
+        if (weapon?.anims?.isPaused) weapon.anims.resume();
+
+        if (!updateAnimation || animationState.dead) return;
+        if (this.isLocalSession(sessionId)) {
+            this.updateLocalPlayerAnimation();
+        } else {
+            this.setPlayerAnimation(sessionId, animationState.moving, null);
+        }
+        this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+    }
+
     resumeBowReleaseAnimation(sessionId) {
         const sprite = this.playerSprites.get(sessionId);
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || animationState.attackItem !== ITEM_WOOD_BOW || !animationState.bowAnimationPaused) return false;
 
+        this.cancelBowReleaseFallback(sessionId);
         sprite.anims.resume();
         weapon?.anims.resume();
         animationState.bowAnimationPaused = false;
@@ -2691,6 +2744,7 @@ export class Game extends Phaser.Scene {
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
             if (animationState.bowCharging) return;
+            if (animationState.attackItem === ITEM_WOOD_BOW) this.cancelBowReleaseFallback(sessionId);
             animationState.attacking = false;
             animationState.attackTargetX = null;
             animationState.attackTargetY = null;
@@ -2709,6 +2763,7 @@ export class Game extends Phaser.Scene {
         if (!sprite || !animationState || animationState.deathPlayed) return;
 
         if (this.isLocalSession(sessionId)) this.cancelBowCharge();
+        this.cancelBowReleaseFallback(sessionId);
         animationState.dead = true;
         animationState.deathPlayed = true;
         animationState.attacking = false;
@@ -2736,6 +2791,9 @@ export class Game extends Phaser.Scene {
         animationState.moving = false;
         animationState.bowCharging = false;
         animationState.bowChargeProgress = 0;
+        animationState.bowFullyCharged = false;
+        animationState.bowAnimationPaused = false;
+        this.cancelBowReleaseFallback(sessionId);
         animationState.attackTargetX = null;
         animationState.attackTargetY = null;
         animationState.x = player.x;
@@ -3441,6 +3499,7 @@ export class Game extends Phaser.Scene {
 
     clearAllSprites() {
         this.stopAllCasterChargeSounds();
+        this.playerAnimationState.forEach((_animationState, sessionId) => this.cancelBowReleaseFallback(sessionId));
         this.playerSprites.forEach(s => s.destroy());
         this.playerWeaponSprites.forEach(s => s.destroy());
         this.playerHealthBars.forEach(({ background, fill }) => {
