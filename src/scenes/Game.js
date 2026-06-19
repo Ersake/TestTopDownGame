@@ -28,7 +28,6 @@ const DARK_KNIGHT_DISPLAY_SIZE = ENEMY_DISPLAY_SIZE * 1.5;
 const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
-const WOOD_UI_ICON_SIZE = 64;
 const PLAYER_HITBOX_HW = 17;
 const PLAYER_HITBOX_HH = 17;
 const PLAYER_FOOT_RADIUS = 5;
@@ -77,6 +76,7 @@ const WOOD_BLOCK_HIT_FLASH_MS = 90;
 const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
 const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
 const BUILD_DRAG_SEND_INTERVAL_MS = 35;
+const HAMMER_REPAIR_TICK_MS = 500;
 const CAMPFIRE_DISPLAY_SIZE = 84;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_DEPTH = 86;
@@ -158,6 +158,7 @@ const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
 const ITEM_CAMPFIRE = 'campfire';
+const ITEM_WOOD = 'wood';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -213,6 +214,7 @@ export class Game extends Phaser.Scene {
         this.ensureLocalCameraFollow();
         this.updateBowChargeAim();
         this.updateHeldAttack();
+        this.updateBuildHold();
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
@@ -259,6 +261,7 @@ export class Game extends Phaser.Scene {
         this.localActiveSlot = 1;
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
+        this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
         this.upgradeUiMode = 'root';
         this.upgradeUiObjects = [];
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
@@ -283,6 +286,7 @@ export class Game extends Phaser.Scene {
         this.buildPreview = null;
         this.buildPreviewKind = null;
         this.activeBuildPointerId = null;
+        this.activeBuildPointer = null;
         this.activeBuildButton = null;
         this.lastBuildDragCellId = null;
         this.lastBuildDragSentAt = 0;
@@ -370,17 +374,6 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.woodIcon = this.add.image(52, this.scale.height - 52, ASSETS.image.log.key)
-            .setOrigin(0.5)
-            .setDisplaySize(WOOD_UI_ICON_SIZE, WOOD_UI_ICON_SIZE)
-            .setDepth(UI_DEPTH)
-            .setScrollFactor(0);
-
-        this.woodText = this.add.text(96, this.scale.height - 70, '0', {
-            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 8,
-        }).setDepth(UI_DEPTH).setScrollFactor(0);
-
         this.killsText = this.add.text(this.scale.width - 20, 20, 'Kills: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffff00',
             stroke: '#000000', strokeThickness: 8,
@@ -436,8 +429,6 @@ export class Game extends Phaser.Scene {
         this.registerFixedUi(
             this.tutorialText,
             this.timerText,
-            this.woodIcon,
-            this.woodText,
             this.killsText,
             this.playerCountText,
             this.gameOverText,
@@ -532,6 +523,7 @@ export class Game extends Phaser.Scene {
             slot.box?.destroy();
             slot.icon?.destroy();
             slot.label?.destroy();
+            slot.countLabel?.destroy();
         });
         this.hotbarSlots = [];
 
@@ -553,6 +545,7 @@ export class Game extends Phaser.Scene {
             }).setDepth(UI_DEPTH + 5).setScrollFactor(0);
 
             const item = this.hotbarSlotItems[i];
+            const count = this.hotbarSlotCounts[i] || 0;
             const iconKey = this.getHotbarIconKey(item);
             const icon = iconKey ? this.add.image(x, y + 2, iconKey).setOrigin(0.5) : null;
             if (icon) {
@@ -561,9 +554,15 @@ export class Game extends Phaser.Scene {
                     .setDepth(UI_DEPTH + 4)
                     .setScrollFactor(0);
             }
+            const countLabel = item && count > 0
+                ? this.add.text(x + HOTBAR_SLOT_SIZE * 0.5 - 5, y + HOTBAR_SLOT_SIZE * 0.5 - 15, `${count}`, {
+                    fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+                    stroke: '#000000', strokeThickness: 3,
+                }).setOrigin(1, 0.5).setDepth(UI_DEPTH + 6).setScrollFactor(0)
+                : null;
 
-            this.hotbarSlots.push({ box, icon, label, slot });
-            this.registerFixedUi(box, icon, label);
+            this.hotbarSlots.push({ box, icon, label, countLabel, slot });
+            this.registerFixedUi(box, icon, label, countLabel);
         }
 
         this.updateHotbarSelection();
@@ -574,16 +573,20 @@ export class Game extends Phaser.Scene {
         if (item === ITEM_WOOD_BOW) return ASSETS.image.woodBowIcon.key;
         if (item === ITEM_HAMMER) return ASSETS.image.hammerIcon.key;
         if (item === ITEM_CAMPFIRE) return ASSETS.spritesheet.campfire.key;
+        if (item === ITEM_WOOD) return ASSETS.image.log.key;
         return null;
     }
 
     syncLocalHotbarFromPlayer(player) {
         if (!player?.hotbarItems) return;
         const nextItems = [];
+        const nextCounts = [];
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
             nextItems.push(player.hotbarItems[i] || '');
+            nextCounts.push(player.hotbarCounts?.[i] || 0);
         }
         this.hotbarSlotItems = nextItems;
+        this.hotbarSlotCounts = nextCounts;
         this.initHotbar();
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
@@ -901,6 +904,7 @@ export class Game extends Phaser.Scene {
         this.input.on('pointerup', (pointer) => {
             if (this.activeBuildPointerId === pointer.id) {
                 this.activeBuildPointerId = null;
+                this.activeBuildPointer = null;
                 this.activeBuildButton = null;
                 this.lastBuildDragCellId = null;
             }
@@ -950,7 +954,7 @@ export class Game extends Phaser.Scene {
     }
 
     syncBuildModeForActiveItem(item) {
-        const shouldBuild = item === ITEM_HAMMER || item === ITEM_CAMPFIRE;
+        const shouldBuild = item === ITEM_WOOD || item === ITEM_HAMMER || item === ITEM_CAMPFIRE;
         if (this.isBuildModeActive === shouldBuild && this.buildPreviewKind === item) return;
 
         this.isBuildModeActive = shouldBuild;
@@ -1297,7 +1301,6 @@ export class Game extends Phaser.Scene {
             if (isLocal) {
                 this.activateLocalCamera(sprite, player);
                 this.killsText.setText(`Kills: ${player.kills}`);
-                this.woodText.setText(`${player.wood || 0}`);
                 this.updateLocalExperienceState(player);
                 this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
@@ -1311,15 +1314,14 @@ export class Game extends Phaser.Scene {
                     player.hotbarItems.onAdd(syncHotbar);
                     player.hotbarItems.onChange(syncHotbar);
                     player.hotbarItems.onRemove(syncHotbar);
+                    player.hotbarCounts?.onAdd(syncHotbar);
+                    player.hotbarCounts?.onChange(syncHotbar);
+                    player.hotbarCounts?.onRemove(syncHotbar);
                 }
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
                     this.updateLocalExperienceState(player);
-                });
-
-                player.listen('wood', (wood) => {
-                    this.woodText.setText(`${wood || 0}`);
                 });
 
                 player.listen('experience', () => {
@@ -2037,6 +2039,7 @@ export class Game extends Phaser.Scene {
         if (button !== 0 && button !== 2) return;
 
         this.activeBuildPointerId = pointer.id;
+        this.activeBuildPointer = pointer;
         this.activeBuildButton = button;
         this.lastBuildDragCellId = null;
         this.lastBuildDragSentAt = 0;
@@ -2047,26 +2050,44 @@ export class Game extends Phaser.Scene {
     handleBuildModePointerDrag(pointer) {
         if (this.activeBuildPointerId !== pointer.id) return;
         if (this.activeBuildButton !== 0 && this.activeBuildButton !== 2) return;
+        this.activeBuildPointer = pointer;
 
         const now = this.time.now;
-        if (now - this.lastBuildDragSentAt < BUILD_DRAG_SEND_INTERVAL_MS) return;
+        const activeItem = this.getLocalActiveItem();
+        const minInterval = activeItem === ITEM_HAMMER && this.activeBuildButton === 0 ? HAMMER_REPAIR_TICK_MS : BUILD_DRAG_SEND_INTERVAL_MS;
+        if (now - this.lastBuildDragSentAt < minInterval) return;
+        this.sendBuildIntentAtPointer(pointer, this.activeBuildButton, false);
+    }
+
+    updateBuildHold() {
+        if (!this.isBuildModeActive || this.activeBuildPointerId === null || !this.activeBuildPointer) return;
+        if (this.activeBuildButton !== 0 && this.activeBuildButton !== 2) return;
+
+        const pointer = this.activeBuildPointer;
+        if (this.activeBuildButton === 0 && !pointer.leftButtonDown?.()) return;
+        if (this.activeBuildButton === 2 && !pointer.rightButtonDown?.()) return;
         this.sendBuildIntentAtPointer(pointer, this.activeBuildButton, false);
     }
 
     sendBuildIntentAtPointer(pointer, button, force = false) {
         const cell = this.getBuildCellFromPointer(pointer);
         if (!cell) return;
-        if (!force && cell.id === this.lastBuildDragCellId) return;
+
+        const activeItem = this.getLocalActiveItem();
+        const isRepairTick = button === 0 && activeItem === ITEM_HAMMER;
+        if (isRepairTick && !force && this.time.now - this.lastBuildDragSentAt < HAMMER_REPAIR_TICK_MS) return;
+        if (!force && !isRepairTick && cell.id === this.lastBuildDragCellId) return;
 
         this.lastBuildDragCellId = cell.id;
         this.lastBuildDragSentAt = this.time.now;
 
-        const activeItem = this.getLocalActiveItem();
-        if (button === 0 && activeItem === ITEM_HAMMER) {
+        if (button === 0 && activeItem === ITEM_WOOD) {
             RoomClient.sendBuildWoodBlock(cell.x, cell.y);
+        } else if (button === 0 && activeItem === ITEM_HAMMER) {
+            RoomClient.sendRepairWoodBlock(cell.x, cell.y);
         } else if (button === 0 && activeItem === ITEM_CAMPFIRE) {
             RoomClient.sendPlaceCampfire(cell.x, cell.y);
-        } else if (button === 2 && activeItem === ITEM_HAMMER) {
+        } else if (button === 2 && (activeItem === ITEM_HAMMER || activeItem === ITEM_WOOD)) {
             RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
         }
     }
@@ -2122,6 +2143,7 @@ export class Game extends Phaser.Scene {
 
     resetBuildDragState() {
         this.activeBuildPointerId = null;
+        this.activeBuildPointer = null;
         this.activeBuildButton = null;
         this.lastBuildDragCellId = null;
         this.lastBuildDragSentAt = 0;

@@ -124,8 +124,12 @@ const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
 const ITEM_HAMMER = "hammer";
 const ITEM_CAMPFIRE = "campfire";
+const ITEM_WOOD = "wood";
 const HOTBAR_SLOT_COUNT = 9;
 const EMPTY_HOTBAR_ITEM = "";
+const EMPTY_HOTBAR_COUNT = 0;
+const WOOD_STACK_MAX = 99;
+const WOOD_BLOCK_REPAIR_AMOUNT = 1;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
 const CAMPFIRE_HEAL_AMOUNT = 1;
@@ -506,6 +510,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.tryRemoveWoodBlock(client.sessionId, data);
         });
 
+        this.onMessage("repairWoodBlock", (client, data) => {
+            this.tryRepairWoodBlock(client.sessionId, data);
+        });
+
         this.onMessage("placeCampfire", (client, data) => {
             this.tryPlaceCampfire(client.sessionId, data);
         });
@@ -575,6 +583,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private initializeHotbar(player: PlayerState) {
         player.hotbarItems.clear();
+        player.hotbarCounts.clear();
         player.hotbarItems.push(
             ITEM_WOOD_AXE,
             ITEM_WOOD_BOW,
@@ -585,6 +594,17 @@ export class ShmupRoom extends Room<GameRoomState> {
             EMPTY_HOTBAR_ITEM,
             EMPTY_HOTBAR_ITEM,
             EMPTY_HOTBAR_ITEM,
+        );
+        player.hotbarCounts.push(
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
+            EMPTY_HOTBAR_COUNT,
         );
         player.activeSlot = 1;
         player.activeItem = ITEM_WOOD_AXE;
@@ -598,6 +618,15 @@ export class ShmupRoom extends Room<GameRoomState> {
         while (player.hotbarItems.length > HOTBAR_SLOT_COUNT) {
             player.hotbarItems.pop();
         }
+        while (player.hotbarCounts.length < HOTBAR_SLOT_COUNT) {
+            player.hotbarCounts.push(EMPTY_HOTBAR_COUNT);
+        }
+        while (player.hotbarCounts.length > HOTBAR_SLOT_COUNT) {
+            player.hotbarCounts.pop();
+        }
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            if (!player.hotbarItems[i]) player.hotbarCounts[i] = EMPTY_HOTBAR_COUNT;
+        }
     }
 
     private getHotbarItem(player: PlayerState, slot: number): string {
@@ -608,9 +637,88 @@ export class ShmupRoom extends Room<GameRoomState> {
     private setHotbarItem(player: PlayerState, slot: number, item: string) {
         this.normalizeHotbar(player);
         player.hotbarItems[slot - 1] = item;
+        player.hotbarCounts[slot - 1] = item ? player.hotbarCounts[slot - 1] || EMPTY_HOTBAR_COUNT : EMPTY_HOTBAR_COUNT;
         if (player.activeSlot === slot) {
             player.activeItem = item;
         }
+    }
+
+    private getHotbarCount(player: PlayerState, slot: number): number {
+        this.normalizeHotbar(player);
+        return Math.max(0, Math.floor(player.hotbarCounts[slot - 1] || 0));
+    }
+
+    private setHotbarSlot(player: PlayerState, slot: number, item: string, count: number = 0) {
+        this.normalizeHotbar(player);
+        player.hotbarItems[slot - 1] = item;
+        const maxCount = item === ITEM_WOOD ? WOOD_STACK_MAX : Number.MAX_SAFE_INTEGER;
+        player.hotbarCounts[slot - 1] = item ? clamp(Math.floor(count), 0, maxCount) : EMPTY_HOTBAR_COUNT;
+        if (player.activeSlot === slot) {
+            player.activeItem = item;
+        }
+    }
+
+    private findFirstEmptyHotbarSlot(player: PlayerState): number {
+        this.normalizeHotbar(player);
+        const emptyIndex = player.hotbarItems.findIndex((item) => !item);
+        return emptyIndex < 0 ? 0 : emptyIndex + 1;
+    }
+
+    private addWoodToHotbar(player: PlayerState, count: number): boolean {
+        this.normalizeHotbar(player);
+        let remaining = Math.max(0, Math.floor(count));
+        if (remaining <= 0) return false;
+
+        let capacity = 0;
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            if (player.hotbarItems[i] === ITEM_WOOD) {
+                capacity += WOOD_STACK_MAX - clamp(Math.floor(player.hotbarCounts[i] || 0), 0, WOOD_STACK_MAX);
+            } else if (!player.hotbarItems[i]) {
+                capacity += WOOD_STACK_MAX;
+            }
+        }
+        if (capacity < remaining) return false;
+
+        for (let i = 0; i < HOTBAR_SLOT_COUNT && remaining > 0; i++) {
+            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
+            const current = clamp(Math.floor(player.hotbarCounts[i] || 0), 0, WOOD_STACK_MAX);
+            const room = WOOD_STACK_MAX - current;
+            if (room <= 0) continue;
+            const added = Math.min(room, remaining);
+            player.hotbarCounts[i] = current + added;
+            remaining -= added;
+        }
+
+        while (remaining > 0) {
+            const slot = this.findFirstEmptyHotbarSlot(player);
+            if (slot <= 0) return false;
+            const added = Math.min(WOOD_STACK_MAX, remaining);
+            this.setHotbarSlot(player, slot, ITEM_WOOD, added);
+            remaining -= added;
+        }
+
+        return true;
+    }
+
+    private consumeActiveWood(player: PlayerState, count: number): boolean {
+        if (player.activeItem !== ITEM_WOOD) return false;
+        const slot = player.activeSlot;
+        const current = this.getHotbarCount(player, slot);
+        if (current < count) return false;
+        const next = current - count;
+        if (next <= 0) {
+            this.setHotbarSlot(player, slot, EMPTY_HOTBAR_ITEM, EMPTY_HOTBAR_COUNT);
+        } else {
+            player.hotbarCounts[slot - 1] = next;
+        }
+        return true;
+    }
+
+    private getTotalHeldWood(player: PlayerState): number {
+        this.normalizeHotbar(player);
+        return player.hotbarItems.reduce((total, item, index) => {
+            return item === ITEM_WOOD ? total + Math.max(0, Math.floor(player.hotbarCounts[index] || 0)) : total;
+        }, 0);
     }
 
     private grantCampfireItem(player: PlayerState) {
@@ -624,6 +732,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const emptyIndex = player.hotbarItems.findIndex((item) => !item);
             if (emptyIndex < 0) return;
             player.hotbarItems[emptyIndex] = ITEM_CAMPFIRE;
+            player.hotbarCounts[emptyIndex] = EMPTY_HOTBAR_COUNT;
             player.pendingCampfireCharges--;
             if (player.activeSlot === emptyIndex + 1) {
                 player.activeItem = ITEM_CAMPFIRE;
@@ -1206,7 +1315,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!log) return 0;
 
         const amount = Math.ceil((log.amount || WOOD_PILE_AMOUNT) * (1 + 0.5 * Math.max(0, player.woodGatherUpgrades || 0)));
-        player.wood += amount;
+        if (!this.addWoodToHotbar(player, amount)) return 0;
+        player.wood = this.getTotalHeldWood(player);
         this.state.logs.delete(closestLogId);
         return amount;
     }
@@ -1215,8 +1325,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
         if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
-        if (player.activeItem !== ITEM_HAMMER) return false;
-        if (player.wood < BUILD_BLOCK_COST) return false;
+        if (player.activeItem !== ITEM_WOOD || this.getHotbarCount(player, player.activeSlot) < BUILD_BLOCK_COST) return false;
 
         const cell = this.getBuildCellFromData(data);
         if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
@@ -1230,11 +1339,37 @@ export class ShmupRoom extends Room<GameRoomState> {
         block.health = maxHealth;
         block.maxHealth = maxHealth;
         this.state.woodBlocks.set(block.id, block);
-        player.wood -= BUILD_BLOCK_COST;
+        this.consumeActiveWood(player, BUILD_BLOCK_COST);
+        player.wood = this.getTotalHeldWood(player);
         return true;
     }
 
     private tryRemoveWoodBlock(sessionId: string, data: unknown): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.activeItem !== ITEM_HAMMER && player.activeItem !== ITEM_WOOD) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+
+        const woodBlockId = this.getWoodBlockIdForCell(cell);
+        if (this.state.woodBlocks.has(woodBlockId)) {
+            if (!this.addWoodToHotbar(player, BUILD_BLOCK_COST)) return false;
+            this.state.woodBlocks.delete(woodBlockId);
+            player.wood = this.getTotalHeldWood(player);
+            return true;
+        }
+
+        if (player.activeItem !== ITEM_HAMMER) return false;
+        const campfireId = this.getCampfireIdForCell(cell);
+        if (!this.state.campfires.has(campfireId)) return false;
+        this.state.campfires.delete(campfireId);
+        this.grantCampfireItem(player);
+        return true;
+    }
+
+    private tryRepairWoodBlock(sessionId: string, data: unknown): boolean {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
         if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
@@ -1243,17 +1378,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         const cell = this.getBuildCellFromData(data);
         if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
 
-        const woodBlockId = this.getWoodBlockIdForCell(cell);
-        if (this.state.woodBlocks.has(woodBlockId)) {
-            this.state.woodBlocks.delete(woodBlockId);
-            player.wood += BUILD_BLOCK_COST;
-            return true;
-        }
-
-        const campfireId = this.getCampfireIdForCell(cell);
-        if (!this.state.campfires.has(campfireId)) return false;
-        this.state.campfires.delete(campfireId);
-        this.grantCampfireItem(player);
+        const block = this.state.woodBlocks.get(this.getWoodBlockIdForCell(cell));
+        if (!block || block.health >= block.maxHealth) return false;
+        block.health = Math.min(block.maxHealth, block.health + WOOD_BLOCK_REPAIR_AMOUNT);
         return true;
     }
 

@@ -33,6 +33,7 @@ export class PlayerState extends Schema {
     @type("int16")   campfireUpgrades: number = 0;
     @type("int16")   pendingCampfireCharges: number = 0;
     @type(["string"]) hotbarItems = new ArraySchema<string>();
+    @type(["int16"])  hotbarCounts = new ArraySchema<number>();
 }
 
 export class EnemyState extends Schema {

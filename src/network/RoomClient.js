@@ -134,6 +134,11 @@ class RoomClient {
         this.room.send("removeWoodBlock", { x, y });
     }
 
+    sendRepairWoodBlock(x, y) {
+        if (!this.room) return;
+        this.room.send("repairWoodBlock", { x, y });
+    }
+
     sendPlaceCampfire(x, y) {
         if (!this.room) return;
         this.room.send("placeCampfire", { x, y });
