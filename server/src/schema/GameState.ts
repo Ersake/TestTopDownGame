@@ -1,4 +1,4 @@
-import { Schema, type, MapSchema } from "@colyseus/schema";
+import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 
 export class PlayerState extends Schema {
     @type("string")  sessionId: string = "";
@@ -21,6 +21,18 @@ export class PlayerState extends Schema {
     @type("boolean") bowCharging: boolean = false;
     @type("float32") bowChargeProgress: number = 0;
     @type("int32")   bowChargeSeq: number = 0;
+    @type("int16")   pendingUpgradeChoices: number = 0;
+    @type("int16")   axeSwingSpeedUpgrades: number = 0;
+    @type("int16")   axeTreeDamageUpgrades: number = 0;
+    @type("int16")   axeEnemyDamageUpgrades: number = 0;
+    @type("int16")   bowDamageUpgrades: number = 0;
+    @type("int16")   bowPierceUpgrades: number = 0;
+    @type("int16")   bowChargeTimeUpgrades: number = 0;
+    @type("int16")   barricadeHealthUpgrades: number = 0;
+    @type("int16")   woodGatherUpgrades: number = 0;
+    @type("int16")   campfireUpgrades: number = 0;
+    @type("int16")   pendingCampfireCharges: number = 0;
+    @type(["string"]) hotbarItems = new ArraySchema<string>();
 }
 
 export class EnemyState extends Schema {
@@ -80,6 +92,12 @@ export class WoodBlockState extends Schema {
     @type("int8")    maxHealth: number = 5;
 }
 
+export class CampfireState extends Schema {
+    @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 export class GameRoomState extends Schema {
     @type({ map: PlayerState })       players      = new MapSchema<PlayerState>();
     @type({ map: EnemyState })        enemies      = new MapSchema<EnemyState>();
@@ -88,6 +106,7 @@ export class GameRoomState extends Schema {
     @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
     @type({ map: LogState })          logs          = new MapSchema<LogState>();
     @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
+    @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
 
     @type("int32")  worldWidth:  number = 3840;
     @type("int32")  worldHeight: number = 2160;

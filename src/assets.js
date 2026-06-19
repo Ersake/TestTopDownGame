@@ -84,6 +84,13 @@ export default {
         },
     },
     'spritesheet': {
+        campfire: {
+            key: 'campfire',
+            args: ['assets/campfire.png', {
+                frameWidth: 640,
+                frameHeight: 640,
+            }]
+        },
         ships: {
             key: 'ships',
             args: ['assets/ships.png', {

@@ -134,6 +134,16 @@ class RoomClient {
         this.room.send("removeWoodBlock", { x, y });
     }
 
+    sendPlaceCampfire(x, y) {
+        if (!this.room) return;
+        this.room.send("placeCampfire", { x, y });
+    }
+
+    sendSelectUpgrade(upgradeId) {
+        if (!this.room) return;
+        this.room.send("selectUpgrade", { upgradeId });
+    }
+
     _lastInput = "";
 }
 

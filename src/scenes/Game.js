@@ -52,7 +52,7 @@ const BOW_AIM_SEND_INTERVAL_MS = 50;
 const ENEMY_ATTACK_RANGE = 26;
 const CASTER_CAST_RANGE = 360;
 const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
-const DARK_KNIGHT_AOE_RADIUS = 80;
+const DARK_KNIGHT_AOE_RADIUS = 88;
 const ENEMY_ATTACK_HIT_OFFSET = 28;
 const ENEMY_ATTACK_HIT_HW = 42;
 const ENEMY_ATTACK_HIT_HH = 36;
@@ -77,6 +77,15 @@ const WOOD_BLOCK_HIT_FLASH_MS = 90;
 const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
 const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
 const BUILD_DRAG_SEND_INTERVAL_MS = 35;
+const CAMPFIRE_DISPLAY_SIZE = 84;
+const CAMPFIRE_HEAL_RADIUS = 320;
+const CAMPFIRE_DEPTH = 86;
+const CAMPFIRE_ANIMATION_KEY = 'campfire-burn';
+const CAMPFIRE_ICON_FRAME = 0;
+const CAMPFIRE_RADIUS_COLOR = 0xffc46a;
+const CAMPFIRE_RADIUS_ALPHA = 0.65;
+const CAMPFIRE_RADIUS_DOT_LENGTH = 10;
+const CAMPFIRE_RADIUS_DOT_GAP = 8;
 const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
@@ -148,6 +157,7 @@ const OUTFIT_COLOR_BUTTONS = [
 const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
+const ITEM_CAMPFIRE = 'campfire';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -245,9 +255,12 @@ export class Game extends Phaser.Scene {
         this.playerLevelLabels = new Map();
         this.offscreenPlayerIndicators = new Map();
         this.localExperienceState = null;
+        this.localPendingUpgradeChoices = 0;
         this.localActiveSlot = 1;
         this.hotbarSlots = [];
-        this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, null, null, null, null, null, null];
+        this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
+        this.upgradeUiMode = 'root';
+        this.upgradeUiObjects = [];
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
         this.outfitColorButtons = [];
         this.outfitColorButtonObjects = new Set();
@@ -259,6 +272,7 @@ export class Game extends Phaser.Scene {
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
         this.woodBlockSprites    = new Map();
+        this.campfireSprites     = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -267,6 +281,7 @@ export class Game extends Phaser.Scene {
         this.isBuildModeActive = false;
         this.buildGridGraphics = null;
         this.buildPreview = null;
+        this.buildPreviewKind = null;
         this.activeBuildPointerId = null;
         this.activeBuildButton = null;
         this.lastBuildDragCellId = null;
@@ -538,26 +553,178 @@ export class Game extends Phaser.Scene {
             }).setDepth(UI_DEPTH + 5).setScrollFactor(0);
 
             const item = this.hotbarSlotItems[i];
-            const iconKey = item === ITEM_WOOD_AXE
-                ? ASSETS.image.woodAxeIcon.key
-                : item === ITEM_WOOD_BOW
-                    ? ASSETS.image.woodBowIcon.key
-                    : item === ITEM_HAMMER
-                        ? ASSETS.image.hammerIcon.key
-                        : null;
-            const icon = iconKey
-                ? this.add.image(x, y + 2, iconKey)
-                    .setOrigin(0.5)
-                    .setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE)
+            const iconKey = this.getHotbarIconKey(item);
+            const icon = iconKey ? this.add.image(x, y + 2, iconKey).setOrigin(0.5) : null;
+            if (icon) {
+                if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+                icon.setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE)
                     .setDepth(UI_DEPTH + 4)
-                    .setScrollFactor(0)
-                : null;
+                    .setScrollFactor(0);
+            }
 
             this.hotbarSlots.push({ box, icon, label, slot });
             this.registerFixedUi(box, icon, label);
         }
 
         this.updateHotbarSelection();
+    }
+
+    getHotbarIconKey(item) {
+        if (item === ITEM_WOOD_AXE) return ASSETS.image.woodAxeIcon.key;
+        if (item === ITEM_WOOD_BOW) return ASSETS.image.woodBowIcon.key;
+        if (item === ITEM_HAMMER) return ASSETS.image.hammerIcon.key;
+        if (item === ITEM_CAMPFIRE) return ASSETS.spritesheet.campfire.key;
+        return null;
+    }
+
+    syncLocalHotbarFromPlayer(player) {
+        if (!player?.hotbarItems) return;
+        const nextItems = [];
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            nextItems.push(player.hotbarItems[i] || '');
+        }
+        this.hotbarSlotItems = nextItems;
+        this.initHotbar();
+        this.localActiveSlot = player.activeSlot || 1;
+        this.updateHotbarSelection();
+    }
+
+    updateUpgradeUi() {
+        this.clearUpgradeUi();
+        if (this.localPendingUpgradeChoices <= 0) return;
+
+        const root = this.upgradeUiMode === 'root';
+        const width = this.scale.width;
+        const height = this.scale.height;
+        const baseX = width - 156;
+        const baseY = height - 98;
+        const topY = baseY - 118;
+        const leftX = baseX - 72;
+        const rightX = baseX + 72;
+
+        this.createUpgradeText(baseX, topY - 58, 'UPGRADE AVAILABLE', 24);
+
+        if (root) {
+            this.createUpgradeHex(baseX, topY, 44, { iconKey: ASSETS.image.woodAxeIcon.key, onClick: () => this.openUpgradeCategory('axe') });
+            this.createUpgradeHex(leftX, baseY, 44, { iconKey: ASSETS.image.woodBowIcon.key, onClick: () => this.openUpgradeCategory('bow') });
+            this.createUpgradeHex(rightX, baseY, 44, { iconKey: ASSETS.image.hammerIcon.key, onClick: () => this.openUpgradeCategory('hammer') });
+            return;
+        }
+
+        const options = this.getUpgradeOptions(this.upgradeUiMode);
+        this.createUpgradeHex(baseX, topY, 58, options[0]);
+        this.createUpgradeHex(leftX, baseY, 58, options[1]);
+        this.createUpgradeHex(rightX, baseY, 58, options[2]);
+        this.createUpgradeBackButton(rightX + 76, baseY + 24);
+    }
+
+    getUpgradeOptions(category) {
+        if (category === 'axe') {
+            return [
+                { text: '+25% swing\nspeed', upgradeId: 'axe_swing_speed' },
+                { text: '+1 dmg\nto wood', upgradeId: 'axe_tree_damage' },
+                { text: '+1 dmg\nto enemies', upgradeId: 'axe_enemy_damage' },
+            ];
+        }
+        if (category === 'bow') {
+            return [
+                { text: '+1 damage', upgradeId: 'bow_damage' },
+                { text: '+1 pierce', upgradeId: 'bow_pierce' },
+                { text: '-25% charge\ntime', upgradeId: 'bow_charge_time' },
+            ];
+        }
+        return [
+            { text: '+5 barricade\nHP', upgradeId: 'hammer_barricade_hp' },
+            { text: '+50% wood\ngather', upgradeId: 'hammer_wood_gather' },
+            { text: '+1 campfire', upgradeId: 'hammer_campfire' },
+        ];
+    }
+
+    openUpgradeCategory(category) {
+        this.upgradeUiMode = category;
+        this.updateUpgradeUi();
+    }
+
+    selectUpgrade(upgradeId) {
+        RoomClient.sendSelectUpgrade(upgradeId);
+        this.upgradeUiMode = 'root';
+    }
+
+    createUpgradeText(x, y, text, size = 22) {
+        const label = this.add.text(x, y, text, {
+            fontFamily: 'Arial',
+            fontSize: size,
+            color: '#ffffff',
+            align: 'center',
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 20).setScrollFactor(0);
+        this.upgradeUiObjects.push(label);
+        this.registerFixedUi(label);
+        return label;
+    }
+
+    createUpgradeHex(x, y, radius, config) {
+        const points = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = Phaser.Math.DegToRad(30 + i * 60);
+            points.push(new Phaser.Geom.Point(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius));
+        }
+
+        const graphics = this.add.graphics().setDepth(UI_DEPTH + 18).setScrollFactor(0);
+        graphics.fillStyle(0x1f7b34, 0.18);
+        graphics.fillPoints(points, true);
+        graphics.lineStyle(4, 0x000000, 1);
+        graphics.strokePoints(points, true);
+        this.upgradeUiObjects.push(graphics);
+        this.registerFixedUi(graphics);
+
+        if (config.iconKey) {
+            const icon = this.add.image(x, y, config.iconKey)
+                .setOrigin(0.5)
+                .setDisplaySize(radius * 1.08, radius * 1.08)
+                .setDepth(UI_DEPTH + 21)
+                .setScrollFactor(0);
+            this.upgradeUiObjects.push(icon);
+            this.registerFixedUi(icon);
+        }
+
+        if (config.text) {
+            this.createUpgradeText(x, y, config.text, 24);
+        }
+
+        const zone = this.add.zone(x, y, radius * 1.75, radius * 1.75)
+            .setOrigin(0.5)
+            .setDepth(UI_DEPTH + 22)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        zone.on('pointerdown', (pointer, _localX, _localY, event) => {
+            event?.stopPropagation?.();
+            if (config.upgradeId) this.selectUpgrade(config.upgradeId);
+            else config.onClick?.();
+        });
+        this.upgradeUiObjects.push(zone);
+        this.registerFixedUi(zone);
+    }
+
+    createUpgradeBackButton(x, y) {
+        const button = this.add.text(x, y, 'X', {
+            fontFamily: 'Arial Black',
+            fontSize: 34,
+            color: '#ff2222',
+            stroke: '#000000',
+            strokeThickness: 5,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 24).setScrollFactor(0).setInteractive({ useHandCursor: true });
+        button.on('pointerdown', (pointer, _localX, _localY, event) => {
+            event?.stopPropagation?.();
+            this.upgradeUiMode = 'root';
+            this.updateUpgradeUi();
+        });
+        this.upgradeUiObjects.push(button);
+        this.registerFixedUi(button);
+    }
+
+    clearUpgradeUi() {
+        this.upgradeUiObjects.forEach((object) => object?.destroy());
+        this.upgradeUiObjects = [];
     }
 
     updateHotbarSelection() {
@@ -657,6 +824,16 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.dk.damage).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.dk.death).forEach(animation => this.createAnimation(animation));
         this.createAnimation(ANIMATION.fireball);
+        if (!this.anims.exists(CAMPFIRE_ANIMATION_KEY)) {
+            this.anims.create({
+                key: CAMPFIRE_ANIMATION_KEY,
+                frames: this.anims.generateFrameNumbers(ASSETS.spritesheet.campfire.key, {
+                    frames: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+                }),
+                frameRate: 12,
+                repeat: -1,
+            });
+        }
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -672,15 +849,21 @@ export class Game extends Phaser.Scene {
             slot1: Phaser.Input.Keyboard.KeyCodes.ONE,
             slot2: Phaser.Input.Keyboard.KeyCodes.TWO,
             slot3: Phaser.Input.Keyboard.KeyCodes.THREE,
+            slot4: Phaser.Input.Keyboard.KeyCodes.FOUR,
+            slot5: Phaser.Input.Keyboard.KeyCodes.FIVE,
+            slot6: Phaser.Input.Keyboard.KeyCodes.SIX,
+            slot7: Phaser.Input.Keyboard.KeyCodes.SEVEN,
+            slot8: Phaser.Input.Keyboard.KeyCodes.EIGHT,
+            slot9: Phaser.Input.Keyboard.KeyCodes.NINE,
         });
 
         this.input.mouse?.disableContextMenu();
         this.keys.escape.on('down', (key, event) => {
             this.handleEscapeQuit(event);
         });
-        this.keys.slot1.on('down', () => this.equipHotbarSlot(1));
-        this.keys.slot2.on('down', () => this.equipHotbarSlot(2));
-        this.keys.slot3.on('down', () => this.equipHotbarSlot(3));
+        for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot++) {
+            this.keys[`slot${slot}`].on('down', () => this.equipHotbarSlot(slot));
+        }
         this.input.keyboard.on('keydown-ESC', (event) => {
             this.handleEscapeQuit(event);
         });
@@ -690,6 +873,7 @@ export class Game extends Phaser.Scene {
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
                 || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
+                || gameObjects.some(gameObject => this.upgradeUiObjects.includes(gameObject))
             ) {
                 return;
             }
@@ -735,7 +919,7 @@ export class Game extends Phaser.Scene {
 
     // ─── Networking ───────────────────────────────────────────────────────────
     equipHotbarSlot(slot) {
-        if (slot !== 1 && slot !== 2 && slot !== 3) return;
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
         this.localActiveSlot = slot;
         this.updateHotbarSelection();
         RoomClient.sendEquipSlot(slot);
@@ -757,7 +941,7 @@ export class Game extends Phaser.Scene {
     }
 
     getItemForHotbarSlot(slot) {
-        return this.hotbarSlotItems[slot - 1] || ITEM_WOOD_AXE;
+        return this.hotbarSlotItems[slot - 1] || '';
     }
 
     getLocalActiveItem() {
@@ -766,8 +950,8 @@ export class Game extends Phaser.Scene {
     }
 
     syncBuildModeForActiveItem(item) {
-        const shouldBuild = item === ITEM_HAMMER;
-        if (this.isBuildModeActive === shouldBuild) return;
+        const shouldBuild = item === ITEM_HAMMER || item === ITEM_CAMPFIRE;
+        if (this.isBuildModeActive === shouldBuild && this.buildPreviewKind === item) return;
 
         this.isBuildModeActive = shouldBuild;
         if (this.isBuildModeActive) {
@@ -777,7 +961,7 @@ export class Game extends Phaser.Scene {
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(this.isBuildModeActive);
         }
-        this.createBuildPreview();
+        this.createBuildPreview(item);
         this.buildPreview?.setVisible(this.isBuildModeActive);
         if (this.isBuildModeActive) {
             this.updateBuildPreview(this.input.activePointer);
@@ -921,7 +1105,7 @@ export class Game extends Phaser.Scene {
                 attackTargetX: null,
                 attackTargetY: null,
                 activeSlot: player.activeSlot || 1,
-                activeItem: player.activeItem || ITEM_WOOD_AXE,
+                activeItem: player.activeItem || '',
                 attackItem: player.attackItem || ITEM_WOOD_AXE,
                 lastAttackSeq: player.attackSeq || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
@@ -929,6 +1113,7 @@ export class Game extends Phaser.Scene {
                 bowChargeProgress: player.bowChargeProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
+                axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
@@ -1014,7 +1199,7 @@ export class Game extends Phaser.Scene {
             player.listen('activeItem', (item) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (!animationState) return;
-                animationState.activeItem = item || ITEM_WOOD_AXE;
+                animationState.activeItem = item || '';
                 if (animationState.activeItem !== ITEM_WOOD_BOW && isLocal) this.cancelBowCharge();
                 if (isLocal) this.syncBuildModeForActiveItem(animationState.activeItem);
                 if (!animationState.attacking && !animationState.dead) {
@@ -1100,6 +1285,11 @@ export class Game extends Phaser.Scene {
                 });
             });
 
+            player.listen('axeSwingSpeedUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeSwingSpeedUpgrades = stacks || 0;
+            });
+
             if (player.isDead) {
                 this.playPlayerDeathAnimation(playerSessionId);
             }
@@ -1109,9 +1299,19 @@ export class Game extends Phaser.Scene {
                 this.killsText.setText(`Kills: ${player.kills}`);
                 this.woodText.setText(`${player.wood || 0}`);
                 this.updateLocalExperienceState(player);
+                this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
+                this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
-                this.syncBuildModeForActiveItem(player.activeItem || ITEM_WOOD_AXE);
+                this.syncBuildModeForActiveItem(player.activeItem || '');
+                this.updateUpgradeUi();
+
+                if (player.hotbarItems) {
+                    const syncHotbar = () => this.syncLocalHotbarFromPlayer(player);
+                    player.hotbarItems.onAdd(syncHotbar);
+                    player.hotbarItems.onChange(syncHotbar);
+                    player.hotbarItems.onRemove(syncHotbar);
+                }
 
                 player.listen('kills', (kills) => {
                     this.killsText.setText(`Kills: ${kills}`);
@@ -1128,6 +1328,12 @@ export class Game extends Phaser.Scene {
 
                 player.listen('experienceToNext', () => {
                     this.updateLocalExperienceState(player);
+                });
+
+                player.listen('pendingUpgradeChoices', (choices) => {
+                    this.localPendingUpgradeChoices = choices || 0;
+                    if (this.localPendingUpgradeChoices <= 0) this.upgradeUiMode = 'root';
+                    this.updateUpgradeUi();
                 });
             }
 
@@ -1168,6 +1374,8 @@ export class Game extends Phaser.Scene {
                 this.localPlayerSprite = null;
                 this.localPlayerState = null;
                 this.localExperienceState = null;
+                this.localPendingUpgradeChoices = 0;
+                this.clearUpgradeUi();
                 this.updateExperienceBar(0, 5, 1);
             }
             this.playerSprites.delete(sessionId);
@@ -1303,6 +1511,39 @@ export class Game extends Phaser.Scene {
             sprites.healthFill.destroy();
             sprites.flashEvent?.remove(false);
             this.woodBlockSprites.delete(id);
+        });
+
+        const addCampfire = (campfire, id) => {
+            const campfireId = id || campfire.id;
+            if (!campfireId || this.campfireSprites.has(campfireId)) return;
+
+            const sprite = this.add.sprite(campfire.x, campfire.y, ASSETS.spritesheet.campfire.key, CAMPFIRE_ICON_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CAMPFIRE_DISPLAY_SIZE, CAMPFIRE_DISPLAY_SIZE)
+                .setDepth(CAMPFIRE_DEPTH);
+            sprite.play(CAMPFIRE_ANIMATION_KEY);
+            const radius = this.add.graphics().setDepth(CAMPFIRE_DEPTH - 1);
+            this.drawCampfireRadiusOutline(radius, campfire.x, campfire.y);
+            this.registerWorldObject(radius, sprite);
+            this.campfireSprites.set(campfireId, { sprite, radius, campfire });
+
+            campfire.onChange(() => {
+                const entry = this.campfireSprites.get(campfireId);
+                if (!entry) return;
+                entry.sprite.setPosition(campfire.x, campfire.y);
+                this.drawCampfireRadiusOutline(entry.radius, campfire.x, campfire.y);
+            });
+        };
+
+        state.campfires?.onAdd(addCampfire);
+        state.campfires?.forEach(addCampfire);
+
+        state.campfires?.onRemove((_campfire, id) => {
+            const entry = this.campfireSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            entry.radius.destroy();
+            this.campfireSprites.delete(id);
         });
 
         const addEnemy = (enemy, id) => {
@@ -1701,14 +1942,25 @@ export class Game extends Phaser.Scene {
         this.buildGridGraphics = grid;
     }
 
-    createBuildPreview() {
-        if (this.buildPreview) return;
+    createBuildPreview(item = this.getLocalActiveItem()) {
+        if (this.buildPreview && this.buildPreviewKind === item) return;
+        if (this.buildPreview) this.buildPreview.destroy();
 
-        this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
-            .setOrigin(0.5)
-            .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
-            .setDepth(82)
-            .setVisible(false);
+        this.buildPreviewKind = item;
+        if (item === ITEM_CAMPFIRE) {
+            this.buildPreview = this.add.image(0, 0, ASSETS.spritesheet.campfire.key, CAMPFIRE_ICON_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CAMPFIRE_DISPLAY_SIZE, CAMPFIRE_DISPLAY_SIZE)
+                .setAlpha(0.65)
+                .setDepth(CAMPFIRE_DEPTH)
+                .setVisible(false);
+        } else {
+            this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
+                .setOrigin(0.5)
+                .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
+                .setDepth(82)
+                .setVisible(false);
+        }
         this.registerWorldObject(this.buildPreview);
     }
 
@@ -1731,6 +1983,24 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    drawCampfireRadiusOutline(graphics, x, y) {
+        if (!graphics) return;
+        graphics.clear();
+        graphics.lineStyle(2, CAMPFIRE_RADIUS_COLOR, CAMPFIRE_RADIUS_ALPHA);
+
+        const circumference = Math.PI * 2 * CAMPFIRE_HEAL_RADIUS;
+        const step = CAMPFIRE_RADIUS_DOT_LENGTH + CAMPFIRE_RADIUS_DOT_GAP;
+        const segmentAngle = (CAMPFIRE_RADIUS_DOT_LENGTH / circumference) * Math.PI * 2;
+        const stepAngle = (step / circumference) * Math.PI * 2;
+
+        for (let angle = 0; angle < Math.PI * 2; angle += stepAngle) {
+            const endAngle = Math.min(angle + segmentAngle, Math.PI * 2);
+            graphics.beginPath();
+            graphics.arc(x, y, CAMPFIRE_HEAL_RADIUS, angle, endAngle, false);
+            graphics.strokePath();
+        }
+    }
+
     toggleBuildMode() {
         this.isBuildModeActive = !this.isBuildModeActive;
         if (this.isBuildModeActive) {
@@ -1740,7 +2010,7 @@ export class Game extends Phaser.Scene {
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(this.isBuildModeActive);
         }
-        this.createBuildPreview();
+        this.createBuildPreview(this.getLocalActiveItem());
         this.buildPreview?.setVisible(this.isBuildModeActive);
         if (this.isBuildModeActive) {
             this.updateBuildPreview(this.input.activePointer);
@@ -1791,16 +2061,19 @@ export class Game extends Phaser.Scene {
         this.lastBuildDragCellId = cell.id;
         this.lastBuildDragSentAt = this.time.now;
 
-        if (button === 0) {
+        const activeItem = this.getLocalActiveItem();
+        if (button === 0 && activeItem === ITEM_HAMMER) {
             RoomClient.sendBuildWoodBlock(cell.x, cell.y);
-        } else if (button === 2) {
+        } else if (button === 0 && activeItem === ITEM_CAMPFIRE) {
+            RoomClient.sendPlaceCampfire(cell.x, cell.y);
+        } else if (button === 2 && activeItem === ITEM_HAMMER) {
             RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
         }
     }
 
     updateBuildPreview(pointer) {
         if (!this.isBuildModeActive) return;
-        this.createBuildPreview();
+        this.createBuildPreview(this.getLocalActiveItem());
 
         const cell = this.getBuildCellFromPointer(pointer);
         if (!cell) {
@@ -1913,6 +2186,7 @@ export class Game extends Phaser.Scene {
         this.drawPlayerHitboxes(g);
         this.drawEnemyHitboxes(g);
         this.drawTreeHitboxes(g);
+        this.drawCampfireHitboxes(g);
     }
 
     drawPlayerHitboxes(graphics) {
@@ -1967,6 +2241,13 @@ export class Game extends Phaser.Scene {
                 TREE_TRUNK_HW * 2,
                 TREE_TRUNK_HH * 2,
             );
+        });
+    }
+
+    drawCampfireHitboxes(graphics) {
+        this.campfireSprites.forEach(({ campfire }) => {
+            graphics.lineStyle(2, 0xffb23a, 0.9);
+            graphics.strokeCircle(campfire.x, campfire.y, CAMPFIRE_HEAL_RADIUS);
         });
     }
 
@@ -2197,8 +2478,14 @@ export class Game extends Phaser.Scene {
         if (!force && this.time.now < this.nextHeldAttackAt) return;
         const didAttack = this.playLocalAttackAnimation(pointer);
         if (didAttack) {
-            this.nextHeldAttackAt = this.time.now + PLAYER_ATTACK_REPEAT_MS;
+            this.nextHeldAttackAt = this.time.now + this.getLocalAxeRepeatMs();
         }
+    }
+
+    getLocalAxeRepeatMs() {
+        const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        const stacks = Math.max(0, animationState?.axeSwingSpeedUpgrades || 0);
+        return PLAYER_ATTACK_REPEAT_MS / (1 + 0.25 * stacks);
     }
 
     playLocalAttackAnimation(pointer) {
@@ -2210,8 +2497,8 @@ export class Game extends Phaser.Scene {
         const worldPoint = this.getPointerWorldPoint(pointer);
         const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
-        const attackItem = animationState.activeItem || ITEM_WOOD_AXE;
-        if (attackItem === ITEM_WOOD_BOW) return false;
+        const attackItem = animationState.activeItem || '';
+        if (attackItem !== ITEM_WOOD_AXE) return false;
         animationState.attackTargetX = worldPoint?.x ?? null;
         animationState.attackTargetY = worldPoint?.y ?? null;
         animationState.attackItem = attackItem;
@@ -2231,16 +2518,20 @@ export class Game extends Phaser.Scene {
     }
 
     getPlayerAttackMode(item) {
-        return item === ITEM_WOOD_BOW ? 'bow' : 'axe';
+        if (item === ITEM_WOOD_AXE) return 'axe';
+        if (item === ITEM_WOOD_BOW) return 'bow';
+        return null;
     }
 
     getWeaponAnimationGroup(item, mode = 'idle') {
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
         const suffix = mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ANIMATION.weapon[`${prefix}${suffix}`];
     }
 
     getWeaponTextureKey(item, mode = 'idle') {
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
         const suffix = mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodAxeIdle.key;
@@ -2252,8 +2543,8 @@ export class Game extends Phaser.Scene {
         if (!weapon || !animationState || animationState.dead) return;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
-        const item = animationState.activeItem || ITEM_WOOD_AXE;
-        if (item === ITEM_HAMMER) {
+        const item = animationState.activeItem || '';
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) {
             this.hidePlayerWeapon(sessionId);
             return;
         }
@@ -2264,7 +2555,8 @@ export class Game extends Phaser.Scene {
             const row = PLAYER_DIRECTION_ORDER.indexOf(nextDirection);
             const frame = Math.max(0, row) * FRAMES_PER_DIRECTION;
             if (weapon.anims.isPlaying) weapon.anims.stop();
-            weapon.setTexture(this.getWeaponTextureKey(item, mode), frame);
+            const textureKey = this.getWeaponTextureKey(item, mode);
+            if (textureKey) weapon.setTexture(textureKey, frame);
             return;
         }
 
@@ -3163,6 +3455,10 @@ export class Game extends Phaser.Scene {
             healthBackground.destroy();
             healthFill.destroy();
         });
+        this.campfireSprites.forEach(({ sprite, radius }) => {
+            sprite.destroy();
+            radius?.destroy();
+        });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         if (this.grassNoiseLayer) {
@@ -3198,12 +3494,15 @@ export class Game extends Phaser.Scene {
         this.playerLevelLabels.clear();
         this.offscreenPlayerIndicators.clear();
         this.localExperienceState = null;
+        this.localPendingUpgradeChoices = 0;
+        this.clearUpgradeUi();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
         this.woodBlockSprites.clear();
+        this.campfireSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }

@@ -8,6 +8,7 @@ import {
     TreeState,
     LogState,
     WoodBlockState,
+    CampfireState,
 } from "../schema/GameState";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
@@ -69,6 +70,7 @@ const ENEMY_WAVE_COUNT = 3;
 const ENEMY_WAVE_INTERVAL_MS = 30000;
 const ENEMY_TYPE_CASTER = 3;
 const ENEMY_TYPE_DARK_KNIGHT = 4;
+const MIN_BOW_CHARGE_MS = 100;
 const CASTER_INITIAL_COUNT = 1;
 const CASTER_WAVE_COUNT = 1;
 const CASTER_CAST_RANGE = 360;
@@ -121,6 +123,23 @@ const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
 const ITEM_HAMMER = "hammer";
+const ITEM_CAMPFIRE = "campfire";
+const HOTBAR_SLOT_COUNT = 9;
+const EMPTY_HOTBAR_ITEM = "";
+const CAMPFIRE_HEAL_RADIUS = 320;
+const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
+const CAMPFIRE_HEAL_AMOUNT = 1;
+const UPGRADE_IDS = new Set([
+    "axe_swing_speed",
+    "axe_tree_damage",
+    "axe_enemy_damage",
+    "bow_damage",
+    "bow_pierce",
+    "bow_charge_time",
+    "hammer_barricade_hp",
+    "hammer_wood_gather",
+    "hammer_campfire",
+]);
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -296,6 +315,9 @@ interface ServerBullet {
     vy: number;
     rangeRemaining: number;
     kind: string;
+    damage: number;
+    pierceRemaining: number;
+    hitEnemyIds: Set<string>;
 }
 interface ServerEnemyBullet {
     vx: number;
@@ -370,6 +392,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private elapsedMs           = 0;
     private enemyWaveElapsedMs  = 0;
     private darkKnightWaveElapsedMs = 0;
+    private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
 
     private generateRoomCode(): string {
@@ -414,8 +437,9 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (this.tryStartRevive(client.sessionId, client)) {
                     return;
                 }
-                if (this.tryPickupWood(client.sessionId)) {
-                    client.send("woodPickup", { amount: WOOD_PILE_AMOUNT });
+                const woodPickupAmount = this.tryPickupWood(client.sessionId);
+                if (woodPickupAmount > 0) {
+                    client.send("woodPickup", { amount: woodPickupAmount });
                 }
             }
         });
@@ -425,7 +449,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
             if (sp.attackCooldownMs > 0) return;
-            if (player.activeItem === ITEM_HAMMER || player.activeItem === ITEM_WOOD_BOW) return;
+            if (player.activeItem !== ITEM_WOOD_AXE) return;
             this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
@@ -437,7 +461,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackLockMs = ATTACK_LOCK_MS;
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
-            sp.attackCooldownMs = ATTACK_COOLDOWN_MS;
+            sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
             sp.vx = 0;
             sp.vy = 0;
             const attackOrigin = { x: player.x, y: player.y };
@@ -481,6 +505,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("removeWoodBlock", (client, data) => {
             this.tryRemoveWoodBlock(client.sessionId, data);
         });
+
+        this.onMessage("placeCampfire", (client, data) => {
+            this.tryPlaceCampfire(client.sessionId, data);
+        });
+
+        this.onMessage("selectUpgrade", (client, data) => {
+            this.selectUpgrade(client.sessionId, data);
+        });
     }
 
     private equipPlayerSlot(sessionId: string, data: unknown) {
@@ -489,13 +521,122 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
 
         const slot = Number((data as { slot?: unknown })?.slot);
-        if (slot !== 1 && slot !== 2 && slot !== 3) return;
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
 
         player.activeSlot = slot;
-        player.activeItem = slot === 2 ? ITEM_WOOD_BOW : slot === 3 ? ITEM_HAMMER : ITEM_WOOD_AXE;
+        player.activeItem = this.getHotbarItem(player, slot);
         if (player.activeItem !== ITEM_WOOD_BOW) {
             this.clearBowCharge(player, sp);
         }
+    }
+
+    private selectUpgrade(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        if (!player || this.state.gameOver) return;
+
+        const upgradeId = String((data as { upgradeId?: unknown })?.upgradeId || "");
+        if (!UPGRADE_IDS.has(upgradeId) || player.pendingUpgradeChoices <= 0) return;
+
+        switch (upgradeId) {
+            case "axe_swing_speed":
+                player.axeSwingSpeedUpgrades++;
+                break;
+            case "axe_tree_damage":
+                player.axeTreeDamageUpgrades++;
+                break;
+            case "axe_enemy_damage":
+                player.axeEnemyDamageUpgrades++;
+                break;
+            case "bow_damage":
+                player.bowDamageUpgrades++;
+                break;
+            case "bow_pierce":
+                player.bowPierceUpgrades++;
+                break;
+            case "bow_charge_time":
+                player.bowChargeTimeUpgrades++;
+                break;
+            case "hammer_barricade_hp":
+                player.barricadeHealthUpgrades++;
+                break;
+            case "hammer_wood_gather":
+                player.woodGatherUpgrades++;
+                break;
+            case "hammer_campfire":
+                player.campfireUpgrades++;
+                this.grantCampfireItem(player);
+                break;
+            default:
+                return;
+        }
+
+        player.pendingUpgradeChoices = Math.max(0, player.pendingUpgradeChoices - 1);
+    }
+
+    private initializeHotbar(player: PlayerState) {
+        player.hotbarItems.clear();
+        player.hotbarItems.push(
+            ITEM_WOOD_AXE,
+            ITEM_WOOD_BOW,
+            ITEM_HAMMER,
+            EMPTY_HOTBAR_ITEM,
+            EMPTY_HOTBAR_ITEM,
+            EMPTY_HOTBAR_ITEM,
+            EMPTY_HOTBAR_ITEM,
+            EMPTY_HOTBAR_ITEM,
+            EMPTY_HOTBAR_ITEM,
+        );
+        player.activeSlot = 1;
+        player.activeItem = ITEM_WOOD_AXE;
+        player.attackItem = ITEM_WOOD_AXE;
+    }
+
+    private normalizeHotbar(player: PlayerState) {
+        while (player.hotbarItems.length < HOTBAR_SLOT_COUNT) {
+            player.hotbarItems.push(EMPTY_HOTBAR_ITEM);
+        }
+        while (player.hotbarItems.length > HOTBAR_SLOT_COUNT) {
+            player.hotbarItems.pop();
+        }
+    }
+
+    private getHotbarItem(player: PlayerState, slot: number): string {
+        this.normalizeHotbar(player);
+        return player.hotbarItems[slot - 1] || EMPTY_HOTBAR_ITEM;
+    }
+
+    private setHotbarItem(player: PlayerState, slot: number, item: string) {
+        this.normalizeHotbar(player);
+        player.hotbarItems[slot - 1] = item;
+        if (player.activeSlot === slot) {
+            player.activeItem = item;
+        }
+    }
+
+    private grantCampfireItem(player: PlayerState) {
+        player.pendingCampfireCharges++;
+        this.fillPendingCampfireItems(player);
+    }
+
+    private fillPendingCampfireItems(player: PlayerState) {
+        this.normalizeHotbar(player);
+        while (player.pendingCampfireCharges > 0) {
+            const emptyIndex = player.hotbarItems.findIndex((item) => !item);
+            if (emptyIndex < 0) return;
+            player.hotbarItems[emptyIndex] = ITEM_CAMPFIRE;
+            player.pendingCampfireCharges--;
+            if (player.activeSlot === emptyIndex + 1) {
+                player.activeItem = ITEM_CAMPFIRE;
+            }
+        }
+    }
+
+    private getPlayerAxeCooldownMs(player: PlayerState): number {
+        return ATTACK_COOLDOWN_MS / (1 + 0.25 * Math.max(0, player.axeSwingSpeedUpgrades || 0));
+    }
+
+    private getPlayerBowChargeMs(player: PlayerState): number {
+        return Math.max(MIN_BOW_CHARGE_MS, BOW_CHARGE_MS * Math.pow(0.75, Math.max(0, player.bowChargeTimeUpgrades || 0)));
     }
 
     private startBowCharge(sessionId: string, data: unknown) {
@@ -592,9 +733,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
-        ps.activeSlot = 1;
-        ps.activeItem = ITEM_WOOD_AXE;
-        ps.attackItem = ITEM_WOOD_AXE;
+        this.initializeHotbar(ps);
         ps.attackSeq = 0;
         ps.bowCharging = false;
         ps.bowChargeProgress = 0;
@@ -624,6 +763,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.elapsedMs = 0;
             this.enemyWaveElapsedMs = 0;
             this.darkKnightWaveElapsedMs = 0;
+            this.campfireHealElapsedMs = 0;
             this.state.elapsedSeconds = 0;
             this.state.gameOverCountdown = 0;
             this.spawnInitialEnemies();
@@ -641,6 +781,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverEnemyBullets.clear();
         this.state.logs.clear();
         this.state.woodBlocks.clear();
+        this.state.campfires.clear();
         this.generateTrees();
 
         this.state.players.forEach((player, sid) => {
@@ -655,13 +796,22 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.reviveProgress = 0;
             player.facingDirection = "N";
             player.attackDirection = "N";
-            player.activeSlot = 1;
-            player.activeItem = ITEM_WOOD_AXE;
-            player.attackItem = ITEM_WOOD_AXE;
+            this.initializeHotbar(player);
             player.attackSeq = 0;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
             player.bowChargeSeq = 0;
+            player.pendingUpgradeChoices = 0;
+            player.axeSwingSpeedUpgrades = 0;
+            player.axeTreeDamageUpgrades = 0;
+            player.axeEnemyDamageUpgrades = 0;
+            player.bowDamageUpgrades = 0;
+            player.bowPierceUpgrades = 0;
+            player.bowChargeTimeUpgrades = 0;
+            player.barricadeHealthUpgrades = 0;
+            player.woodGatherUpgrades = 0;
+            player.campfireUpgrades = 0;
+            player.pendingCampfireCharges = 0;
 
             const sp = this.serverPlayers.get(sid);
             if (!sp) return;
@@ -687,6 +837,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.elapsedMs = 0;
         this.enemyWaveElapsedMs = 0;
         this.darkKnightWaveElapsedMs = 0;
+        this.campfireHealElapsedMs = 0;
         this.state.elapsedSeconds = 0;
         this.state.gameOver = false;
         this.state.gameOverCountdown = 0;
@@ -778,7 +929,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             return null;
         }
 
-        const nextHealth = Math.max(0, (this.serverTreeHealth.get(hitTreeId) ?? TREE_HEALTH) - 1);
+        const attacker = this.state.players.get(attackerId);
+        const damage = 1 + Math.max(0, attacker?.axeTreeDamageUpgrades || 0);
+        const nextHealth = Math.max(0, (this.serverTreeHealth.get(hitTreeId) ?? TREE_HEALTH) - damage);
         const hitPayload = {
             treeId: hitTreeId,
             attackerId,
@@ -847,7 +1000,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
             if (enemy.isDead) return;
 
-            enemy.health = Math.max(0, enemy.health - 1);
+            const attacker = this.state.players.get(attackerId);
+            const damage = 1 + Math.max(0, attacker?.axeEnemyDamageUpgrades || 0);
+            enemy.health = Math.max(0, enemy.health - damage);
             if (enemy.health > 0) {
                 enemy.damageSeq++;
                 const se = this.serverEnemies.get(enemyId);
@@ -875,7 +1030,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         return hitPayloads;
     }
 
-    private damageEnemyFromBowAttack(enemyId: string, attackerId: string): EnemyHitPayload | null {
+    private damageEnemyFromBowAttack(enemyId: string, attackerId: string, damage: number = 1): EnemyHitPayload | null {
         const enemy = this.state.enemies.get(enemyId);
         if (!enemy) {
             this.serverEnemies.delete(enemyId);
@@ -883,7 +1038,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
         if (enemy.isDead) return null;
 
-        enemy.health = Math.max(0, enemy.health - 1);
+        enemy.health = Math.max(0, enemy.health - Math.max(1, Math.floor(damage)));
         if (enemy.health > 0) {
             enemy.damageSeq++;
             const se = this.serverEnemies.get(enemyId);
@@ -977,14 +1132,15 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         player.experience += Math.floor(amount);
 
-        let didLevelUp = false;
+        let levelUps = 0;
         while (player.experience >= player.experienceToNext) {
             player.level++;
             player.experienceToNext = this.getExperienceToNextLevel(player.level);
-            didLevelUp = true;
+            levelUps++;
         }
 
-        if (didLevelUp) {
+        if (levelUps > 0) {
+            player.pendingUpgradeChoices += levelUps;
             player.health = PLAYER_MAX_HEALTH;
             this.broadcast("playerLevelUp", {
                 playerId,
@@ -1023,10 +1179,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.logs.set(log.id, log);
     }
 
-    private tryPickupWood(sessionId: string): boolean {
+    private tryPickupWood(sessionId: string): number {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
-        if (!sp || !sp.alive || !player || this.state.gameOver) return false;
+        if (!sp || !sp.alive || !player || this.state.gameOver) return 0;
 
         const pickupX = player.x;
         const pickupY = player.y;
@@ -1044,32 +1200,35 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
         });
 
-        if (!closestLogId) return false;
+        if (!closestLogId) return 0;
 
         const log = this.state.logs.get(closestLogId);
-        if (!log) return false;
+        if (!log) return 0;
 
-        player.wood += log.amount || WOOD_PILE_AMOUNT;
+        const amount = Math.ceil((log.amount || WOOD_PILE_AMOUNT) * (1 + 0.5 * Math.max(0, player.woodGatherUpgrades || 0)));
+        player.wood += amount;
         this.state.logs.delete(closestLogId);
-        return true;
+        return amount;
     }
 
     private tryBuildWoodBlock(sessionId: string, data: unknown): boolean {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
         if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.activeItem !== ITEM_HAMMER) return false;
         if (player.wood < BUILD_BLOCK_COST) return false;
 
         const cell = this.getBuildCellFromData(data);
         if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
-        if (this.isBuildCellOccupied(cell.id, cell.x, cell.y)) return false;
+        if (this.isBuildCellOccupied(cell, cell.x, cell.y)) return false;
 
         const block = new WoodBlockState();
-        block.id = cell.id;
+        const maxHealth = WOOD_BLOCK_HEALTH + 5 * Math.max(0, player.barricadeHealthUpgrades || 0);
+        block.id = this.getWoodBlockIdForCell(cell);
         block.x = cell.x;
         block.y = cell.y;
-        block.health = WOOD_BLOCK_HEALTH;
-        block.maxHealth = WOOD_BLOCK_HEALTH;
+        block.health = maxHealth;
+        block.maxHealth = maxHealth;
         this.state.woodBlocks.set(block.id, block);
         player.wood -= BUILD_BLOCK_COST;
         return true;
@@ -1079,17 +1238,46 @@ export class ShmupRoom extends Room<GameRoomState> {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
         if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.activeItem !== ITEM_HAMMER) return false;
 
         const cell = this.getBuildCellFromData(data);
         if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
-        if (!this.state.woodBlocks.has(cell.id)) return false;
 
-        this.state.woodBlocks.delete(cell.id);
-        player.wood += BUILD_BLOCK_COST;
+        const woodBlockId = this.getWoodBlockIdForCell(cell);
+        if (this.state.woodBlocks.has(woodBlockId)) {
+            this.state.woodBlocks.delete(woodBlockId);
+            player.wood += BUILD_BLOCK_COST;
+            return true;
+        }
+
+        const campfireId = this.getCampfireIdForCell(cell);
+        if (!this.state.campfires.has(campfireId)) return false;
+        this.state.campfires.delete(campfireId);
+        this.grantCampfireItem(player);
         return true;
     }
 
-    private getBuildCellFromData(data: unknown): { id: string; x: number; y: number } | null {
+    private tryPlaceCampfire(sessionId: string, data: unknown): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.activeItem !== ITEM_CAMPFIRE || this.getHotbarItem(player, player.activeSlot) !== ITEM_CAMPFIRE) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+        if (this.isBuildCellOccupied(cell, cell.x, cell.y)) return false;
+
+        const campfire = new CampfireState();
+        campfire.id = this.getCampfireIdForCell(cell);
+        campfire.x = cell.x;
+        campfire.y = cell.y;
+        this.state.campfires.set(campfire.id, campfire);
+        this.setHotbarItem(player, player.activeSlot, EMPTY_HOTBAR_ITEM);
+        this.fillPendingCampfireItems(player);
+        return true;
+    }
+
+    private getBuildCellFromData(data: unknown): { id: string; col: number; row: number; x: number; y: number } | null {
         const maybePoint = data as { x?: unknown; y?: unknown } | null;
         if (!maybePoint || typeof maybePoint.x !== "number" || typeof maybePoint.y !== "number") return null;
         if (!Number.isFinite(maybePoint.x) || !Number.isFinite(maybePoint.y)) return null;
@@ -1101,7 +1289,15 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (x < BUILD_BLOCK_HALF_SIZE || y < BUILD_BLOCK_HALF_SIZE) return null;
         if (x > WORLD_WIDTH - BUILD_BLOCK_HALF_SIZE || y > WORLD_HEIGHT - BUILD_BLOCK_HALF_SIZE) return null;
 
-        return { id: `wood-${col}-${row}`, x, y };
+        return { id: `${col}-${row}`, col, row, x, y };
+    }
+
+    private getWoodBlockIdForCell(cell: { col: number; row: number }): string {
+        return `wood-${cell.col}-${cell.row}`;
+    }
+
+    private getCampfireIdForCell(cell: { col: number; row: number }): string {
+        return `campfire-${cell.col}-${cell.row}`;
     }
 
     private isBuildCellInRange(player: PlayerState, blockX: number, blockY: number): boolean {
@@ -1110,8 +1306,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         return dx * dx + dy * dy <= BUILD_RANGE * BUILD_RANGE;
     }
 
-    private isBuildCellOccupied(cellId: string, blockX: number, blockY: number): boolean {
-        if (this.state.woodBlocks.has(cellId)) return true;
+    private isBuildCellOccupied(cell: { col: number; row: number }, blockX: number, blockY: number): boolean {
+        if (this.state.woodBlocks.has(this.getWoodBlockIdForCell(cell))) return true;
+        if (this.state.campfires.has(this.getCampfireIdForCell(cell))) return true;
 
         let occupied = false;
         this.state.players.forEach((player, playerId) => {
@@ -1238,6 +1435,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickEnemies(dtSec, dt);
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
+        this.tickCampfires(dt);
 
     }
 
@@ -1254,6 +1452,33 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickElapsedTime(dtMs: number) {
         this.elapsedMs += dtMs;
         this.state.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+    }
+
+    private tickCampfires(dtMs: number) {
+        if (this.state.campfires.size <= 0) {
+            this.campfireHealElapsedMs = 0;
+            return;
+        }
+
+        this.campfireHealElapsedMs += dtMs;
+        while (this.campfireHealElapsedMs >= CAMPFIRE_HEAL_INTERVAL_MS) {
+            this.campfireHealElapsedMs -= CAMPFIRE_HEAL_INTERVAL_MS;
+            this.applyCampfireHealing();
+        }
+    }
+
+    private applyCampfireHealing() {
+        const radiusSq = CAMPFIRE_HEAL_RADIUS * CAMPFIRE_HEAL_RADIUS;
+        this.state.campfires.forEach((campfire) => {
+            this.state.players.forEach((player, playerId) => {
+                const sp = this.serverPlayers.get(playerId);
+                if (!sp?.alive || player.isDead || player.health >= PLAYER_MAX_HEALTH) return;
+                const dx = player.x - campfire.x;
+                const dy = (player.y + PLAYER_TREE_Y_OFFSET) - campfire.y;
+                if (dx * dx + dy * dy > radiusSq) return;
+                player.health = Math.min(PLAYER_MAX_HEALTH, player.health + CAMPFIRE_HEAL_AMOUNT);
+            });
+        });
     }
 
     private tickRevives(dtMs: number) {
@@ -1326,8 +1551,9 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (player.activeItem !== ITEM_WOOD_BOW) {
                     this.clearBowCharge(player, sp);
                 } else {
-                    sp.bowChargeMs = Math.min(BOW_CHARGE_MS, sp.bowChargeMs + dtMs);
-                    player.bowChargeProgress = clamp(sp.bowChargeMs / BOW_CHARGE_MS, 0, 1);
+                    const chargeMs = this.getPlayerBowChargeMs(player);
+                    sp.bowChargeMs = Math.min(chargeMs, sp.bowChargeMs + dtMs);
+                    player.bowChargeProgress = clamp(sp.bowChargeMs / chargeMs, 0, 1);
                     sp.vx = 0;
                     sp.vy = 0;
                     player.x = sp.bowChargeX;
@@ -1440,24 +1666,43 @@ export class ShmupRoom extends Room<GameRoomState> {
         b.kind = "bullet";
         b.angle = -Math.PI / 2;
         this.state.playerBullets.set(id, b);
-        this.serverPlayerBullets.set(id, { vx: 0, vy: -P_BULLET_VEL, rangeRemaining: Number.POSITIVE_INFINITY, kind: "bullet" });
+        this.serverPlayerBullets.set(id, {
+            vx: 0,
+            vy: -P_BULLET_VEL,
+            rangeRemaining: Number.POSITIVE_INFINITY,
+            kind: "bullet",
+            damage: power,
+            pierceRemaining: 1,
+            hitEnemyIds: new Set<string>(),
+        });
     }
 
     private spawnArrow(x: number, y: number, dx: number, dy: number, ownerId: string) {
+        const owner = this.state.players.get(ownerId);
         const length = Math.hypot(dx, dy);
         const vx = length > 0 ? (dx / length) * ARROW_SPEED : 0;
         const vy = length > 0 ? (dy / length) * ARROW_SPEED : -ARROW_SPEED;
         const id = nextId();
+        const damage = ARROW_DAMAGE + Math.max(0, owner?.bowDamageUpgrades || 0);
+        const pierce = 1 + Math.max(0, owner?.bowPierceUpgrades || 0);
         const arrow = new PlayerBulletState();
         arrow.id = id;
         arrow.x = x;
         arrow.y = y;
-        arrow.power = ARROW_DAMAGE;
+        arrow.power = damage;
         arrow.ownerId = ownerId;
         arrow.kind = "arrow";
         arrow.angle = Math.atan2(vy, vx);
         this.state.playerBullets.set(id, arrow);
-        this.serverPlayerBullets.set(id, { vx, vy, rangeRemaining: ARROW_RANGE, kind: "arrow" });
+        this.serverPlayerBullets.set(id, {
+            vx,
+            vy,
+            rangeRemaining: ARROW_RANGE,
+            kind: "arrow",
+            damage,
+            pierceRemaining: pierce,
+            hitEnemyIds: new Set<string>(),
+        });
     }
 
     private tickPlayerBullets(dtSec: number) {
@@ -1473,11 +1718,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             b.angle = Math.atan2(sb.vy, sb.vx);
             if (Number.isFinite(sb.rangeRemaining)) sb.rangeRemaining -= distance;
             if (sb.kind === "arrow") {
-                const enemyId = this.findEnemyHitByArrowSegment(prevX, prevY, b.x, b.y);
+                const enemyId = this.findEnemyHitByArrowSegment(prevX, prevY, b.x, b.y, sb.hitEnemyIds);
                 if (enemyId) {
-                    const enemyHit = this.damageEnemyFromBowAttack(enemyId, b.ownerId);
+                    sb.hitEnemyIds.add(enemyId);
+                    const enemyHit = this.damageEnemyFromBowAttack(enemyId, b.ownerId, sb.damage);
                     if (enemyHit) this.broadcast("enemyHit", enemyHit);
-                    dead.push(id);
+                    sb.pierceRemaining--;
+                    if (sb.pierceRemaining <= 0) dead.push(id);
                     return;
                 }
             }
@@ -1487,12 +1734,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         dead.forEach(id => { this.state.playerBullets.delete(id); this.serverPlayerBullets.delete(id); });
     }
 
-    private findEnemyHitByArrowSegment(fromX: number, fromY: number, toX: number, toY: number): string | null {
+    private findEnemyHitByArrowSegment(fromX: number, fromY: number, toX: number, toY: number, ignoredEnemyIds: Set<string>): string | null {
         let closestEnemyId: string | null = null;
         let closestT = Number.POSITIVE_INFINITY;
 
         this.state.enemies.forEach((enemy, id) => {
-            if (enemy.isDead) return;
+            if (enemy.isDead || ignoredEnemyIds.has(id)) return;
             const t = segmentAabbIntersectionT(
                 fromX,
                 fromY,
