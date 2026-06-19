@@ -89,8 +89,8 @@ const CAMPFIRE_RADIUS_DOT_GAP = 8;
 const UI_DEPTH = 1000;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
-const WORLD_BACKGROUND_COLOR = 0x2f7d32;
-const WORLD_BACKGROUND_CSS = '#2f7d32';
+const WORLD_BACKGROUND_COLOR = 0x2f7c31;
+const WORLD_BACKGROUND_CSS = '#2f7c31';
 const GRASS_NOISE_DEPTH = -99;
 const GRASS_NOISE_DARK_COLOR = 0x1f5f27;
 const GRASS_NOISE_CELL_SIZE = 96;
@@ -148,10 +148,10 @@ const OUTFIT_COLOR_BUTTON_X = 40;
 const OUTFIT_COLOR_BUTTON_START_Y = 118;
 const OUTFIT_COLOR_BUTTON_GAP = 36;
 const OUTFIT_COLOR_BUTTONS = [
-    { color: 0x7954b8, tint: 0xa477ff },
-    { color: 0x2477a6, tint: 0x2f9cff },
-    { color: 0x43b4ba, tint: 0x5ee8f0 },
-    { color: 0x82bd4c, tint: 0xa8f05c },
+    { color: 0x7954b8, tint: 0x7954b8 },
+    { color: 0x2477a6, tint: 0x2477a6 },
+    { color: 0xba4343, tint: 0xba4343 },
+    { color: 0x3fcd46, tint: 0x3fcd46 },
     { color: 0xa99d83, tint: null },
 ];
 const ITEM_WOOD_AXE = 'wood_axe';
