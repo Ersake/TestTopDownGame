@@ -638,6 +638,7 @@ export class Game extends Phaser.Scene {
         this.createUpgradeHex(baseX, topY, 58, options[0]);
         this.createUpgradeHex(leftX, baseY, 58, options[1]);
         this.createUpgradeHex(rightX, baseY, 58, options[2]);
+        this.createUpgradeCategoryIcon(baseX, baseY - 40, this.upgradeUiMode);
         this.createUpgradeBackButton(rightX + 76, baseY + 24);
     }
 
@@ -666,6 +667,23 @@ export class Game extends Phaser.Scene {
     openUpgradeCategory(category) {
         this.upgradeUiMode = category;
         this.updateUpgradeUi();
+    }
+
+    createUpgradeCategoryIcon(x, y, category) {
+        const iconKey = {
+            axe: ASSETS.image.woodAxeIcon.key,
+            bow: ASSETS.image.woodBowIcon.key,
+            hammer: ASSETS.image.hammerIcon.key,
+        }[category];
+        if (!iconKey) return;
+
+        const icon = this.add.image(x, y, iconKey)
+            .setOrigin(0.5)
+            .setDisplaySize(40, 40)
+            .setDepth(UI_DEPTH + 21)
+            .setScrollFactor(0);
+        this.upgradeUiObjects.push(icon);
+        this.registerFixedUi(icon);
     }
 
     selectUpgrade(upgradeId) {
