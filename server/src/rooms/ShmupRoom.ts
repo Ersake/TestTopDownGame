@@ -1402,6 +1402,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         campfire.id = this.getCampfireIdForCell(cell);
         campfire.x = cell.x;
         campfire.y = cell.y;
+        campfire.healProgress = Math.floor((this.campfireHealElapsedMs / CAMPFIRE_HEAL_INTERVAL_MS) * 100);
         this.state.campfires.set(campfire.id, campfire);
         this.setHotbarItem(player, player.activeSlot, EMPTY_HOTBAR_ITEM);
         this.fillPendingCampfireItems(player);
@@ -1596,6 +1597,11 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.campfireHealElapsedMs -= CAMPFIRE_HEAL_INTERVAL_MS;
             this.applyCampfireHealing();
         }
+
+        const healProgress = Math.floor((this.campfireHealElapsedMs / CAMPFIRE_HEAL_INTERVAL_MS) * 100);
+        this.state.campfires.forEach((campfire) => {
+            campfire.healProgress = healProgress;
+        });
     }
 
     private applyCampfireHealing() {

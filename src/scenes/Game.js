@@ -79,6 +79,7 @@ const BUILD_DRAG_SEND_INTERVAL_MS = 35;
 const HAMMER_REPAIR_TICK_MS = 500;
 const CAMPFIRE_DISPLAY_SIZE = 84;
 const CAMPFIRE_HEAL_RADIUS = 320;
+const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
 const CAMPFIRE_DEPTH = 86;
 const CAMPFIRE_ANIMATION_KEY = 'campfire-burn';
 const CAMPFIRE_ICON_FRAME = 0;
@@ -86,7 +87,14 @@ const CAMPFIRE_RADIUS_COLOR = 0xffc46a;
 const CAMPFIRE_RADIUS_ALPHA = 0.65;
 const CAMPFIRE_RADIUS_DOT_LENGTH = 10;
 const CAMPFIRE_RADIUS_DOT_GAP = 8;
+const CAMPFIRE_HEAL_BAR_WIDTH = 28;
+const CAMPFIRE_HEAL_BAR_HEIGHT = 4;
+const CAMPFIRE_HEAL_BAR_Y_OFFSET = -52;
+const CAMPFIRE_HEAL_BAR_BACKGROUND_COLOR = 0x2b1608;
+const CAMPFIRE_HEAL_BAR_FILL_COLOR = 0xff941f;
 const UI_DEPTH = 1000;
+const BUFF_LIST_X_OFFSET = 20;
+const BUFF_LIST_Y = 96;
 const DEFAULT_WORLD_WIDTH = 3840;
 const DEFAULT_WORLD_HEIGHT = 2160;
 const WORLD_BACKGROUND_COLOR = 0x2f7c31;
@@ -195,6 +203,17 @@ const LOG_PILE_OFFSETS = [
 const PLAYER_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const ENEMY_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const FRAMES_PER_DIRECTION = 15;
+const PLAYER_BUFFS = [
+    { field: 'axeSwingSpeedUpgrades', label: 'Axe swing speed' },
+    { field: 'axeTreeDamageUpgrades', label: 'Axe wood damage' },
+    { field: 'axeEnemyDamageUpgrades', label: 'Axe enemy damage' },
+    { field: 'bowDamageUpgrades', label: 'Bow damage' },
+    { field: 'bowPierceUpgrades', label: 'Bow pierce' },
+    { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
+    { field: 'barricadeHealthUpgrades', label: 'Barricade health' },
+    { field: 'woodGatherUpgrades', label: 'Wood gathering' },
+    { field: 'campfireUpgrades', label: 'Campfire charge' },
+];
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -226,6 +245,7 @@ export class Game extends Phaser.Scene {
         this.updatePlayerLevelLabels();
         this.updateOffscreenPlayerIndicators();
         this.updateEnemyHealthBars();
+        this.updateCampfireHealBars();
         this.updateHitboxOverlay();
     }
 
@@ -387,6 +407,11 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
+        this.buffListText = this.add.text(this.scale.width - BUFF_LIST_X_OFFSET, BUFF_LIST_Y, '', {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#ffe27a',
+            stroke: '#000000', strokeThickness: 5, align: 'right',
+        }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nRestarting in 10', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8, align: 'center',
@@ -435,11 +460,23 @@ export class Game extends Phaser.Scene {
             this.timerText,
             this.killsText,
             this.playerCountText,
+            this.buffListText,
             this.gameOverText,
             this.quitButton,
             this.roomCodeText,
             this.hitboxToggleButton,
         );
+    }
+
+    updateBuffList(player) {
+        if (!this.buffListText) return;
+
+        const buffs = PLAYER_BUFFS
+            .map(({ field, label }) => ({ label, stacks: Math.max(0, player[field] || 0) }))
+            .filter(({ stacks }) => stacks > 0)
+            .map(({ label, stacks }) => `${label} x${stacks}`);
+
+        this.buffListText.setText(buffs.length > 0 ? `BUFFS\n${buffs.join('\n')}` : '');
     }
 
     initOutfitColorPicker() {
@@ -1356,6 +1393,11 @@ export class Game extends Phaser.Scene {
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
                 this.updateUpgradeUi();
+                this.updateBuffList(player);
+
+                PLAYER_BUFFS.forEach(({ field }) => {
+                    player.listen(field, () => this.updateBuffList(player));
+                });
 
                 if (player.hotbarItems) {
                     const syncHotbar = () => this.syncLocalHotbarFromPlayer(player);
@@ -1426,6 +1468,7 @@ export class Game extends Phaser.Scene {
                 this.localPlayerState = null;
                 this.localExperienceState = null;
                 this.localPendingUpgradeChoices = 0;
+                this.buffListText?.setText('');
                 this.clearUpgradeUi();
                 this.updateExperienceBar(0, 5, 1);
                 this.updateHudHealthBar(PLAYER_MAX_HEALTH);
@@ -1576,14 +1619,27 @@ export class Game extends Phaser.Scene {
             sprite.play(CAMPFIRE_ANIMATION_KEY);
             const radius = this.add.graphics().setDepth(CAMPFIRE_DEPTH - 1);
             this.drawCampfireRadiusOutline(radius, campfire.x, campfire.y);
-            this.registerWorldObject(radius, sprite);
-            this.campfireSprites.set(campfireId, { sprite, radius, campfire });
+            const healBar = this.add.graphics().setDepth(CAMPFIRE_DEPTH + 1);
+            const healProgress = Phaser.Math.Clamp((campfire.healProgress || 0) / 100, 0, 1);
+            this.drawCampfireHealBar(healBar, campfire, healProgress);
+            this.registerWorldObject(radius, sprite, healBar);
+            this.campfireSprites.set(campfireId, {
+                sprite,
+                radius,
+                healBar,
+                campfire,
+                healProgress,
+                healProgressUpdatedAt: this.time.now,
+            });
 
             campfire.onChange(() => {
                 const entry = this.campfireSprites.get(campfireId);
                 if (!entry) return;
                 entry.sprite.setPosition(campfire.x, campfire.y);
                 this.drawCampfireRadiusOutline(entry.radius, campfire.x, campfire.y);
+                entry.healProgress = Phaser.Math.Clamp((campfire.healProgress || 0) / 100, 0, 1);
+                entry.healProgressUpdatedAt = this.time.now;
+                this.drawCampfireHealBar(entry.healBar, campfire, entry.healProgress);
             });
         };
 
@@ -1595,6 +1651,7 @@ export class Game extends Phaser.Scene {
             if (!entry) return;
             entry.sprite.destroy();
             entry.radius.destroy();
+            entry.healBar.destroy();
             this.campfireSprites.delete(id);
         });
 
@@ -2051,6 +2108,27 @@ export class Game extends Phaser.Scene {
             graphics.arc(x, y, CAMPFIRE_HEAL_RADIUS, angle, endAngle, false);
             graphics.strokePath();
         }
+    }
+
+    drawCampfireHealBar(graphics, campfire, progress) {
+        const x = campfire.x - CAMPFIRE_HEAL_BAR_WIDTH * 0.5;
+        const y = campfire.y + CAMPFIRE_HEAL_BAR_Y_OFFSET;
+
+        graphics.clear();
+        graphics.fillStyle(CAMPFIRE_HEAL_BAR_BACKGROUND_COLOR, 0.9);
+        graphics.fillRect(x, y, CAMPFIRE_HEAL_BAR_WIDTH, CAMPFIRE_HEAL_BAR_HEIGHT);
+        if (progress > 0) {
+            graphics.fillStyle(CAMPFIRE_HEAL_BAR_FILL_COLOR, 1);
+            graphics.fillRect(x, y, CAMPFIRE_HEAL_BAR_WIDTH * progress, CAMPFIRE_HEAL_BAR_HEIGHT);
+        }
+    }
+
+    updateCampfireHealBars() {
+        this.campfireSprites.forEach(({ healBar, campfire, healProgress, healProgressUpdatedAt }) => {
+            const elapsed = this.time.now - healProgressUpdatedAt;
+            const progress = (healProgress + elapsed / CAMPFIRE_HEAL_INTERVAL_MS) % 1;
+            this.drawCampfireHealBar(healBar, campfire, progress);
+        });
     }
 
     toggleBuildMode() {
@@ -3605,9 +3683,10 @@ export class Game extends Phaser.Scene {
             healthBackground.destroy();
             healthFill.destroy();
         });
-        this.campfireSprites.forEach(({ sprite, radius }) => {
+        this.campfireSprites.forEach(({ sprite, radius, healBar }) => {
             sprite.destroy();
             radius?.destroy();
+            healBar?.destroy();
         });
         this.playerBulletSprites.forEach(s => s.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
