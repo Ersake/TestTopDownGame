@@ -490,10 +490,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.updateBowAim(client.sessionId, data);
         });
 
-        this.onMessage("bowRelease", (client, data) => {
-            this.releaseBowCharge(client.sessionId, data);
-        });
-
         this.onMessage("bowCancel", (client) => {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
@@ -801,19 +797,16 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.attackDirection = direction;
     }
 
-    private releaseBowCharge(sessionId: string, data: unknown) {
+    private fireBowCharge(sessionId: string) {
         const player = this.state.players.get(sessionId);
         const sp = this.serverPlayers.get(sessionId);
         if (!player || !sp || !sp.bowCharging || !sp.alive || player.isDead || this.state.gameOver) return;
 
-        this.updateBowAim(sessionId, data);
-        const charged = player.bowChargeProgress >= 1;
+        if (player.bowChargeProgress < 1) return;
         const origin = { x: player.x, y: player.y + ATTACK_HIT_ORIGIN_Y_OFFSET };
         const vector = { x: sp.bowAimX, y: sp.bowAimY };
         const direction = directionFromInput(vector.x, vector.y) || player.facingDirection || "N";
         this.clearBowCharge(player, sp);
-
-        if (!charged) return;
 
         player.facingDirection = direction;
         player.attackDirection = direction;
@@ -1705,6 +1698,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                     sp.vy = 0;
                     player.x = sp.bowChargeX;
                     player.y = sp.bowChargeY;
+                    if (sp.bowChargeMs >= chargeMs) this.fireBowCharge(sid);
                     return;
                 }
             }

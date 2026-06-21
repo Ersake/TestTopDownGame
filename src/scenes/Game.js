@@ -170,7 +170,6 @@ const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
 const ITEM_CAMPFIRE = 'campfire';
 const ITEM_WOOD = 'wood';
-const BOW_RELEASE_FALLBACK_MS = 350;
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -967,6 +966,11 @@ export class Game extends Phaser.Scene {
                 return;
             }
 
+            if (pointer.rightButtonDown() && this.getLocalActiveItem() === ITEM_WOOD_BOW) {
+                this.cancelBowCharge();
+                return;
+            }
+
             if (pointer.leftButtonDown()) {
                 if (this.getLocalActiveItem() === ITEM_WOOD_BOW) {
                     this.startBowCharge(pointer);
@@ -992,9 +996,6 @@ export class Game extends Phaser.Scene {
             }
             if (this.attackHeldPointerId === pointer.id) {
                 this.stopHeldAttack();
-            }
-            if (this.bowChargePointerId === pointer.id) {
-                this.releaseBowCharge(pointer);
             }
         });
 
@@ -1201,7 +1202,6 @@ export class Game extends Phaser.Scene {
                 bowChargeProgress: player.bowChargeProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
-                bowReleaseFallbackEvent: null,
                 axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
                 lastMovedAt: 0,
                 x: player.x,
@@ -1310,15 +1310,15 @@ export class Game extends Phaser.Scene {
                 if (!animationState) return;
                 animationState.bowCharging = !!charging;
                 if (!charging) {
-                    this.updatePlayerBowChargeBar(playerSessionId);
-                    if (animationState.bowFullyCharged && animationState.attackItem === ITEM_WOOD_BOW) {
-                        this.scheduleBowReleaseFallback(playerSessionId);
-                        return;
+                    if (isLocal) {
+                        this.bowChargePointerId = null;
+                        this.bowChargePointer = null;
+                        this.nextBowAimSendAt = 0;
                     }
+                    this.updatePlayerBowChargeBar(playerSessionId);
                     this.clearBowPresentationState(playerSessionId, { updateAnimation: true });
                     return;
                 }
-                this.cancelBowReleaseFallback(playerSessionId);
                 animationState.attackItem = ITEM_WOOD_BOW;
                 animationState.bowFullyCharged = false;
                 animationState.bowAnimationPaused = false;
@@ -1381,11 +1381,21 @@ export class Game extends Phaser.Scene {
                 animationState.lastAttackSeq = player.attackSeq;
                 if (player.attackSeq <= 0) return;
                 animationState.attackItem = player.attackItem || animationState.activeItem || ITEM_WOOD_AXE;
+                if (animationState.attackItem === ITEM_WOOD_BOW) {
+                    if (this.shouldPlayAttackAudio(playerSessionId)) {
+                        this.playSfx(ASSETS.audio.arrowLaunch.key, PUNCH_SOUND_VOLUME, {
+                            spatial: !this.isLocalSession(playerSessionId),
+                            worldX: player.x,
+                            worldY: player.y,
+                        });
+                    }
+                    this.clearBowPresentationState(playerSessionId, { updateAnimation: true });
+                    return;
+                }
                 const isLocalPredictedAttack = this.isLocalSession(playerSessionId) && animationState.attackItem !== ITEM_WOOD_BOW;
 
                 this.playPlayerAttackAnimation(playerSessionId, player.attackDirection, {
                     playAudio: !isLocalPredictedAttack && this.shouldPlayAttackAudio(playerSessionId),
-                    resumeBowRelease: animationState.attackItem === ITEM_WOOD_BOW,
                     restart: animationState.attackItem !== ITEM_WOOD_BOW,
                 });
             });
@@ -1458,7 +1468,6 @@ export class Game extends Phaser.Scene {
         state.players.forEach(addPlayer);
 
         state.players.onRemove((_player, sessionId) => {
-            this.cancelBowReleaseFallback(sessionId);
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
             const weapon = this.playerWeaponSprites.get(sessionId);
@@ -2583,10 +2592,6 @@ export class Game extends Phaser.Scene {
     updateBowChargeAim() {
         if (!this.bowChargePointer || this.time.now < this.nextBowAimSendAt) return;
         const pointer = this.bowChargePointer;
-        if (!pointer.leftButtonDown?.()) {
-            this.releaseBowCharge(pointer);
-            return;
-        }
 
         const sessionId = this.localSessionId;
         const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
@@ -2609,14 +2614,6 @@ export class Game extends Phaser.Scene {
         }
         RoomClient.sendBowAim(worldPoint?.x, worldPoint?.y);
         this.nextBowAimSendAt = this.time.now + BOW_AIM_SEND_INTERVAL_MS;
-    }
-
-    releaseBowCharge(pointer) {
-        const worldPoint = this.getPointerWorldPoint(pointer || this.bowChargePointer);
-        RoomClient.sendBowRelease(worldPoint?.x, worldPoint?.y);
-        this.bowChargePointerId = null;
-        this.bowChargePointer = null;
-        this.nextBowAimSendAt = 0;
     }
 
     cancelBowCharge() {
@@ -2790,31 +2787,12 @@ export class Game extends Phaser.Scene {
         animationState.bowAnimationPaused = true;
     }
 
-    cancelBowReleaseFallback(sessionId) {
-        const animationState = this.playerAnimationState.get(sessionId);
-        if (!animationState?.bowReleaseFallbackEvent) return;
-        animationState.bowReleaseFallbackEvent.remove(false);
-        animationState.bowReleaseFallbackEvent = null;
-    }
-
-    scheduleBowReleaseFallback(sessionId) {
-        const animationState = this.playerAnimationState.get(sessionId);
-        if (!animationState || animationState.bowReleaseFallbackEvent) return;
-
-        animationState.bowReleaseFallbackEvent = this.time.delayedCall(BOW_RELEASE_FALLBACK_MS, () => {
-            animationState.bowReleaseFallbackEvent = null;
-            if (animationState.bowCharging || animationState.attackItem !== ITEM_WOOD_BOW) return;
-            this.clearBowPresentationState(sessionId, { updateAnimation: true });
-        });
-    }
-
     clearBowPresentationState(sessionId, { updateAnimation = true } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!animationState) return;
 
-        this.cancelBowReleaseFallback(sessionId);
         animationState.bowCharging = false;
         animationState.bowChargeProgress = 0;
         animationState.bowFullyCharged = false;
@@ -2837,41 +2815,23 @@ export class Game extends Phaser.Scene {
         this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
     }
 
-    resumeBowReleaseAnimation(sessionId) {
-        const sprite = this.playerSprites.get(sessionId);
-        const weapon = this.playerWeaponSprites.get(sessionId);
-        const animationState = this.playerAnimationState.get(sessionId);
-        if (!sprite || !animationState || animationState.attackItem !== ITEM_WOOD_BOW || !animationState.bowAnimationPaused) return false;
-
-        this.cancelBowReleaseFallback(sessionId);
-        sprite.anims.resume();
-        weapon?.anims.resume();
-        animationState.bowAnimationPaused = false;
-        animationState.bowFullyCharged = false;
-        animationState.attacking = true;
-        return true;
-    }
-
-    playPlayerAttackAnimation(sessionId, direction, { playAudio = true, allowWhileCharging = false, restart = false, resumeBowRelease = false, preserveProgress = false } = {}) {
+    playPlayerAttackAnimation(sessionId, direction, { playAudio = true, allowWhileCharging = false, restart = false, preserveProgress = false } = {}) {
         const sprite = this.playerSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!sprite || !animationState || animationState.dead || !sprite.visible) return;
 
         const attackItem = animationState.attackItem || animationState.activeItem || ITEM_WOOD_AXE;
-        if (animationState.attacking && !allowWhileCharging && !restart && !resumeBowRelease) return;
+        if (animationState.attacking && !allowWhileCharging && !restart) return;
         animationState.attacking = true;
 
-        const didResumeBowRelease = resumeBowRelease && attackItem === ITEM_WOOD_BOW && this.resumeBowReleaseAnimation(sessionId);
-        if (!didResumeBowRelease) {
-            const attackMode = this.getPlayerAttackMode(attackItem);
-            const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart, preserveProgress });
-            const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart, preserveProgress });
-            if (!didPlay) {
-                animationState.attacking = false;
-                return;
-            }
-            if (!didPlayWeapon) this.hidePlayerWeapon(sessionId);
+        const attackMode = this.getPlayerAttackMode(attackItem);
+        const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart, preserveProgress });
+        const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart, preserveProgress });
+        if (!didPlay) {
+            animationState.attacking = false;
+            return;
         }
+        if (!didPlayWeapon) this.hidePlayerWeapon(sessionId);
 
         if (playAudio) {
             const audioKey = attackItem === ITEM_WOOD_BOW ? ASSETS.audio.arrowLaunch.key : ASSETS.audio.punchWhoosh.key;
@@ -2884,7 +2844,6 @@ export class Game extends Phaser.Scene {
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
             if (animationState.bowCharging) return;
-            if (animationState.attackItem === ITEM_WOOD_BOW) this.cancelBowReleaseFallback(sessionId);
             animationState.attacking = false;
             animationState.attackTargetX = null;
             animationState.attackTargetY = null;
@@ -2903,7 +2862,6 @@ export class Game extends Phaser.Scene {
         if (!sprite || !animationState || animationState.deathPlayed) return;
 
         if (this.isLocalSession(sessionId)) this.cancelBowCharge();
-        this.cancelBowReleaseFallback(sessionId);
         animationState.dead = true;
         animationState.deathPlayed = true;
         animationState.attacking = false;
@@ -2933,7 +2891,6 @@ export class Game extends Phaser.Scene {
         animationState.bowChargeProgress = 0;
         animationState.bowFullyCharged = false;
         animationState.bowAnimationPaused = false;
-        this.cancelBowReleaseFallback(sessionId);
         animationState.attackTargetX = null;
         animationState.attackTargetY = null;
         animationState.x = player.x;
@@ -3663,7 +3620,6 @@ export class Game extends Phaser.Scene {
 
     clearAllSprites() {
         this.stopAllCasterChargeSounds();
-        this.playerAnimationState.forEach((_animationState, sessionId) => this.cancelBowReleaseFallback(sessionId));
         this.playerSprites.forEach(s => s.destroy());
         this.playerWeaponSprites.forEach(s => s.destroy());
         this.playerHealthBars.forEach(({ background, fill }) => {

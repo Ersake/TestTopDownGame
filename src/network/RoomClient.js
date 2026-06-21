@@ -109,11 +109,6 @@ class RoomClient {
         this.room.send("bowAim", { targetX, targetY });
     }
 
-    sendBowRelease(targetX, targetY) {
-        if (!this.room) return;
-        this.room.send("bowRelease", { targetX, targetY });
-    }
-
     sendBowCancel() {
         if (!this.room) return;
         this.room.send("bowCancel", {});
