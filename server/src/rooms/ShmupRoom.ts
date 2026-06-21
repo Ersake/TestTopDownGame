@@ -64,23 +64,19 @@ const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
-const ENEMY1_COUNT = 3;
-const ENEMY2_COUNT = 3;
-const ENEMY_WAVE_COUNT = 3;
-const ENEMY_WAVE_INTERVAL_MS = 30000;
+const ENEMY_WAVE_INTERVAL_MS = 60000;
+const ENEMY_WAVE_SPAWN_WINDOW_MS = 10000;
+const INITIAL_MELEE_WAVE_COUNT = 3;
+const MELEE_PER_MINUTE = 5;
+const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
 const ENEMY_TYPE_CASTER = 3;
 const ENEMY_TYPE_DARK_KNIGHT = 4;
 const MIN_BOW_CHARGE_MS = 100;
-const CASTER_INITIAL_COUNT = 1;
-const CASTER_WAVE_COUNT = 1;
 const CASTER_CAST_RANGE = 360;
 const CASTER_CHARGE_MS = 1000;
 const CASTER_ATTACK_MS = 500;
 const CASTER_FIREBALL_SPEED = 225;
 const CASTER_FIREBALL_DAMAGE = 1;
-const DARK_KNIGHT_INITIAL_COUNT = 1;
-const DARK_KNIGHT_WAVE_COUNT = 1;
-const DARK_KNIGHT_WAVE_INTERVAL_MS = 60000;
 const DARK_KNIGHT_HEALTH = 10;
 const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
 const DARK_KNIGHT_WALK_SPEED = 88;
@@ -126,6 +122,7 @@ const ITEM_HAMMER = "hammer";
 const ITEM_CAMPFIRE = "campfire";
 const ITEM_WOOD = "wood";
 const HOTBAR_SLOT_COUNT = 9;
+const OUTFIT_COLOR_COUNT = 5;
 const EMPTY_HOTBAR_ITEM = "";
 const EMPTY_HOTBAR_COUNT = 0;
 const WOOD_STACK_MAX = 99;
@@ -357,6 +354,11 @@ interface PlayerHurtPayload {
     y: number;
     health: number;
 }
+interface PendingEnemySpawn {
+    enemyType: number;
+    edgeIndex: number;
+    spawnAtMs: number;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 let _id = 0;
@@ -394,8 +396,8 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverEnemyBullets  = new Map<string, ServerEnemyBullet>();
     private serverTreeHealth    = new Map<string, number>();
     private elapsedMs           = 0;
-    private enemyWaveElapsedMs  = 0;
-    private darkKnightWaveElapsedMs = 0;
+    private lastScheduledEnemyWaveMinute = -1;
+    private pendingEnemySpawns: PendingEnemySpawn[] = [];
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
 
@@ -521,6 +523,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("selectUpgrade", (client, data) => {
             this.selectUpgrade(client.sessionId, data);
         });
+
+        this.onMessage("setOutfitColor", (client, data) => {
+            this.setPlayerOutfitColor(client.sessionId, data);
+        });
     }
 
     private equipPlayerSlot(sessionId: string, data: unknown) {
@@ -536,6 +542,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (player.activeItem !== ITEM_WOOD_BOW) {
             this.clearBowCharge(player, sp);
         }
+    }
+
+    private setPlayerOutfitColor(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const outfitColor = Number((data as { outfitColor?: unknown })?.outfitColor);
+        if (!player || !Number.isInteger(outfitColor) || outfitColor < 0 || outfitColor >= OUTFIT_COLOR_COUNT) return;
+
+        player.outfitColor = outfitColor;
     }
 
     private selectUpgrade(sessionId: string, data: unknown) {
@@ -871,12 +885,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!this.state.gameStarted) {
             this.state.gameStarted = true;
             this.elapsedMs = 0;
-            this.enemyWaveElapsedMs = 0;
-            this.darkKnightWaveElapsedMs = 0;
             this.campfireHealElapsedMs = 0;
             this.state.elapsedSeconds = 0;
             this.state.gameOverCountdown = 0;
-            this.spawnInitialEnemies();
+            this.startEnemyWaveSchedule();
         }
     }
 
@@ -946,14 +958,12 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.teamScore = 0;
         this.elapsedMs = 0;
-        this.enemyWaveElapsedMs = 0;
-        this.darkKnightWaveElapsedMs = 0;
         this.campfireHealElapsedMs = 0;
         this.state.elapsedSeconds = 0;
         this.state.gameOver = false;
         this.state.gameOverCountdown = 0;
         this.gameOverRestartMs = 0;
-        if (this.state.gameStarted && this.state.players.size > 0) this.spawnInitialEnemies();
+        if (this.state.gameStarted && this.state.players.size > 0) this.startEnemyWaveSchedule();
     }
 
     onLeave(client: Client) {
@@ -1563,7 +1573,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickPlayers(dtSec, dt);
         this.tickRevives(dt);
         this.tickPlayerBullets(dtSec);
-        this.tickEnemyWaves(dt);
+        this.tickEnemyWaves();
         this.tickEnemies(dtSec, dt);
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
@@ -1896,49 +1906,57 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     // ─── Enemies ──────────────────────────────────────────────────────────────
-    private spawnInitialEnemies() {
+    private startEnemyWaveSchedule() {
         this.state.enemies.clear();
         this.serverEnemies.clear();
-        this.enemyWaveElapsedMs = 0;
-        this.darkKnightWaveElapsedMs = 0;
+        this.pendingEnemySpawns = [];
+        this.lastScheduledEnemyWaveMinute = -1;
+        this.scheduleEnemyWave(0);
+    }
 
-        for (let i = 0; i < ENEMY1_COUNT; i++) {
-            this.spawnEnemy(1, i);
+    private tickEnemyWaves() {
+        const currentMinute = Math.floor(this.elapsedMs / ENEMY_WAVE_INTERVAL_MS);
+        while (this.lastScheduledEnemyWaveMinute < currentMinute) {
+            this.scheduleEnemyWave(this.lastScheduledEnemyWaveMinute + 1);
         }
-        for (let i = 0; i < ENEMY2_COUNT; i++) {
-            this.spawnEnemy(2, ENEMY1_COUNT + i);
-        }
-        for (let i = 0; i < CASTER_INITIAL_COUNT; i++) {
-            this.spawnEnemy(ENEMY_TYPE_CASTER, ENEMY1_COUNT + ENEMY2_COUNT + i);
-        }
-        for (let i = 0; i < DARK_KNIGHT_INITIAL_COUNT; i++) {
-            this.spawnEnemy(ENEMY_TYPE_DARK_KNIGHT, ENEMY1_COUNT + ENEMY2_COUNT + CASTER_INITIAL_COUNT + i);
+
+        for (let index = this.pendingEnemySpawns.length - 1; index >= 0; index--) {
+            const pendingSpawn = this.pendingEnemySpawns[index];
+            if (pendingSpawn.spawnAtMs > this.elapsedMs) continue;
+            this.spawnEnemy(pendingSpawn.enemyType, pendingSpawn.edgeIndex);
+            this.pendingEnemySpawns.splice(index, 1);
         }
     }
 
-    private tickEnemyWaves(dtMs: number) {
-        this.enemyWaveElapsedMs += dtMs;
-        while (this.enemyWaveElapsedMs >= ENEMY_WAVE_INTERVAL_MS) {
-            this.enemyWaveElapsedMs -= ENEMY_WAVE_INTERVAL_MS;
-            this.spawnEnemyWave();
+    private scheduleEnemyWave(minute: number) {
+        const waveStartMs = minute * ENEMY_WAVE_INTERVAL_MS;
+        const meleeCount = minute === 0 ? INITIAL_MELEE_WAVE_COUNT : minute * MELEE_PER_MINUTE;
+        const casterCount = minute === 0 ? 0 : minute < DARK_KNIGHT_WAVE_INTERVAL_MINUTES ? 1 : 2;
+        const darkKnightCount = minute > 0 && minute % DARK_KNIGHT_WAVE_INTERVAL_MINUTES === 0
+            ? minute / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
+            : 0;
+
+        this.broadcast("enemyWaveStarted", { minute });
+
+        for (let i = 0; i < meleeCount; i++) {
+            this.queueEnemySpawn(rndInt(1, 2), waveStartMs);
+        }
+        for (let i = 0; i < casterCount; i++) {
+            this.queueEnemySpawn(ENEMY_TYPE_CASTER, waveStartMs);
+        }
+        for (let i = 0; i < darkKnightCount; i++) {
+            this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs);
         }
 
-        this.darkKnightWaveElapsedMs += dtMs;
-        while (this.darkKnightWaveElapsedMs >= DARK_KNIGHT_WAVE_INTERVAL_MS) {
-            this.darkKnightWaveElapsedMs -= DARK_KNIGHT_WAVE_INTERVAL_MS;
-            for (let i = 0; i < DARK_KNIGHT_WAVE_COUNT; i++) {
-                this.spawnEnemy(ENEMY_TYPE_DARK_KNIGHT, rndInt(0, 3));
-            }
-        }
+        this.lastScheduledEnemyWaveMinute = minute;
     }
 
-    private spawnEnemyWave() {
-        for (let i = 0; i < ENEMY_WAVE_COUNT; i++) {
-            this.spawnEnemy(rndInt(1, 2), rndInt(0, 3));
-        }
-        for (let i = 0; i < CASTER_WAVE_COUNT; i++) {
-            this.spawnEnemy(ENEMY_TYPE_CASTER, rndInt(0, 3));
-        }
+    private queueEnemySpawn(enemyType: number, waveStartMs: number) {
+        this.pendingEnemySpawns.push({
+            enemyType,
+            edgeIndex: rndInt(0, 3),
+            spawnAtMs: waveStartMs + rndReal(0, ENEMY_WAVE_SPAWN_WINDOW_MS),
+        });
     }
 
     private spawnEnemy(enemyType: number, edgeIndex: number) {

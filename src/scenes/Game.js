@@ -113,6 +113,7 @@ const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
+const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
@@ -529,13 +530,19 @@ export class Game extends Phaser.Scene {
             selection?.setVisible(buttonIndex === index);
         });
         this.applyLocalOutfitTint();
+        RoomClient.sendSetOutfitColor(index);
     }
 
     applyLocalOutfitTint() {
-        const sprite = this.localSessionId ? this.playerSprites.get(this.localSessionId) : null;
+        if (!this.localSessionId) return;
+        this.applyPlayerOutfitTint(this.localSessionId, this.outfitColorIndex);
+    }
+
+    applyPlayerOutfitTint(sessionId, colorIndex) {
+        const sprite = this.playerSprites.get(sessionId);
         if (!sprite) return;
 
-        const tint = OUTFIT_COLOR_BUTTONS[this.outfitColorIndex]?.tint;
+        const tint = OUTFIT_COLOR_BUTTONS[colorIndex]?.tint;
         if (tint == null) {
             sprite.clearTint();
         } else {
@@ -1111,6 +1118,12 @@ export class Game extends Phaser.Scene {
             });
         });
 
+        room.onMessage('enemyWaveStarted', () => {
+            this.playSfx(ASSETS.audio.enemyWaveHorn.key, ENEMY_WAVE_HORN_SOUND_VOLUME, {
+                serverEvent: true,
+            });
+        });
+
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
             this.createGrassNoiseLayer();
@@ -1129,14 +1142,9 @@ export class Game extends Phaser.Scene {
                 .setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
             this.registerWorldObject(sprite, weaponSprite);
 
-            if (!isLocal) {
-                sprite.setTint(0x88ffff); // tint remote players cyan
-                weaponSprite.setTint(0x88ffff);
-            }
-
             this.playerSprites.set(playerSessionId, sprite);
             this.playerWeaponSprites.set(playerSessionId, weaponSprite);
-            if (isLocal) this.applyLocalOutfitTint();
+            this.applyPlayerOutfitTint(playerSessionId, player.outfitColor);
             if (!isLocal) {
                 const indicator = this.add.circle(0, 0, OFFSCREEN_PLAYER_INDICATOR_RADIUS, OFFSCREEN_PLAYER_INDICATOR_COLOR, 1)
                     .setDepth(UI_DEPTH + 5)
@@ -1346,6 +1354,15 @@ export class Game extends Phaser.Scene {
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
                 if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
+            });
+
+            player.listen('outfitColor', (colorIndex) => {
+                this.applyPlayerOutfitTint(playerSessionId, colorIndex);
+                if (!isLocal || !OUTFIT_COLOR_BUTTONS[colorIndex]) return;
+                this.outfitColorIndex = colorIndex;
+                this.outfitColorButtons.forEach(({ selection, index }) => {
+                    selection?.setVisible(index === colorIndex);
+                });
             });
 
             player.listen('maxHealth', () => {

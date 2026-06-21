@@ -149,6 +149,11 @@ class RoomClient {
         this.room.send("selectUpgrade", { upgradeId });
     }
 
+    sendSetOutfitColor(outfitColor) {
+        if (!this.room) return;
+        this.room.send("setOutfitColor", { outfitColor });
+    }
+
     _lastInput = "";
 }
 

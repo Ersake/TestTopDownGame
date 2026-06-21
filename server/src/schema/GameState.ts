@@ -16,6 +16,7 @@ export class PlayerState extends Schema {
     @type("string")  facingDirection: string = "N";
     @type("string")  attackDirection: string = "N";
     @type("int8")    activeSlot: number = 1;
+    @type("int8")    outfitColor: number = 4;
     @type("string")  activeItem: string = "wood_axe";
     @type("string")  attackItem: string = "wood_axe";
     @type("int32")   attackSeq: number = 0;

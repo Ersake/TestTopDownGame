@@ -52,6 +52,10 @@ export default {
             key: 'dk-attack-sound',
             args: ['assets/DKattacksound.mp3']
         },
+        enemyWaveHorn: {
+            key: 'enemy-wave-horn',
+            args: ['assets/horngame.mp3']
+        },
     },
     'image': {
         treeBottom: {
