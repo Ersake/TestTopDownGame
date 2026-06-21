@@ -1310,6 +1310,9 @@ export class Game extends Phaser.Scene {
                 if (!animationState) return;
                 animationState.bowCharging = !!charging;
                 if (!charging) {
+                    const repeatBowChargePointer = isLocal && this.bowChargePointer?.leftButtonDown?.()
+                        ? this.bowChargePointer
+                        : null;
                     if (isLocal) {
                         this.bowChargePointerId = null;
                         this.bowChargePointer = null;
@@ -1317,6 +1320,7 @@ export class Game extends Phaser.Scene {
                     }
                     this.updatePlayerBowChargeBar(playerSessionId);
                     this.clearBowPresentationState(playerSessionId, { updateAnimation: true });
+                    if (repeatBowChargePointer) this.startBowCharge(repeatBowChargePointer);
                     return;
                 }
                 animationState.attackItem = ITEM_WOOD_BOW;
