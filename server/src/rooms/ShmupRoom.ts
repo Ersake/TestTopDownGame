@@ -66,6 +66,10 @@ const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY_WAVE_INTERVAL_MS = 60000;
 const ENEMY_WAVE_SPAWN_WINDOW_MS = 10000;
+const MAX_ACTIVE_ENEMIES = 100;
+const MAX_ENEMY_SPAWNS_PER_TICK = 2;
+const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
+const ENABLE_ENEMY_DIAGNOSTICS = process.env.NODE_ENV !== "production";
 const INITIAL_MELEE_WAVE_COUNT = 3;
 const MELEE_PER_MINUTE = 5;
 const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
@@ -409,6 +413,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private elapsedMs           = 0;
     private lastScheduledEnemyWaveMinute = -1;
     private pendingEnemySpawns: PendingEnemySpawn[] = [];
+    private nextEnemyDiagnosticAtMs = 0;
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
 
@@ -1572,6 +1577,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
         if (!this.state.gameStarted) return;
+        const tickStartedAt = ENABLE_ENEMY_DIAGNOSTICS ? performance.now() : 0;
         const dtSec = dt / 1000;
 
         this.tickElapsedTime(dt);
@@ -1583,7 +1589,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.tickEnemyBullets(dtSec);
         this.tickCollisions();
         this.tickCampfires(dt);
-
+        this.reportEnemySimulationStats(tickStartedAt);
     }
 
     private tickGameOverRestart(dtMs: number) {
@@ -1917,6 +1923,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverEnemies.clear();
         this.pendingEnemySpawns = [];
         this.lastScheduledEnemyWaveMinute = -1;
+        this.nextEnemyDiagnosticAtMs = 0;
         this.scheduleEnemyWave(0);
     }
 
@@ -1926,11 +1933,16 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.scheduleEnemyWave(this.lastScheduledEnemyWaveMinute + 1);
         }
 
-        for (let index = this.pendingEnemySpawns.length - 1; index >= 0; index--) {
-            const pendingSpawn = this.pendingEnemySpawns[index];
-            if (pendingSpawn.spawnAtMs > this.elapsedMs) continue;
+        let spawnedThisTick = 0;
+        while (
+            spawnedThisTick < MAX_ENEMY_SPAWNS_PER_TICK
+            && this.state.enemies.size < MAX_ACTIVE_ENEMIES
+            && this.pendingEnemySpawns[0]?.spawnAtMs <= this.elapsedMs
+        ) {
+            const pendingSpawn = this.pendingEnemySpawns.shift();
+            if (!pendingSpawn) break;
             this.spawnEnemy(pendingSpawn.enemyType, pendingSpawn.edgeIndex);
-            this.pendingEnemySpawns.splice(index, 1);
+            spawnedThisTick++;
         }
     }
 
@@ -1954,6 +1966,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs);
         }
 
+        this.pendingEnemySpawns.sort((a, b) => a.spawnAtMs - b.spawnAtMs);
         this.lastScheduledEnemyWaveMinute = minute;
     }
 
@@ -1963,6 +1976,17 @@ export class ShmupRoom extends Room<GameRoomState> {
             edgeIndex: rndInt(0, 3),
             spawnAtMs: waveStartMs + rndReal(0, ENEMY_WAVE_SPAWN_WINDOW_MS),
         });
+    }
+
+    private reportEnemySimulationStats(tickStartedAt: number) {
+        if (!ENABLE_ENEMY_DIAGNOSTICS || this.elapsedMs < this.nextEnemyDiagnosticAtMs) return;
+
+        this.nextEnemyDiagnosticAtMs = this.elapsedMs + ENEMY_DIAGNOSTIC_INTERVAL_MS;
+        const tickDurationMs = performance.now() - tickStartedAt;
+        console.log(
+            `[ShmupRoom ${this.roomId}] enemy simulation: active=${this.state.enemies.size}/${MAX_ACTIVE_ENEMIES}, `
+            + `queued=${this.pendingEnemySpawns.length}, tick=${tickDurationMs.toFixed(1)}ms`,
+        );
     }
 
     private spawnEnemy(enemyType: number, edgeIndex: number) {
