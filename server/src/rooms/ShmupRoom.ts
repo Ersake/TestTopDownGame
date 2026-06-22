@@ -370,6 +370,17 @@ function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
 }
 
+function sanitizeDisplayName(value: unknown): string {
+    const name = String(value ?? "")
+        .toUpperCase()
+        .replace(/[^A-Z ]/g, "")
+        .replace(/ +/g, " ")
+        .trim()
+        .slice(0, 12)
+        .trim();
+    return name || "PLAYER";
+}
+
 function directionFromInput(inputX: number, inputY: number): string | null {
     if (Math.hypot(inputX, inputY) <= 0.0001) return null;
 
@@ -836,9 +847,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         return { x: vector.x / length, y: vector.y / length };
     }
 
-    onJoin(client: Client) {
+    onJoin(client: Client, options: { displayName?: unknown } = {}) {
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
+        ps.displayName = sanitizeDisplayName(options.displayName);
         ps.x = WORLD_WIDTH / 2;
         ps.y = WORLD_HEIGHT / 2;
         ps.maxHealth = PLAYER_MAX_HEALTH;
@@ -1930,7 +1942,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             ? minute / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
             : 0;
 
-        this.broadcast("enemyWaveStarted", { minute });
+        this.broadcast("enemyWaveStarted", { minute, startedAtUnixMs: Date.now() });
 
         for (let i = 0; i < meleeCount; i++) {
             this.queueEnemySpawn(rndInt(1, 2), waveStartMs);

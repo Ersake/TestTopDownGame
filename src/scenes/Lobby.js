@@ -1,6 +1,8 @@
 import RoomClient from '../network/RoomClient.js';
 
 const ROOM_CODE_DISPLAY_MS = 2000; // ms to show the created room code before entering the game
+const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
+const PLAYER_NAME_MAX_LENGTH = 12;
 
 /**
  * Lobby scene — lets players create a new room or join an existing one
@@ -14,6 +16,10 @@ export class Lobby extends Phaser.Scene {
     create() {
         this._state = 'idle'; // 'idle' | 'busy'
         this._codeInput = '';
+        this._nameInput = this._loadPlayerName();
+        this._nameDraft = this._nameInput;
+        this._isEditingName = false;
+        RoomClient.setPlayerName(this._nameInput);
 
         const cx = this.scale.width  * 0.5;
         const cy = this.scale.height * 0.5;
@@ -27,8 +33,17 @@ export class Lobby extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 10,
         }).setOrigin(0.5);
 
+        this._nameBtn = this.add.text(cx, 180, '', {
+            fontFamily: 'Arial Black', fontSize: 26, color: '#ffdd66',
+            stroke: '#000000', strokeThickness: 6,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+        this._nameBtn.on('pointerover', () => this._nameBtn.setColor('#fff2aa'));
+        this._nameBtn.on('pointerout', () => this._nameBtn.setColor('#ffdd66'));
+        this._nameBtn.on('pointerdown', () => this._beginNameEdit());
+        this._updateNameDisplay();
+
         // ── Create Room button ───────────────────────────────────────────────
-        this._createBtn = this.add.text(cx, 240, '[ CREATE ROOM ]', {
+        this._createBtn = this.add.text(cx, 270, '[ CREATE ROOM ]', {
             fontFamily: 'Arial Black', fontSize: 38, color: '#00ff88',
             stroke: '#000000', strokeThickness: 8,
         }).setOrigin(0.5).setInteractive({ useHandCursor: true });
@@ -82,6 +97,11 @@ export class Lobby extends Phaser.Scene {
     _onKey(event) {
         if (this._state !== 'idle') return;
 
+        if (this._isEditingName) {
+            this._onNameKey(event);
+            return;
+        }
+
         const key = event.key.toUpperCase();
         if (/^[A-Z]$/.test(key) && this._codeInput.length < 4) {
             this._codeInput += key;
@@ -94,6 +114,79 @@ export class Lobby extends Phaser.Scene {
         }
     }
 
+    _onNameKey(event) {
+        const key = event.key;
+        if (/^[a-zA-Z]$/.test(key) && this._nameDraft.length < PLAYER_NAME_MAX_LENGTH) {
+            this._nameDraft += key.toUpperCase();
+        } else if (key === ' ' && this._nameDraft.length > 0 && !this._nameDraft.endsWith(' ') && this._nameDraft.length < PLAYER_NAME_MAX_LENGTH) {
+            this._nameDraft += ' ';
+        } else if (key === 'Backspace') {
+            this._nameDraft = this._nameDraft.slice(0, -1);
+        } else if (key === 'Enter') {
+            this._confirmNameEdit();
+            return;
+        } else if (key === 'Escape') {
+            this._nameDraft = this._nameInput;
+            this._isEditingName = false;
+            this._updateNameDisplay();
+            return;
+        }
+        this._updateNameDisplay();
+    }
+
+    _beginNameEdit() {
+        if (this._state !== 'idle') return;
+        this._nameDraft = this._nameInput;
+        this._isEditingName = true;
+        this._updateNameDisplay();
+    }
+
+    _confirmNameEdit() {
+        const name = this._normalizePlayerName(this._nameDraft);
+        if (!name) {
+            this._setStatus('Enter a name using letters and spaces.', '#ff4444');
+            return false;
+        }
+
+        this._nameInput = name;
+        this._nameDraft = name;
+        this._isEditingName = false;
+        RoomClient.setPlayerName(name);
+        try { window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name); } catch (_error) { /* storage is optional */ }
+        this._setStatus('', '#ff4444');
+        this._updateNameDisplay();
+        return true;
+    }
+
+    _loadPlayerName() {
+        try { return this._normalizePlayerName(window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) || ''); } catch (_error) { return ''; }
+    }
+
+    _normalizePlayerName(value) {
+        return String(value)
+            .toUpperCase()
+            .replace(/[^A-Z ]/g, '')
+            .replace(/ +/g, ' ')
+            .trim()
+            .slice(0, PLAYER_NAME_MAX_LENGTH)
+            .trim();
+    }
+
+    _updateNameDisplay() {
+        const name = this._isEditingName ? this._nameDraft : this._nameInput;
+        if (this._isEditingName) {
+            this._nameBtn.setText(`[ ${name || '_'} ]`);
+        } else if (name) {
+            this._nameBtn.setText(`[ ${name} ]`);
+        } else {
+            this._nameBtn.setText('[ ENTER NAME ]');
+        }
+    }
+
+    _hasPlayerName() {
+        return this._nameInput.length > 0;
+    }
+
     _updateCodeDisplay() {
         const chars = this._codeInput.padEnd(4, '_').split('').join(' ');
         this._codeText.setText(chars);
@@ -102,6 +195,11 @@ export class Lobby extends Phaser.Scene {
     // ── Create Room ──────────────────────────────────────────────────────────
     async _onCreateRoom() {
         if (this._state !== 'idle') return;
+        if (this._isEditingName && !this._confirmNameEdit()) return;
+        if (!this._hasPlayerName()) {
+            this._setStatus('Enter a player name first.', '#ff4444');
+            return;
+        }
         this._state = 'busy';
         this._setStatus('Creating room…', '#ffffff');
 
@@ -120,6 +218,11 @@ export class Lobby extends Phaser.Scene {
     // ── Join Room ────────────────────────────────────────────────────────────
     async _onJoinRoom() {
         if (this._state !== 'idle') return;
+        if (this._isEditingName && !this._confirmNameEdit()) return;
+        if (!this._hasPlayerName()) {
+            this._setStatus('Enter a player name first.', '#ff4444');
+            return;
+        }
         if (this._codeInput.length !== 4) {
             this._setStatus('Enter a 4-letter room code first.', '#ff4444');
             return;

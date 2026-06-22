@@ -114,6 +114,7 @@ const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
+const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
@@ -138,6 +139,8 @@ const PLAYER_REVIVE_BAR_DEPTH = 131;
 const PLAYER_REVIVE_BAR_FILL_COLOR = 0x8bdcff;
 const PLAYER_LEVEL_LABEL_Y_OFFSET = -27;
 const PLAYER_LEVEL_LABEL_DEPTH = 132;
+const PLAYER_NAME_LABEL_Y_OFFSET = -70;
+const PLAYER_NAME_LABEL_DEPTH = 133;
 const HUD_BAR_WIDTH = 360;
 const HUD_BAR_HEIGHT = 16;
 const HUD_STACK_GAP = 8;
@@ -242,6 +245,7 @@ export class Game extends Phaser.Scene {
         this.updatePlayerHealthBars();
         this.updatePlayerBowChargeBars();
         this.updatePlayerReviveBars();
+        this.updatePlayerNameLabels();
         this.updatePlayerLevelLabels();
         this.updateOffscreenPlayerIndicators();
         this.updateEnemyHealthBars();
@@ -277,6 +281,7 @@ export class Game extends Phaser.Scene {
         this.playerHealthBars = new Map();
         this.playerBowChargeBars = new Map();
         this.playerReviveBars = new Map();
+        this.playerNameLabels = new Map();
         this.playerLevelLabels = new Map();
         this.offscreenPlayerIndicators = new Map();
         this.localExperienceState = null;
@@ -330,6 +335,7 @@ export class Game extends Phaser.Scene {
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.suppressResetEffectsUntil = 0;
         this.isTabActive = this.isDocumentActive();
+        this.lastTabActiveAtUnixMs = Date.now();
         this.remoteAttackAudioDirty = !this.isTabActive;
         this.suppressRemoteAttackAudioUntil = this.isTabActive ? 0 : Number.POSITIVE_INFINITY;
         this.handleTabInactive = () => {
@@ -341,6 +347,7 @@ export class Game extends Phaser.Scene {
             this.isTabActive = this.isDocumentActive();
             if (!this.isTabActive) return;
 
+            this.lastTabActiveAtUnixMs = Date.now();
             this.syncRemoteAttackSeqBaselines();
             this.remoteAttackAudioDirty = false;
             this.suppressRemoteAttackAudioUntil = performance.now() + REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS;
@@ -435,7 +442,7 @@ export class Game extends Phaser.Scene {
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.hitboxToggleButton = this.add.text(
-            this.scale.width - HITBOX_BUTTON_SIZE * 0.5 - 12,
+            HITBOX_BUTTON_SIZE * 0.5 + 12,
             this.scale.height - HITBOX_BUTTON_SIZE * 0.5 - 12,
             'X',
             {
@@ -682,7 +689,7 @@ export class Game extends Phaser.Scene {
         this.createUpgradeHex(leftX, baseY, 58, options[1]);
         this.createUpgradeHex(rightX, baseY, 58, options[2]);
         this.createUpgradeCategoryIcon(baseX, baseY - 40, this.upgradeUiMode);
-        this.createUpgradeBackButton(rightX + 76, baseY + 24);
+        this.createUpgradeBackButton(rightX + 34, topY + 8);
     }
 
     getUpgradeOptions(category) {
@@ -790,20 +797,27 @@ export class Game extends Phaser.Scene {
     }
 
     createUpgradeBackButton(x, y) {
-        const button = this.add.text(x, y, 'X', {
+        const background = this.add.circle(x, y, 25, 0x000000, 1)
+            .setDepth(UI_DEPTH + 24)
+            .setScrollFactor(0);
+        const label = this.add.text(x, y, 'BACK', {
             fontFamily: 'Arial Black',
-            fontSize: 34,
-            color: '#ff2222',
-            stroke: '#000000',
-            strokeThickness: 5,
-        }).setOrigin(0.5).setDepth(UI_DEPTH + 24).setScrollFactor(0).setInteractive({ useHandCursor: true });
+            fontSize: 11,
+            color: '#ffffff',
+            align: 'center',
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 25).setScrollFactor(0);
+        const button = this.add.zone(x, y, 50, 50)
+            .setOrigin(0.5)
+            .setDepth(UI_DEPTH + 26)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
         button.on('pointerdown', (pointer, _localX, _localY, event) => {
             event?.stopPropagation?.();
             this.upgradeUiMode = 'root';
             this.updateUpgradeUi();
         });
-        this.upgradeUiObjects.push(button);
-        this.registerFixedUi(button);
+        this.upgradeUiObjects.push(background, label, button);
+        this.registerFixedUi(background, label, button);
     }
 
     clearUpgradeUi() {
@@ -1119,7 +1133,14 @@ export class Game extends Phaser.Scene {
             });
         });
 
-        room.onMessage('enemyWaveStarted', () => {
+        room.onMessage('enemyWaveStarted', (event) => {
+            const startedAtUnixMs = Number(event?.startedAtUnixMs);
+            const eventAgeMs = Date.now() - startedAtUnixMs;
+            if (!this.isDocumentActive()
+                || !Number.isFinite(startedAtUnixMs)
+                || startedAtUnixMs < this.lastTabActiveAtUnixMs
+                || eventAgeMs < 0
+                || eventAgeMs > ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS) return;
             this.playSfx(ASSETS.audio.enemyWaveHorn.key, ENEMY_WAVE_HORN_SOUND_VOLUME, {
                 serverEvent: true,
             });
@@ -1178,6 +1199,12 @@ export class Game extends Phaser.Scene {
                 player,
             });
             this.registerWorldObject(playerReviveBackground, playerReviveFill);
+            const nameLabel = this.add.text(player.x, player.y + PLAYER_NAME_LABEL_Y_OFFSET, player.displayName || 'PLAYER', {
+                fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+            }).setOrigin(0.5).setDepth(PLAYER_NAME_LABEL_DEPTH);
+            this.registerWorldObject(nameLabel);
+            this.playerNameLabels.set(playerSessionId, { label: nameLabel, player });
             const levelLabel = this.add.text(player.x, player.y + PLAYER_LEVEL_LABEL_Y_OFFSET, `${player.level || 1}`, {
                 fontFamily: 'Arial Black', fontSize: 11, color: '#ffffff',
                 stroke: '#000000', strokeThickness: 4, align: 'center',
@@ -1360,6 +1387,10 @@ export class Game extends Phaser.Scene {
                 if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
             });
 
+            player.listen('displayName', () => {
+                this.updatePlayerNameLabel(playerSessionId);
+            });
+
             player.listen('outfitColor', (colorIndex) => {
                 this.applyPlayerOutfitTint(playerSessionId, colorIndex);
                 if (!isLocal || !OUTFIT_COLOR_BUTTONS[colorIndex]) return;
@@ -1488,6 +1519,8 @@ export class Game extends Phaser.Scene {
                 reviveBar.background.destroy();
                 reviveBar.fill.destroy();
             }
+            const nameLabel = this.playerNameLabels.get(sessionId);
+            if (nameLabel) nameLabel.label.destroy();
             const levelLabel = this.playerLevelLabels.get(sessionId);
             if (levelLabel) levelLabel.label.destroy();
             const indicator = this.offscreenPlayerIndicators.get(sessionId);
@@ -1509,6 +1542,7 @@ export class Game extends Phaser.Scene {
             this.playerHealthBars.delete(sessionId);
             this.playerBowChargeBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
+            this.playerNameLabels.delete(sessionId);
             this.playerLevelLabels.delete(sessionId);
             this.offscreenPlayerIndicators.delete(sessionId);
             this.playerCountText.setText(`Players: ${state.players.size}`);
@@ -3387,6 +3421,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerNameLabels() {
+        this.playerNameLabels.forEach((_nameLabel, sessionId) => {
+            this.updatePlayerNameLabel(sessionId);
+        });
+    }
+
     updatePlayerLevelLabels() {
         this.playerLevelLabels.forEach((_levelLabel, sessionId) => {
             this.updatePlayerLevelLabel(sessionId);
@@ -3442,6 +3482,17 @@ export class Game extends Phaser.Scene {
             .setText(`${levelLabel.player.level || 1}`)
             .setPosition(sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5, sprite.y + PLAYER_LEVEL_LABEL_Y_OFFSET)
             .setVisible(!levelLabel.player.isDead);
+    }
+
+    updatePlayerNameLabel(sessionId) {
+        const nameLabel = this.playerNameLabels.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        if (!nameLabel || !sprite) return;
+
+        nameLabel.label
+            .setText(nameLabel.player.displayName || 'PLAYER')
+            .setPosition(sprite.x, sprite.y + PLAYER_NAME_LABEL_Y_OFFSET)
+            .setVisible(!nameLabel.player.isDead);
     }
 
     updateLocalExperienceState(player) {
@@ -3637,6 +3688,9 @@ export class Game extends Phaser.Scene {
             background.destroy();
             fill.destroy();
         });
+        this.playerNameLabels.forEach(({ label }) => {
+            label.destroy();
+        });
         this.playerLevelLabels.forEach(({ label }) => {
             label.destroy();
         });
@@ -3697,6 +3751,7 @@ export class Game extends Phaser.Scene {
         this.playerHealthBars.clear();
         this.playerBowChargeBars.clear();
         this.playerReviveBars.clear();
+        this.playerNameLabels.clear();
         this.playerLevelLabels.clear();
         this.offscreenPlayerIndicators.clear();
         this.localExperienceState = null;

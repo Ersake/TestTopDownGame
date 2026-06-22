@@ -2,6 +2,7 @@ import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 
 export class PlayerState extends Schema {
     @type("string")  sessionId: string = "";
+    @type("string")  displayName: string = "PLAYER";
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
     @type("int16")   health: number = 5;

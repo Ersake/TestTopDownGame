@@ -13,6 +13,8 @@ class RoomClient {
     /** @type {string | null} */
     sessionId = null;
 
+    playerName = '';
+
     /** @type {Client | null} */
     _client = null;
 
@@ -42,7 +44,7 @@ class RoomClient {
         await this._leaveCurrentRoom();
         this._ensureClient();
         try {
-            this.room = await this._client.create("shmup_room");
+            this.room = await this._client.create("shmup_room", { displayName: this.playerName });
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] created room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
@@ -61,7 +63,7 @@ class RoomClient {
         await this._leaveCurrentRoom();
         this._ensureClient();
         try {
-            this.room = await this._client.joinById(code.toUpperCase());
+            this.room = await this._client.joinById(code.toUpperCase(), { displayName: this.playerName });
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] joined room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
@@ -97,6 +99,10 @@ class RoomClient {
     sendAttack(direction, targetX, targetY) {
         if (!this.room) return;
         this.room.send("attack", { direction, targetX, targetY });
+    }
+
+    setPlayerName(name) {
+        this.playerName = name;
     }
 
     sendBowChargeStart(targetX, targetY) {
