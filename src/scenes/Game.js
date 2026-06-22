@@ -115,6 +115,8 @@ const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
+const DEBUG_MAX_ROUND = 99;
+const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
@@ -329,6 +331,9 @@ export class Game extends Phaser.Scene {
         this.cameraZoom = CAMERA_MIN_ZOOM;
         this.showHitboxes = false;
         this.hitboxGraphics = null;
+        this.debugRoundInput = null;
+        this.debugRoundStatusText = null;
+        this.debugRoundInputHandlers = null;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.activeSfxStacks = new Map();
@@ -374,6 +379,7 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('keydown', this.handleEscapeKey, true);
             this.disableBuildMode();
             this.stopAllCasterChargeSounds();
+            this.destroyDebugRoundControls();
         });
     }
 
@@ -456,6 +462,10 @@ export class Game extends Phaser.Scene {
             .setInteractive({ useHandCursor: true });
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
+        if (IS_DEVELOPMENT_BUILD) {
+            this.initDebugRoundControls();
+        }
+
         this.initExperienceBar();
         this.initHudHealthBar();
         this.initHotbar();
@@ -471,7 +481,97 @@ export class Game extends Phaser.Scene {
             this.quitButton,
             this.roomCodeText,
             this.hitboxToggleButton,
+            this.debugRoundStatusText,
         );
+    }
+
+    initDebugRoundControls() {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '2';
+        input.max = String(DEBUG_MAX_ROUND);
+        input.step = '1';
+        input.placeholder = 'Round';
+        input.setAttribute('aria-label', 'Target round');
+        input.style.cssText = [
+            'width: 62px', 'height: 24px', 'box-sizing: border-box', 'padding: 2px 5px',
+            'border: 1px solid #aaaaaa', 'border-radius: 3px', 'background: #181818',
+            'color: #ffffff', 'font: 12px Arial', 'text-align: center',
+        ].join(';');
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Start';
+        button.style.cssText = [
+            'height: 24px', 'margin-left: 4px', 'padding: 1px 7px', 'border: 1px solid #aaaaaa',
+            'border-radius: 3px', 'background: #333333', 'color: #ffffff', 'font: 12px Arial', 'cursor: pointer',
+        ].join(';');
+
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display:flex; align-items:center; visibility:hidden; pointer-events:none;';
+        wrapper.append(input, button);
+        this.debugRoundInput = this.add.dom(this.scale.width - 92, this.scale.height - 36, wrapper)
+            .setOrigin(0.5, 1)
+            .setDepth(UI_DEPTH + 10)
+            .setScrollFactor(0);
+
+        this.debugRoundStatusText = this.add.text(this.scale.width - 12, this.scale.height - 58, '', {
+            fontFamily: 'Arial', fontSize: 11, color: '#ffdddd',
+            stroke: '#000000', strokeThickness: 2, align: 'right',
+        }).setOrigin(1, 1).setDepth(UI_DEPTH + 10).setScrollFactor(0).setVisible(false);
+
+        const submit = () => this.submitDebugRound(input.value);
+        button.addEventListener('click', submit);
+        const onKeyDown = (event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submit();
+            }
+        };
+        input.addEventListener('keydown', onKeyDown);
+        this.debugRoundInputHandlers = { input, button, submit, onKeyDown };
+    }
+
+    setDebugRoundControlsVisible(visible) {
+        if (!IS_DEVELOPMENT_BUILD || !this.debugRoundInput) return;
+        this.debugRoundInput.node.style.visibility = visible ? 'visible' : 'hidden';
+        this.debugRoundInput.node.style.pointerEvents = visible ? 'auto' : 'none';
+        this.debugRoundStatusText?.setVisible(visible && !!this.debugRoundStatusText.text);
+    }
+
+    submitDebugRound(rawRound) {
+        const round = Number(rawRound);
+        const currentRound = Math.floor((RoomClient.room?.state?.elapsedSeconds || 0) / 60) + 1;
+        if (!Number.isInteger(round) || round < 2 || round > DEBUG_MAX_ROUND) {
+            this.setDebugRoundStatus(`Enter a whole round from 2 to ${DEBUG_MAX_ROUND}.`);
+            return;
+        }
+        if (round <= currentRound) {
+            this.setDebugRoundStatus(`Round must be later than ${currentRound}.`);
+            return;
+        }
+        this.setDebugRoundStatus(`Starting round ${round}...`, '#ffffaa');
+        RoomClient.sendDebugSetRound(round);
+    }
+
+    setDebugRoundStatus(message, color = '#ffdddd') {
+        if (!this.debugRoundStatusText) return;
+        this.debugRoundStatusText.setText(message).setColor(color)
+            .setVisible(this.debugRoundInput?.node?.style.visibility === 'visible');
+    }
+
+    destroyDebugRoundControls() {
+        if (this.debugRoundInputHandlers) {
+            const { input, button, submit, onKeyDown } = this.debugRoundInputHandlers;
+            button.removeEventListener('click', submit);
+            input.removeEventListener('keydown', onKeyDown);
+            this.debugRoundInputHandlers = null;
+        }
+        this.debugRoundInput?.destroy();
+        this.debugRoundInput = null;
+        this.debugRoundStatusText?.destroy();
+        this.debugRoundStatusText = null;
     }
 
     updateBuffList(player) {
@@ -1131,6 +1231,16 @@ export class Game extends Phaser.Scene {
                 worldY: event?.y,
             });
         });
+
+        if (IS_DEVELOPMENT_BUILD) {
+            room.onMessage('debugRoundResult', (result) => {
+                if (result?.accepted) {
+                    this.setDebugRoundStatus(`Started round ${result.round}.`, '#aaffaa');
+                } else {
+                    this.setDebugRoundStatus(result?.reason || 'Could not start that round.');
+                }
+            });
+        }
 
         room.onMessage('enemyWaveStarted', (event) => {
             const startedAtUnixMs = Number(event?.startedAtUnixMs);
@@ -1968,12 +2078,14 @@ export class Game extends Phaser.Scene {
                     .setPosition(this.centreX, this.centreY + 118)
                     .setVisible(true);
                 this.hitboxToggleButton.setVisible(false);
+                this.setDebugRoundControlsVisible(false);
             } else {
                 this.gameStarted = true;
                 this.suppressLevelResetEffects();
                 this.gameOverText.setVisible(false);
                 this.quitButton.setVisible(false);
                 this.hitboxToggleButton.setVisible(false);
+                this.setDebugRoundControlsVisible(false);
             }
         });
 
@@ -2017,6 +2129,7 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setVisible(false);
         this.quitButton.setVisible(false);
         this.hitboxToggleButton.setVisible(false);
+        this.setDebugRoundControlsVisible(false);
         this.clearAllSprites();
 
         try {
@@ -2046,7 +2159,8 @@ export class Game extends Phaser.Scene {
         this.quitButton
             .setPosition(this.centreX, this.centreY)
             .setVisible(shouldShowQuitScreen);
-        this.hitboxToggleButton.setVisible(shouldShowQuitScreen);
+        this.hitboxToggleButton.setVisible(IS_DEVELOPMENT_BUILD && shouldShowQuitScreen);
+        this.setDebugRoundControlsVisible(shouldShowQuitScreen);
     }
 
     // Flat world background
@@ -3746,6 +3860,7 @@ export class Game extends Phaser.Scene {
             this.hitboxToggleButton.setColor('#cccccc');
             this.hitboxToggleButton.setVisible(false);
         }
+        this.setDebugRoundControlsVisible(false);
         this.isBuildModeActive = false;
         this.resetBuildDragState();
         this.stopHeldAttack();

@@ -66,6 +66,7 @@ const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY_WAVE_INTERVAL_MS = 60000;
 const ENEMY_WAVE_SPAWN_WINDOW_MS = 10000;
+const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const MAX_ENEMY_SPAWNS_PER_TICK = 2;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
@@ -539,6 +540,44 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("setOutfitColor", (client, data) => {
             this.setPlayerOutfitColor(client.sessionId, data);
         });
+
+        if (process.env.NODE_ENV !== "production") {
+            this.onMessage("debugSetRound", (client, data) => {
+                this.debugSetRound(client, data);
+            });
+        }
+    }
+
+    private debugSetRound(client: Client, data: unknown) {
+        const round = Number((data as { round?: unknown })?.round);
+        const currentRound = Math.floor(this.elapsedMs / ENEMY_WAVE_INTERVAL_MS) + 1;
+        const reject = (reason: string) => client.send("debugRoundResult", { accepted: false, reason });
+
+        if (!this.state.players.has(client.sessionId) || !this.state.gameStarted || this.state.gameOver) {
+            reject("The game is not active.");
+            return;
+        }
+        if (!Number.isInteger(round) || round < 2 || round > DEBUG_MAX_ROUND) {
+            reject(`Enter a whole round from 2 to ${DEBUG_MAX_ROUND}.`);
+            return;
+        }
+        if (round <= currentRound) {
+            reject(`Round must be later than ${currentRound}.`);
+            return;
+        }
+
+        const targetMinute = round - 1;
+        this.elapsedMs = targetMinute * ENEMY_WAVE_INTERVAL_MS;
+        this.state.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+        this.state.enemies.clear();
+        this.serverEnemies.clear();
+        this.state.enemyBullets.clear();
+        this.serverEnemyBullets.clear();
+        this.pendingEnemySpawns = [];
+        this.lastScheduledEnemyWaveMinute = targetMinute - 1;
+        this.nextEnemyDiagnosticAtMs = 0;
+        this.scheduleEnemyWave(targetMinute);
+        client.send("debugRoundResult", { accepted: true, round });
     }
 
     private equipPlayerSlot(sessionId: string, data: unknown) {

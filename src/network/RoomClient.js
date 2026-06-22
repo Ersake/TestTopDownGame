@@ -155,6 +155,11 @@ class RoomClient {
         this.room.send("setOutfitColor", { outfitColor });
     }
 
+    sendDebugSetRound(round) {
+        if (!this.room) return;
+        this.room.send("debugSetRound", { round });
+    }
+
     _lastInput = "";
 }
 

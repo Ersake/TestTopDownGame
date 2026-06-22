@@ -96,6 +96,7 @@ Important server files:
 |---|---|---|
 | `"input"` | `RoomClient.sendInput()` | Movement, fire, and interact booleans. Sent only when changed. |
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
+| `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later round (2–99) for the room. Round 1 is the initial wave; round N begins at elapsed minute N-1. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -108,6 +109,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"woodPickup"` | One-shot pickup sound/UI presentation. |
 | `"reviveStarted"` | One-shot revive-start presentation. |
 | `"playerHurt"` | One-shot player hurt presentation. |
+| `"debugRoundResult"` | Development-only acceptance or validation feedback for a `"debugSetRound"` request. |
 
 Durable game facts should usually be schema state, not transient messages.
 
