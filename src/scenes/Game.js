@@ -442,18 +442,17 @@ export class Game extends Phaser.Scene {
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.hitboxToggleButton = this.add.text(
-            HITBOX_BUTTON_SIZE * 0.5 + 12,
-            this.scale.height - HITBOX_BUTTON_SIZE * 0.5 - 12,
-            'X',
+            this.scale.width - 12,
+            this.scale.height - 12,
+            'DEBUG',
             {
-                fontFamily: 'Arial Black', fontSize: 22, color: '#ff2222',
-                stroke: '#000000', strokeThickness: 5, align: 'center',
-                fixedWidth: HITBOX_BUTTON_SIZE,
-                fixedHeight: HITBOX_BUTTON_SIZE,
+                fontFamily: 'Arial', fontSize: 10, color: '#cccccc',
+                stroke: '#000000', strokeThickness: 2, align: 'right',
             },
-        ).setOrigin(0.5)
+        ).setOrigin(1)
             .setDepth(UI_DEPTH + 10)
             .setScrollFactor(0)
+            .setVisible(false)
             .setInteractive({ useHandCursor: true });
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
@@ -761,7 +760,7 @@ export class Game extends Phaser.Scene {
         }
 
         const graphics = this.add.graphics().setDepth(UI_DEPTH + 18).setScrollFactor(0);
-        graphics.fillStyle(0x1f7b34, 0.18);
+        graphics.fillStyle(0x000000, 0.35);
         graphics.fillPoints(points, true);
         graphics.lineStyle(4, 0x000000, 1);
         graphics.strokePoints(points, true);
@@ -779,7 +778,7 @@ export class Game extends Phaser.Scene {
         }
 
         if (config.text) {
-            this.createUpgradeText(x, y, config.text, 24);
+            this.createUpgradeText(x, y, config.text, 18);
         }
 
         const zone = this.add.zone(x, y, radius * 1.75, radius * 1.75)
@@ -1968,11 +1967,13 @@ export class Game extends Phaser.Scene {
                 this.quitButton
                     .setPosition(this.centreX, this.centreY + 118)
                     .setVisible(true);
+                this.hitboxToggleButton.setVisible(false);
             } else {
                 this.gameStarted = true;
                 this.suppressLevelResetEffects();
                 this.gameOverText.setVisible(false);
                 this.quitButton.setVisible(false);
+                this.hitboxToggleButton.setVisible(false);
             }
         });
 
@@ -2015,6 +2016,7 @@ export class Game extends Phaser.Scene {
 
         this.gameOverText.setVisible(false);
         this.quitButton.setVisible(false);
+        this.hitboxToggleButton.setVisible(false);
         this.clearAllSprites();
 
         try {
@@ -2040,9 +2042,11 @@ export class Game extends Phaser.Scene {
 
     toggleQuitButton() {
         if (RoomClient.room?.state?.gameOver) return;
+        const shouldShowQuitScreen = !this.quitButton.visible;
         this.quitButton
             .setPosition(this.centreX, this.centreY)
-            .setVisible(!this.quitButton.visible);
+            .setVisible(shouldShowQuitScreen);
+        this.hitboxToggleButton.setVisible(shouldShowQuitScreen);
     }
 
     // Flat world background
@@ -2380,7 +2384,7 @@ export class Game extends Phaser.Scene {
     toggleHitboxes() {
         this.showHitboxes = !this.showHitboxes;
         if (this.hitboxToggleButton) {
-            this.hitboxToggleButton.setColor(this.showHitboxes ? '#ff7777' : '#ff2222');
+            this.hitboxToggleButton.setColor(this.showHitboxes ? '#ffaaaa' : '#cccccc');
         }
         if (!this.showHitboxes && this.hitboxGraphics) {
             this.hitboxGraphics.clear();
@@ -3739,7 +3743,8 @@ export class Game extends Phaser.Scene {
         }
         this.showHitboxes = false;
         if (this.hitboxToggleButton) {
-            this.hitboxToggleButton.setColor('#ff2222');
+            this.hitboxToggleButton.setColor('#cccccc');
+            this.hitboxToggleButton.setVisible(false);
         }
         this.isBuildModeActive = false;
         this.resetBuildDragState();
