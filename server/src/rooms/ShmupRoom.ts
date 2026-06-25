@@ -2739,8 +2739,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             const dx = target.player.x - enemy.x;
             const dy = target.player.y - enemy.y;
             const distance = Math.hypot(dx, dy);
-            const direction = directionFromInput(dx, dy);
-            if (direction) enemy.facingDirection = direction;
             const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
 
             if (enemy.enemyType === ENEMY_TYPE_CASTER) {
@@ -2792,6 +2790,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
 
             if (isInAttackRange) {
+                if (this.hasEnemyLineOfSightToPlayer(enemy, target.player)) {
+                    this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
+                }
                 se.targetWoodBlockId = null;
                 enemy.action = "idle";
                 if (se.mode !== "windup") {
@@ -2837,6 +2838,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 se.pathTargetCell = null;
                 se.pathRefreshMs = 0;
                 se.targetWoodBlockId = null;
+                const prevX = enemy.x;
+                const prevY = enemy.y;
                 const resolved = this.moveEnemyWithWoodBlocks(
                     enemy,
                     enemy.x + (dx / distance) * move,
@@ -2844,9 +2847,12 @@ export class ShmupRoom extends Room<GameRoomState> {
                 );
                 enemy.x = resolved.x;
                 enemy.y = resolved.y;
+                this.setEnemyFacingFromMovement(enemy, prevX, prevY);
                 return;
             }
 
+            const prevDirectX = enemy.x;
+            const prevDirectY = enemy.y;
             const directResolved = this.moveEnemyWithWoodBlocks(
                 enemy,
                 enemy.x + (dx / distance) * move,
@@ -2867,6 +2873,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
             enemy.x = directResolved.x;
             enemy.y = directResolved.y;
+            this.setEnemyFacingFromMovement(enemy, prevDirectX, prevDirectY);
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
         this.separateEnemyFeet();
@@ -2904,6 +2911,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 se.modeMs = 0;
                 enemy.action = "run";
             } else {
+                this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
                 enemy.action = "charge";
                 se.modeMs = Math.max(0, se.modeMs - dtMs);
                 if (se.modeMs === 0) {
@@ -2930,6 +2938,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         if (canStartCast) {
+            this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
             se.targetWoodBlockId = null;
             se.path = [];
             se.pathTargetCell = null;
@@ -2960,6 +2969,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.pathTargetCell = null;
             se.pathRefreshMs = 0;
             se.targetWoodBlockId = null;
+            const prevX = enemy.x;
+            const prevY = enemy.y;
             const resolved = this.moveEnemyWithWoodBlocks(
                 enemy,
                 enemy.x + (dx / distance) * move,
@@ -2967,9 +2978,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             );
             enemy.x = resolved.x;
             enemy.y = resolved.y;
+            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
             return;
         }
 
+        const prevDirectX = enemy.x;
+        const prevDirectY = enemy.y;
         const directResolved = this.moveEnemyWithWoodBlocks(
             enemy,
             enemy.x + (dx / distance) * move,
@@ -2986,6 +3000,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         enemy.x = directResolved.x;
         enemy.y = directResolved.y;
+        this.setEnemyFacingFromMovement(enemy, prevDirectX, prevDirectY);
     }
 
     private hasCasterLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -3056,6 +3071,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.pathTargetCell = null;
             se.pathRefreshMs = 0;
             se.targetWoodBlockId = null;
+            const prevX = enemy.x;
+            const prevY = enemy.y;
             const resolved = this.moveEnemyWithWoodBlocks(
                 enemy,
                 enemy.x + (dx / distance) * move,
@@ -3063,9 +3080,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             );
             enemy.x = resolved.x;
             enemy.y = resolved.y;
+            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
             return;
         }
 
+        const prevDirectX = enemy.x;
+        const prevDirectY = enemy.y;
         const directResolved = this.moveEnemyWithWoodBlocks(
             enemy,
             enemy.x + (dx / distance) * move,
@@ -3082,6 +3102,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         enemy.x = directResolved.x;
         enemy.y = directResolved.y;
+        this.setEnemyFacingFromMovement(enemy, prevDirectX, prevDirectY);
     }
 
     private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -3176,10 +3197,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             return true;
         }
 
-        const direction = directionFromInput(dx, dy);
-        if (direction) enemy.facingDirection = direction;
-
         const move = Math.min(DARK_KNIGHT_RUSH_SPEED * dtSec, distance);
+        const prevX = enemy.x;
+        const prevY = enemy.y;
         const resolved = this.moveEnemyWithWoodBlocks(
             enemy,
             enemy.x + (dx / distance) * move,
@@ -3188,6 +3208,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
         enemy.x = resolved.x;
         enemy.y = resolved.y;
+        this.setEnemyFacingFromMovement(enemy, prevX, prevY);
 
         if (!moved && se.darkKnightTargetKind !== "woodBlock") {
             const blockingBlock = this.findNearestEnemyWoodBlockInAttackRange(enemy)
@@ -3279,6 +3300,26 @@ export class ShmupRoom extends Room<GameRoomState> {
         return se.path.length > 0;
     }
 
+    private hasEnemyLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
+        return !this.segmentOverlapsSolidMapTile(
+            enemy.x,
+            enemy.y + ENEMY_FOOT_Y_OFFSET,
+            player.x,
+            player.y + PLAYER_TREE_Y_OFFSET,
+            1,
+        );
+    }
+
+    private faceEnemyTowardPoint(enemy: EnemyState, x: number, y: number): void {
+        const direction = directionFromInput(x - enemy.x, y - enemy.y);
+        if (direction) enemy.facingDirection = direction;
+    }
+
+    private setEnemyFacingFromMovement(enemy: EnemyState, previousX: number, previousY: number): void {
+        const direction = directionFromInput(enemy.x - previousX, enemy.y - previousY);
+        if (direction) enemy.facingDirection = direction;
+    }
+
     private followEnemyPath(enemy: EnemyState, se: ServerEnemy, moveDistance: number): boolean {
         while (se.path.length > 0) {
             const nextCell = se.path[0];
@@ -3295,6 +3336,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
 
             const step = Math.min(moveDistance, distance);
+            const prevX = enemy.x;
+            const prevY = enemy.y;
             const resolved = this.moveEnemyWithWoodBlocks(
                 enemy,
                 enemy.x + (dx / distance) * step,
@@ -3303,6 +3346,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
             enemy.x = resolved.x;
             enemy.y = resolved.y;
+            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
             return moved;
         }
 
@@ -3322,8 +3366,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             BUILD_BLOCK_HALF_SIZE,
         );
         const attackRange = ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON + ENEMY_FOOT_RADIUS;
-        const direction = directionFromInput(block.x - enemy.x, block.y - enemy.y);
-        if (direction) enemy.facingDirection = direction;
 
         if (distanceSq > attackRange * attackRange) {
             se.mode = "chase";
@@ -3334,6 +3376,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const dy = block.y - footY;
                 const distance = Math.hypot(dx, dy);
                 if (distance > 0) {
+                    const prevX = enemy.x;
+                    const prevY = enemy.y;
                     const resolved = this.moveEnemyWithWoodBlocks(
                         enemy,
                         enemy.x + (dx / distance) * moveDistance,
@@ -3341,11 +3385,13 @@ export class ShmupRoom extends Room<GameRoomState> {
                     );
                     enemy.x = resolved.x;
                     enemy.y = resolved.y;
+                    this.setEnemyFacingFromMovement(enemy, prevX, prevY);
                 }
             }
             return true;
         }
 
+        this.faceEnemyTowardPoint(enemy, block.x, block.y);
         se.path = [];
         if (se.mode === "woodAttack") {
             enemy.action = "attack";
