@@ -96,13 +96,14 @@ const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
 const ENEMY_TYPE_CASTER = 3;
 const ENEMY_TYPE_DARK_KNIGHT = 4;
 const MIN_BOW_CHARGE_MS = 100;
-const CASTER_CAST_RANGE = 360;
-const CASTER_CHARGE_MS = 1000;
+const BASE_CASTER_CAST_RANGE = 360;
+const CASTER_CAST_RANGE = BASE_CASTER_CAST_RANGE;
+const CASTER_CHARGE_MS = 1000 / 1.25;
 const CASTER_ATTACK_MS = 500;
 const CASTER_FIREBALL_SPEED = 225;
 const CASTER_FIREBALL_DAMAGE = 1;
 const DARK_KNIGHT_HEALTH = 10;
-const DARK_KNIGHT_DETECTION_RANGE = CASTER_CAST_RANGE;
+const DARK_KNIGHT_DETECTION_RANGE = BASE_CASTER_CAST_RANGE;
 const DARK_KNIGHT_WALK_SPEED = 88;
 const DARK_KNIGHT_RUSH_SPEED = 230;
 const DARK_KNIGHT_MIN_RUSH_MS = 500;
@@ -2883,44 +2884,52 @@ export class ShmupRoom extends Room<GameRoomState> {
         dtMs: number,
     ) {
         const isInCastRange = distance <= CASTER_CAST_RANGE;
+        const hasLineOfSight = this.hasCasterLineOfSightToPlayer(enemy, target.player);
+        const canStartCast = isInCastRange && hasLineOfSight;
 
         if (se.mode === "casterAttack") {
             enemy.action = "attack";
             se.modeMs = Math.max(0, se.modeMs - dtMs);
             if (se.modeMs === 0) {
-                se.mode = isInCastRange ? "casterCharge" : "chase";
-                se.modeMs = isInCastRange ? CASTER_CHARGE_MS : 0;
-                enemy.action = isInCastRange ? "charge" : "run";
+                se.mode = canStartCast ? "casterCharge" : "chase";
+                se.modeMs = canStartCast ? CASTER_CHARGE_MS : 0;
+                enemy.action = canStartCast ? "charge" : "run";
             }
             return;
         }
 
         if (se.mode === "casterCharge") {
-            enemy.action = "charge";
-            se.modeMs = Math.max(0, se.modeMs - dtMs);
-            if (se.modeMs === 0) {
-                const launchTarget = this.findNearestAlivePlayer(enemy.x, enemy.y);
-                if (!launchTarget) {
-                    se.mode = "chase";
-                    enemy.action = "idle";
-                    return;
+            if (!hasLineOfSight) {
+                se.mode = "chase";
+                se.modeMs = 0;
+                enemy.action = "run";
+            } else {
+                enemy.action = "charge";
+                se.modeMs = Math.max(0, se.modeMs - dtMs);
+                if (se.modeMs === 0) {
+                    const launchTarget = this.findNearestAlivePlayer(enemy.x, enemy.y);
+                    if (!launchTarget || !this.hasCasterLineOfSightToPlayer(enemy, launchTarget.player)) {
+                        se.mode = "chase";
+                        enemy.action = "run";
+                        return;
+                    }
+
+                    const launchDx = launchTarget.player.x - enemy.x;
+                    const launchDy = launchTarget.player.y - enemy.y;
+                    const launchDirection = directionFromInput(launchDx, launchDy);
+                    if (launchDirection) enemy.facingDirection = launchDirection;
+
+                    se.mode = "casterAttack";
+                    se.modeMs = CASTER_ATTACK_MS;
+                    enemy.action = "attack";
+                    enemy.attackSeq++;
+                    this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.player);
                 }
-
-                const launchDx = launchTarget.player.x - enemy.x;
-                const launchDy = launchTarget.player.y - enemy.y;
-                const launchDirection = directionFromInput(launchDx, launchDy);
-                if (launchDirection) enemy.facingDirection = launchDirection;
-
-                se.mode = "casterAttack";
-                se.modeMs = CASTER_ATTACK_MS;
-                enemy.action = "attack";
-                enemy.attackSeq++;
-                this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.player);
+                return;
             }
-            return;
         }
 
-        if (isInCastRange) {
+        if (canStartCast) {
             se.targetWoodBlockId = null;
             se.path = [];
             se.pathTargetCell = null;
@@ -2935,12 +2944,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         enemy.action = "run";
         if (distance <= 0) return;
 
-        const remainingDistance = Math.max(0, distance - CASTER_CAST_RANGE);
+        const remainingDistance = hasLineOfSight ? Math.max(0, distance - CASTER_CAST_RANGE) : distance;
         const move = Math.min(ENEMY1_SPEED * dtSec, remainingDistance);
         if (move <= 0) {
-            enemy.action = "charge";
-            se.mode = "casterCharge";
-            se.modeMs = CASTER_CHARGE_MS;
+            if (hasLineOfSight) {
+                enemy.action = "charge";
+                se.mode = "casterCharge";
+                se.modeMs = CASTER_CHARGE_MS;
+            }
             return;
         }
 
@@ -2975,6 +2986,16 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         enemy.x = directResolved.x;
         enemy.y = directResolved.y;
+    }
+
+    private hasCasterLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
+        return !this.segmentOverlapsSolidMapTile(
+            enemy.x,
+            enemy.y,
+            player.x,
+            player.y + PLAYER_TREE_Y_OFFSET,
+            1,
+        );
     }
 
     private tickDarkKnightEnemy(
@@ -3752,8 +3773,14 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enemyBullets.forEach((b, id) => {
             const sb = this.serverEnemyBullets.get(id);
             if (!sb) { dead.push(id); return; }
+            const prevX = b.x;
+            const prevY = b.y;
             b.x += sb.vx * dtSec;
             b.y += sb.vy * dtSec;
+            if (b.kind === "fireball" && this.segmentOverlapsSolidMapTile(prevX, prevY, b.x, b.y, Math.max(EB_HW, EB_HH))) {
+                dead.push(id);
+                return;
+            }
             if (b.y > WORLD_HEIGHT + EB_HH || b.y < -EB_HH || b.x < -EB_HW || b.x > WORLD_WIDTH + EB_HW) dead.push(id);
         });
         dead.forEach(id => { this.state.enemyBullets.delete(id); this.serverEnemyBullets.delete(id); });
