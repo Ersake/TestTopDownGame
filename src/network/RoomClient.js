@@ -1,5 +1,7 @@
 import { Client } from "colyseus.js";
 
+const MAX_MAP_REPLACE_PAYLOAD_BYTES = 512 * 1024;
+
 /**
  * RoomClient
  * A singleton that manages the Colyseus connection.
@@ -40,11 +42,11 @@ class RoomClient {
      * alpha room code as the room ID which callers can read from `room.id`.
      * @returns {Promise<import("colyseus.js").Room>}
      */
-    async createRoom() {
+    async createRoom(options = {}) {
         await this._leaveCurrentRoom();
         this._ensureClient();
         try {
-            this.room = await this._client.create("shmup_room", { displayName: this.playerName });
+            this.room = await this._client.create("shmup_room", { displayName: this.playerName, ...options });
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] created room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
@@ -153,6 +155,46 @@ class RoomClient {
     sendSetOutfitColor(outfitColor) {
         if (!this.room) return;
         this.room.send("setOutfitColor", { outfitColor });
+    }
+
+    sendPlaceMapTile(col, row, frame, layer = 1) {
+        if (!this.room) return;
+        this.room.send("placeMapTile", { col, row, frame, layer });
+    }
+
+    sendRemoveMapTile(col, row, layer = 1) {
+        if (!this.room) return;
+        this.room.send("removeMapTile", { col, row, layer });
+    }
+
+    sendReplaceMap(chunks) {
+        if (!this.room) return false;
+        const payload = { chunks };
+        const payloadSize = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+        if (payloadSize > MAX_MAP_REPLACE_PAYLOAD_BYTES) {
+            console.error('[RoomClient] refusing oversized replaceMap payload:', payloadSize);
+            return false;
+        }
+        this.room.send("replaceMap", payload);
+        return true;
+    }
+
+    sendSaveMap(name, overwrite = false) {
+        if (!this.room) return false;
+        this.room.send("saveMap", { name, overwrite });
+        return true;
+    }
+
+    sendLoadMap(name) {
+        if (!this.room) return false;
+        this.room.send("loadMap", { name });
+        return true;
+    }
+
+    sendListMaps() {
+        if (!this.room) return false;
+        this.room.send("listMaps", {});
+        return true;
     }
 
     sendDebugSetRound(round) {

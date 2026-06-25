@@ -9,7 +9,9 @@ import {
     LogState,
     WoodBlockState,
     CampfireState,
+    MapChunkState,
 } from "../schema/GameState";
+import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 255;   // px/s
@@ -20,6 +22,17 @@ const VIEW_WIDTH      = 1280;
 const VIEW_HEIGHT     = 720;
 const WORLD_WIDTH     = VIEW_WIDTH * 3;
 const WORLD_HEIGHT    = VIEW_HEIGHT * 3;
+const EDITOR_WORLD_WIDTH = WORLD_WIDTH * 2;
+const EDITOR_WORLD_HEIGHT = WORLD_HEIGHT * 2;
+const MAP_TILE_SIZE = 32;
+const MAP_CHUNK_SIZE = 16;
+const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
+const MAP_FRAME_COUNT = 32 * 32;
+const MAP_MAX_FILLED_CELLS = 50000;
+const MAP_EDITOR_MODE = "map-editor";
+const MAP_CHUNK_ENCODED_BYTES = MAP_CHUNK_CELL_COUNT * 2;
+const MAP_CHUNK_ENCODED_LENGTH = Math.ceil(MAP_CHUNK_ENCODED_BYTES / 3) * 4;
+const MAP_SAVE_VERSION = 1;
 const TREE_COUNT = 25;
 const TREE_GRID_COLS = 5;
 const TREE_GRID_ROWS = 5;
@@ -157,6 +170,20 @@ const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     N: { x: 0, y: -1 },
     NE: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
 };
+
+const SOLID_TILE_REGIONS = [
+    { x: 0, y: 0, width: 6, height: 3 }, // Castle_1
+    { x: 8, y: 7, width: 6, height: 3 }, // Water
+    { x: 11, y: 11, width: 3, height: 3 }, // Tree
+];
+const SOLID_MAP_FRAMES = new Set<number>();
+for (const region of SOLID_TILE_REGIONS) {
+    for (let row = region.y; row < region.y + region.height; row++) {
+        for (let col = region.x; col < region.x + region.width; col++) {
+            SOLID_MAP_FRAMES.add(row * 32 + col);
+        }
+    }
+}
 
 // ─── CatmullRom spline (replicates Phaser.Curves.Spline.getPoint) ─────────────
 function catmullRom(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -417,6 +444,9 @@ export class ShmupRoom extends Room<GameRoomState> {
     private nextEnemyDiagnosticAtMs = 0;
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
+    private mapTiles = new Map<string, { layer1: Uint16Array; layer2: Uint16Array }>();
+    private mapTileCount = 0;
+    private readonly mapStorage = new MapStorage();
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -428,13 +458,16 @@ export class ShmupRoom extends Room<GameRoomState> {
         return code;
     }
 
-    onCreate() {
+    onCreate(options: { mode?: unknown } = {}) {
         this.roomId = this.generateRoomCode();
         const state = new GameRoomState();
-        state.worldWidth = WORLD_WIDTH;
-        state.worldHeight = WORLD_HEIGHT;
+        const mapEditorRequested = options.mode === MAP_EDITOR_MODE;
+        const isMapEditor = mapEditorRequested && process.env.NODE_ENV !== "production";
+        state.mode = isMapEditor ? MAP_EDITOR_MODE : "game";
+        state.worldWidth = isMapEditor ? EDITOR_WORLD_WIDTH : WORLD_WIDTH;
+        state.worldHeight = isMapEditor ? EDITOR_WORLD_HEIGHT : WORLD_HEIGHT;
         this.setState(state);
-        this.generateTrees();
+        if (!isMapEditor) this.generateTrees();
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
 
@@ -541,6 +574,37 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.setPlayerOutfitColor(client.sessionId, data);
         });
 
+        this.onMessage("placeMapTile", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.placeMapTile(data);
+        });
+
+        this.onMessage("removeMapTile", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.removeMapTile(data);
+        });
+
+        this.onMessage("replaceMap", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            const accepted = this.replaceMap(data);
+            client.send("mapImported", { accepted });
+        });
+
+        this.onMessage("saveMap", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            void this.saveMap(client, data);
+        });
+
+        this.onMessage("loadMap", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            void this.loadMap(client, data);
+        });
+
+        this.onMessage("listMaps", (client) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            void this.sendMapList(client);
+        });
+
         if (process.env.NODE_ENV !== "production") {
             this.onMessage("debugSetRound", (client, data) => {
                 this.debugSetRound(client, data);
@@ -578,6 +642,376 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.nextEnemyDiagnosticAtMs = 0;
         this.scheduleEnemyWave(targetMinute);
         client.send("debugRoundResult", { accepted: true, round });
+    }
+
+    private isMapEditor(): boolean {
+        return this.state.mode === MAP_EDITOR_MODE;
+    }
+
+    private mapColumnCount(): number {
+        return Math.floor(this.playableWorldWidth() / MAP_TILE_SIZE);
+    }
+
+    private mapRowCount(): number {
+        return Math.floor(this.playableWorldHeight() / MAP_TILE_SIZE);
+    }
+
+    private playableWorldWidth(): number {
+        return this.isMapEditor() ? WORLD_WIDTH : this.state.worldWidth;
+    }
+
+    private playableWorldHeight(): number {
+        return this.isMapEditor() ? WORLD_HEIGHT : this.state.worldHeight;
+    }
+
+    private isMapCellInside(col: number, row: number): boolean {
+        return Number.isInteger(col) && Number.isInteger(row)
+            && col >= 0 && row >= 0
+            && col < this.mapColumnCount() && row < this.mapRowCount();
+    }
+
+    private mapChunkKey(chunkCol: number, chunkRow: number): string {
+        return `${chunkCol}:${chunkRow}`;
+    }
+
+    private parseMapChunkKey(value: unknown): { chunkCol: number; chunkRow: number } | null {
+        if (typeof value !== "string") return null;
+        const match = /^(\d+):(\d+)$/.exec(value);
+        if (!match) return null;
+        const chunkCol = Number(match[1]);
+        const chunkRow = Number(match[2]);
+        if (!Number.isSafeInteger(chunkCol) || !Number.isSafeInteger(chunkRow)) return null;
+        const firstCol = chunkCol * MAP_CHUNK_SIZE;
+        const firstRow = chunkRow * MAP_CHUNK_SIZE;
+        if (!this.isMapCellInside(firstCol, firstRow)) return null;
+        return { chunkCol, chunkRow };
+    }
+
+    private parseEditorCanvasChunkKey(value: unknown): { chunkCol: number; chunkRow: number } | null {
+        if (typeof value !== "string") return null;
+        const match = /^(\d+):(\d+)$/.exec(value);
+        if (!match) return null;
+        const chunkCol = Number(match[1]);
+        const chunkRow = Number(match[2]);
+        if (!Number.isSafeInteger(chunkCol) || !Number.isSafeInteger(chunkRow)) return null;
+        const firstCol = chunkCol * MAP_CHUNK_SIZE;
+        const firstRow = chunkRow * MAP_CHUNK_SIZE;
+        const editorColumns = Math.floor(this.state.worldWidth / MAP_TILE_SIZE);
+        const editorRows = Math.floor(this.state.worldHeight / MAP_TILE_SIZE);
+        if (firstCol < 0 || firstRow < 0 || firstCol >= editorColumns || firstRow >= editorRows) return null;
+        return { chunkCol, chunkRow };
+    }
+
+    private encodeMapChunk(cells: Uint16Array): string {
+        const buffer = Buffer.alloc(MAP_CHUNK_ENCODED_BYTES);
+        for (let index = 0; index < MAP_CHUNK_CELL_COUNT; index++) {
+            buffer.writeUInt16LE(cells[index], index * 2);
+        }
+        return buffer.toString("base64");
+    }
+
+    private decodeMapChunk(value: unknown): Uint16Array | null {
+        if (typeof value !== "string" || value.length !== MAP_CHUNK_ENCODED_LENGTH) return null;
+        let buffer: Buffer;
+        try {
+            buffer = Buffer.from(value, "base64");
+        } catch (_error) {
+            return null;
+        }
+        if (buffer.length !== MAP_CHUNK_ENCODED_BYTES) return null;
+        const cells = new Uint16Array(MAP_CHUNK_CELL_COUNT);
+        for (let index = 0; index < MAP_CHUNK_CELL_COUNT; index++) {
+            const tile = buffer.readUInt16LE(index * 2);
+            if (tile > MAP_FRAME_COUNT) return null;
+            cells[index] = tile;
+        }
+        return cells;
+    }
+
+    private getMapChunkCells(chunkCol: number, chunkRow: number, layer: 1 | 2, create = false): Uint16Array | null {
+        const key = this.mapChunkKey(chunkCol, chunkRow);
+        let chunk = this.mapTiles.get(key);
+        if (!chunk && create) {
+            chunk = {
+                layer1: new Uint16Array(MAP_CHUNK_CELL_COUNT),
+                layer2: new Uint16Array(MAP_CHUNK_CELL_COUNT),
+            };
+            this.mapTiles.set(key, chunk);
+        }
+        return chunk ? (layer === 1 ? chunk.layer1 : chunk.layer2) : null;
+    }
+
+    private syncMapChunk(chunkCol: number, chunkRow: number): void {
+        const key = this.mapChunkKey(chunkCol, chunkRow);
+        const chunk = this.mapTiles.get(key);
+        if (!chunk) {
+            this.state.mapChunks.delete(key);
+            return;
+        }
+        let stateChunk = this.state.mapChunks.get(key);
+        if (!stateChunk) {
+            stateChunk = new MapChunkState();
+            this.state.mapChunks.set(key, stateChunk);
+        }
+        stateChunk.layer1 = this.encodeMapChunk(chunk.layer1);
+        stateChunk.layer2 = this.encodeMapChunk(chunk.layer2);
+    }
+
+    private mapChunkHasTiles(cells: Uint16Array): boolean {
+        return cells.some((value) => value !== 0);
+    }
+
+    private getMapTileValue(col: number, row: number, layer: 1 | 2): number {
+        if (!this.isMapCellInside(col, row)) return 0;
+        const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
+        const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
+        const cells = this.getMapChunkCells(chunkCol, chunkRow, layer);
+        if (!cells) return 0;
+        const localCol = col % MAP_CHUNK_SIZE;
+        const localRow = row % MAP_CHUNK_SIZE;
+        return cells[localRow * MAP_CHUNK_SIZE + localCol];
+    }
+
+    private isSolidMapFrame(frame: number): boolean {
+        return SOLID_MAP_FRAMES.has(frame);
+    }
+
+    private placeMapTile(data: unknown): void {
+        const payload = data as { col?: unknown; row?: unknown; frame?: unknown; layer?: unknown } | null;
+        const col = Number(payload?.col);
+        const row = Number(payload?.row);
+        const frame = Number(payload?.frame);
+        const layer = Number(payload?.layer) === 2 ? 2 : 1;
+        if (!this.isMapCellInside(col, row) || !Number.isInteger(frame) || frame < 0 || frame >= MAP_FRAME_COUNT) return;
+        const nextValue = frame + 1;
+        const previousValue = this.getMapTileValue(col, row, layer);
+        if (previousValue === nextValue) return;
+        if (previousValue === 0 && this.mapTileCount >= MAP_MAX_FILLED_CELLS) return;
+        if (this.isSolidMapFrame(frame) && this.mapCellOverlapsPlayer(col, row)) return;
+
+        const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
+        const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
+        const cells = this.getMapChunkCells(chunkCol, chunkRow, layer, true)!;
+        const index = (row % MAP_CHUNK_SIZE) * MAP_CHUNK_SIZE + (col % MAP_CHUNK_SIZE);
+        cells[index] = nextValue;
+        if (previousValue === 0) this.mapTileCount++;
+        this.syncMapChunk(chunkCol, chunkRow);
+    }
+
+    private removeMapTile(data: unknown): void {
+        const payload = data as { col?: unknown; row?: unknown; layer?: unknown } | null;
+        const col = Number(payload?.col);
+        const row = Number(payload?.row);
+        const layer = Number(payload?.layer) === 2 ? 2 : 1;
+        if (!this.isMapCellInside(col, row)) return;
+        const previousValue = this.getMapTileValue(col, row, layer);
+        if (previousValue === 0) return;
+        const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
+        const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
+        const cells = this.getMapChunkCells(chunkCol, chunkRow, layer)!;
+        const index = (row % MAP_CHUNK_SIZE) * MAP_CHUNK_SIZE + (col % MAP_CHUNK_SIZE);
+        cells[index] = 0;
+        this.mapTileCount--;
+        const otherLayer = this.getMapChunkCells(chunkCol, chunkRow, layer === 1 ? 2 : 1)!;
+        if (this.mapChunkHasTiles(cells) || this.mapChunkHasTiles(otherLayer)) {
+            this.syncMapChunk(chunkCol, chunkRow);
+        } else {
+            this.mapTiles.delete(this.mapChunkKey(chunkCol, chunkRow));
+            this.syncMapChunk(chunkCol, chunkRow);
+        }
+    }
+
+    private exportMapChunks(): Array<{ key: string; layer1: string; layer2: string }> {
+        return [...this.mapTiles.entries()].map(([key, chunk]) => ({
+            key,
+            layer1: this.encodeMapChunk(chunk.layer1),
+            layer2: this.encodeMapChunk(chunk.layer2),
+        }));
+    }
+
+    private trimChunkToPlayableBounds(cells: Uint16Array, position: { chunkCol: number; chunkRow: number }): boolean {
+        let trimmed = false;
+        for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+            for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                const index = localRow * MAP_CHUNK_SIZE + localCol;
+                if (cells[index] === 0) continue;
+                const col = position.chunkCol * MAP_CHUNK_SIZE + localCol;
+                const row = position.chunkRow * MAP_CHUNK_SIZE + localRow;
+                if (!this.isMapCellInside(col, row)) {
+                    cells[index] = 0;
+                    trimmed = true;
+                }
+            }
+        }
+        return trimmed;
+    }
+
+    private applyMapChunks(chunks: unknown[], trimOutOfBounds = false): { accepted: boolean; trimmed: boolean } {
+        const nextTiles = new Map<string, { layer1: Uint16Array; layer2: Uint16Array }>();
+        let tileCount = 0;
+        let trimmed = false;
+        for (const entry of chunks) {
+            const key = (entry as { key?: unknown })?.key;
+            const layer1Data = (entry as { layer1?: unknown })?.layer1;
+            const layer2Data = (entry as { layer2?: unknown })?.layer2;
+            const position = trimOutOfBounds ? this.parseEditorCanvasChunkKey(key) : this.parseMapChunkKey(key);
+            const layer1 = this.decodeMapChunk(layer1Data);
+            const layer2 = this.decodeMapChunk(layer2Data);
+            if (!position || !layer1 || !layer2 || nextTiles.has(key as string)) return { accepted: false, trimmed: false };
+            if (trimOutOfBounds) {
+                trimmed = this.trimChunkToPlayableBounds(layer1, position) || trimmed;
+                trimmed = this.trimChunkToPlayableBounds(layer2, position) || trimmed;
+            }
+            for (const value of layer1) tileCount += value === 0 ? 0 : 1;
+            for (const value of layer2) tileCount += value === 0 ? 0 : 1;
+            if (tileCount > MAP_MAX_FILLED_CELLS) return { accepted: false, trimmed: false };
+            if (this.mapChunkHasTiles(layer1) || this.mapChunkHasTiles(layer2)) {
+                nextTiles.set(key as string, { layer1, layer2 });
+            }
+        }
+
+        this.mapTiles = nextTiles;
+        this.mapTileCount = tileCount;
+        this.state.mapChunks.clear();
+        this.mapTiles.forEach((chunk, key) => {
+            const stateChunk = new MapChunkState();
+            stateChunk.layer1 = this.encodeMapChunk(chunk.layer1);
+            stateChunk.layer2 = this.encodeMapChunk(chunk.layer2);
+            this.state.mapChunks.set(key, stateChunk);
+        });
+        this.relocatePlayersFromSolidMapTiles();
+        return { accepted: true, trimmed };
+    }
+
+    private replaceMap(data: unknown): boolean {
+        const chunks = (data as { chunks?: unknown })?.chunks;
+        return Array.isArray(chunks) && this.applyMapChunks(chunks).accepted;
+    }
+
+    private async sendMapList(client: Client): Promise<void> {
+        try {
+            client.send("mapList", { names: await this.mapStorage.list() });
+        } catch (error) {
+            console.error("Unable to list saved maps:", error);
+            client.send("mapStorageError", { message: "Unable to list saved maps." });
+        }
+    }
+
+    private async saveMap(client: Client, data: unknown): Promise<void> {
+        const name = normalizeMapName((data as { name?: unknown })?.name);
+        const overwrite = !!(data as { overwrite?: unknown })?.overwrite;
+        if (!name) {
+            client.send("mapStorageError", { message: "Map names use letters, numbers, hyphens, and underscores." });
+            return;
+        }
+        try {
+            if (!overwrite && await this.mapStorage.exists(name)) {
+                client.send("mapSaveConflict", { name });
+                return;
+            }
+            const document: StoredMapDocument = {
+                version: MAP_SAVE_VERSION,
+                name,
+                width: this.state.worldWidth,
+                height: this.state.worldHeight,
+                chunks: this.exportMapChunks(),
+            };
+            await this.mapStorage.save(document);
+            client.send("mapSaved", { name });
+            await this.sendMapList(client);
+        } catch (error) {
+            console.error(`Unable to save map '${name}':`, error);
+            client.send("mapStorageError", { message: "Unable to save this map." });
+        }
+    }
+
+    private async loadMap(client: Client, data: unknown): Promise<void> {
+        const name = normalizeMapName((data as { name?: unknown })?.name);
+        if (!name) {
+            client.send("mapStorageError", { message: "Enter a valid saved map name." });
+            return;
+        }
+        try {
+            const document = await this.mapStorage.load(name) as Partial<StoredMapDocument>;
+            const result = document.version === MAP_SAVE_VERSION
+                && document.name === name
+                && document.width === this.state.worldWidth
+                && document.height === this.state.worldHeight
+                && Array.isArray(document.chunks)
+                ? this.applyMapChunks(document.chunks, true)
+                : { accepted: false, trimmed: false };
+            if (!result.accepted) {
+                client.send("mapStorageError", { message: "That saved map is invalid or incompatible." });
+                return;
+            }
+            client.send("mapLoaded", { name, trimmed: result.trimmed });
+        } catch (error: unknown) {
+            const message = (error as NodeJS.ErrnoException).code === "ENOENT"
+                ? "Saved map not found."
+                : "Unable to load that saved map.";
+            if (message !== "Saved map not found.") console.error(`Unable to load map '${name}':`, error);
+            client.send("mapStorageError", { message });
+        }
+    }
+
+    private mapCellOverlapsPlayer(col: number, row: number): boolean {
+        const x = col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        const y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        let overlapsPlayer = false;
+        this.state.players.forEach((player) => {
+            if (overlapsPlayer) return;
+            overlapsPlayer = circleOverlapsAabb(
+                player.x,
+                player.y + PLAYER_TREE_Y_OFFSET,
+                PLAYER_TREE_FOOT_RADIUS,
+                x,
+                y,
+                MAP_TILE_SIZE * 0.5,
+                MAP_TILE_SIZE * 0.5,
+            );
+        });
+        return overlapsPlayer;
+    }
+
+    private collidesWithMapTiles(playerX: number, playerY: number): boolean {
+        if (!this.isMapEditor()) return false;
+        const footX = playerX;
+        const footY = playerY + PLAYER_TREE_Y_OFFSET;
+        const startCol = Math.floor((footX - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+        const endCol = Math.floor((footX + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+        const startRow = Math.floor((footY - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+        const endRow = Math.floor((footY + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+        for (let row = startRow; row <= endRow; row++) {
+            for (let col = startCol; col <= endCol; col++) {
+                for (const layer of [1, 2] as const) {
+                    const value = this.getMapTileValue(col, row, layer);
+                    if (value > 0 && this.isSolidMapFrame(value - 1)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private relocatePlayersFromSolidMapTiles(): void {
+        this.state.players.forEach((player) => {
+            if (!this.collidesWithMapTiles(player.x, player.y)) return;
+            const originCol = Math.floor(player.x / MAP_TILE_SIZE);
+            const originRow = Math.floor((player.y + PLAYER_TREE_Y_OFFSET) / MAP_TILE_SIZE);
+            for (let radius = 1; radius <= 128; radius++) {
+                for (let row = originRow - radius; row <= originRow + radius; row++) {
+                    for (let col = originCol - radius; col <= originCol + radius; col++) {
+                        if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
+                        const x = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
+                        const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+                        if (!this.collidesWithMapTiles(x, y)) {
+                            player.x = x;
+                            player.y = y;
+                            return;
+                        }
+                    }
+                }
+            }
+        });
     }
 
     private equipPlayerSlot(sessionId: string, data: unknown) {
@@ -895,8 +1329,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
         ps.displayName = sanitizeDisplayName(options.displayName);
-        ps.x = WORLD_WIDTH / 2;
-        ps.y = WORLD_HEIGHT / 2;
+        ps.x = this.playableWorldWidth() / 2;
+        ps.y = this.playableWorldHeight() / 2;
         ps.maxHealth = PLAYER_MAX_HEALTH;
         ps.health = PLAYER_MAX_HEALTH;
         ps.kills = 0;
@@ -937,7 +1371,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.campfireHealElapsedMs = 0;
             this.state.elapsedSeconds = 0;
             this.state.gameOverCountdown = 0;
-            this.startEnemyWaveSchedule();
+            if (!this.isMapEditor()) this.startEnemyWaveSchedule();
         }
     }
 
@@ -1619,6 +2053,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         const tickStartedAt = ENABLE_ENEMY_DIAGNOSTICS ? performance.now() : 0;
         const dtSec = dt / 1000;
 
+        if (this.isMapEditor()) {
+            this.tickPlayers(dtSec, dt);
+            return;
+        }
+
         this.tickElapsedTime(dt);
         this.tickPlayers(dtSec, dt);
         this.tickRevives(dt);
@@ -1782,7 +2221,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
-            if (fire && sp.fireCounter === 0) {
+            if (!this.isMapEditor() && fire && sp.fireCounter === 0) {
                 sp.fireCounter = FIRE_RATE_MS;
                 this.spawnPlayerBullet(player.x, player.y - PLAYER_BULLET_Y_OFFSET, 1, sid);
             }
@@ -1829,7 +2268,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         const footX = playerX;
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
         return this.collidesWithTestTreeTrunk(playerX, playerY)
-            || this.collidesWithWoodBlockFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS);
+            || this.collidesWithWoodBlockFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS)
+            || this.collidesWithMapTiles(playerX, playerY);
     }
 
     private movePlayerWithWorldColliders(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
@@ -1842,12 +2282,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         let resolvedY = player.y;
 
         for (let i = 0; i < steps; i++) {
-            const candidateX = clamp(resolvedX + stepX, PLAYER_HW, WORLD_WIDTH - PLAYER_HW);
+            const candidateX = clamp(resolvedX + stepX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
             if (!this.collidesWithPlayerWorldColliders(candidateX, resolvedY)) {
                 resolvedX = candidateX;
             }
 
-            const candidateY = clamp(resolvedY + stepY, PLAYER_HH, WORLD_HEIGHT - PLAYER_HH);
+            const candidateY = clamp(resolvedY + stepY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
             if (!this.collidesWithPlayerWorldColliders(resolvedX, candidateY)) {
                 resolvedY = candidateY;
             }

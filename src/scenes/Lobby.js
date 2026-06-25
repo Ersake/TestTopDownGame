@@ -3,6 +3,7 @@ import RoomClient from '../network/RoomClient.js';
 const ROOM_CODE_DISPLAY_MS = 2000; // ms to show the created room code before entering the game
 const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
 const PLAYER_NAME_MAX_LENGTH = 12;
+const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
 
 /**
  * Lobby scene — lets players create a new room or join an existing one
@@ -51,6 +52,17 @@ export class Lobby extends Phaser.Scene {
         this._createBtn.on('pointerover',  () => this._createBtn.setColor('#88ffcc'));
         this._createBtn.on('pointerout',   () => this._createBtn.setColor('#00ff88'));
         this._createBtn.on('pointerdown',  () => this._onCreateRoom());
+
+        if (IS_DEVELOPMENT_BUILD) {
+            this._createMapBtn = this.add.text(this.scale.width - 22, 22, 'CREATE MAP', {
+                fontFamily: 'Arial Black', fontSize: 20, color: '#ffffff',
+                backgroundColor: '#168a35', padding: { left: 14, right: 14, top: 8, bottom: 8 },
+                stroke: '#063b14', strokeThickness: 3,
+            }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+            this._createMapBtn.on('pointerover', () => this._createMapBtn.setBackgroundColor('#21aa45'));
+            this._createMapBtn.on('pointerout', () => this._createMapBtn.setBackgroundColor('#168a35'));
+            this._createMapBtn.on('pointerdown', () => this._onCreateMap());
+        }
 
         // ── Divider ─────────────────────────────────────────────────────────
         this.add.text(cx, 330, '— OR —', {
@@ -211,6 +223,30 @@ export class Lobby extends Phaser.Scene {
             this.time.delayedCall(ROOM_CODE_DISPLAY_MS, () => this.scene.start('Game'));
         } catch (e) {
             this._setStatus('Failed to create room. Is the server running?', '#ff4444');
+            this._state = 'idle';
+        }
+    }
+
+    async _onCreateMap() {
+        if (this._state !== 'idle') return;
+        if (this._isEditingName && !this._confirmNameEdit()) return;
+        if (!this._hasPlayerName()) {
+            this._setStatus('Enter a player name first.', '#ff4444');
+            return;
+        }
+        this._state = 'busy';
+        this._setStatus('Creating map editor…', '#ffffff');
+
+        try {
+            const room = await RoomClient.createRoom({ mode: 'map-editor' });
+            await new Promise((resolve) => window.setTimeout(resolve, 300));
+            if (room.state?.mode !== 'map-editor') {
+                await RoomClient.disconnect();
+                throw new Error('Map editor is unavailable on this server. Restart the development server.');
+            }
+            this.scene.start('Game');
+        } catch (error) {
+            this._setStatus(error?.message || 'Failed to create map editor. Is the server running?', '#ff4444');
             this._state = 'idle';
         }
     }

@@ -65,6 +65,23 @@ const BUILD_GRID_LINE_COLOR = 0xd8f5d0;
 const BUILD_GRID_LINE_ALPHA = 0.22;
 const BUILD_GRID_DOT_LENGTH = 6;
 const BUILD_GRID_DOT_GAP = 10;
+const MAP_EDITOR_MODE = 'map-editor';
+const MAP_TILE_SIZE = 32;
+const MAP_PALETTE_TILE_SIZE = 16;
+const MAP_CHUNK_SIZE = 16;
+const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
+const MAP_CHUNK_ENCODED_LENGTH = Math.ceil((MAP_CHUNK_CELL_COUNT * 2) / 3) * 4;
+const MAP_FRAME_COUNT = 32 * 32;
+const MAP_MAX_FILLED_CELLS = 50000;
+const MAP_PALETTE_MARGIN_X = 10;
+const MAP_PALETTE_Y = 54;
+const MAP_PALETTE_COLUMNS = 32;
+const MAP_PALETTE_SIZE = MAP_PALETTE_COLUMNS * MAP_PALETTE_TILE_SIZE;
+const MAP_PALETTE_PANEL_WIDTH = MAP_PALETTE_SIZE + MAP_PALETTE_MARGIN_X * 2;
+const MAP_DRAFT_STORAGE_KEY = 'testtopdown-map-drafts:v1';
+const MAP_DRAFT_VERSION = 5;
+const EDITOR_WORLD_BACKGROUND_COLOR = 0x707070;
+const EDITOR_WORLD_BACKGROUND_CSS = '#707070';
 const WOOD_BLOCK_SIZE = 32;
 const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
 const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
@@ -230,6 +247,7 @@ export class Game extends Phaser.Scene {
         this.initGameUi();
         this.initAnimations();
         this.initWorldBackground();
+        if (this.isMapEditor) this.initMapEditorUi();
         this.initInput();
         this.initNetworking();
     }
@@ -239,6 +257,14 @@ export class Game extends Phaser.Scene {
         this.sendInput();
         this.updatePlayerVisualPositions(delta);
         this.ensureLocalCameraFollow();
+        if (this.isMapEditor) {
+            this.updateEditorGrid();
+            this.updateLocalPlayerAnimation();
+            this.updateRemotePlayerAnimations();
+            this.updatePlayerHealthBars();
+            this.updatePlayerNameLabels();
+            return;
+        }
         this.updateBowChargeAim();
         this.updateHeldAttack();
         this.updateBuildHold();
@@ -270,6 +296,7 @@ export class Game extends Phaser.Scene {
         this.centreY = this.scale.height * 0.5;
 
         const state = RoomClient.room?.state;
+        this.isMapEditor = state?.mode === MAP_EDITOR_MODE;
 
         // Server-owned world bounds. The client only renders inside this space.
         this.worldWidth  = state?.worldWidth  || DEFAULT_WORLD_WIDTH;
@@ -311,6 +338,33 @@ export class Game extends Phaser.Scene {
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.enemyBulletSprites  = new Map();
         this.grassNoiseLayer = null;
+        this.mapEditorTilemap = null;
+        this.mapEditorLayer = null;
+        this.mapEditorChunks = new Map();
+        this.mapEditorTileSprites = new Map();
+        this.mapEditorUiObjects = new Set();
+        this.mapLayerButtons = [];
+        this.mapPaletteLayoutObjects = [];
+        this.mapPaletteSide = 'left';
+        this.mapPaletteSideButton = null;
+        this.mapPaletteHitArea = null;
+        this.mapPaletteSelection = null;
+        this.mapEditorStatusText = null;
+        this.mapDraftNameInput = null;
+        this.serverMapNames = new Set();
+        this.mapDirty = false;
+        this.editorGridGraphics = null;
+        this.editorBoundaryGraphics = null;
+        this.editorGridRenderKey = '';
+        this.selectedMapFrame = 0;
+        this.selectedMapPattern = { frames: [0], width: 1, height: 1 };
+        this.activeMapLayer = 1;
+        this.paletteDragPointerId = null;
+        this.paletteDragStart = null;
+        this.activeMapPaintPointerId = null;
+        this.lastMapPaintCellKey = null;
+        this.activeMapErasePointerId = null;
+        this.lastMapEraseCellKey = null;
         this.isBuildModeActive = false;
         this.buildGridGraphics = null;
         this.buildPreview = null;
@@ -1034,6 +1088,456 @@ export class Game extends Phaser.Scene {
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
+    initMapEditorUi() {
+        this.fixedUiObjects.forEach((object) => {
+            if (object === this.roomCodeText) return;
+            object?.setVisible(false);
+            object?.disableInteractive?.();
+        });
+        this.setDebugRoundControlsVisible(false);
+
+        const addEditorUi = (object) => {
+            object.setScrollFactor(0).setDepth(UI_DEPTH + 20);
+            this.registerFixedUi(object);
+            this.mapEditorUiObjects.add(object);
+            return object;
+        };
+
+        const addPaletteUi = (object, offsetX, y) => {
+            addEditorUi(object);
+            this.mapPaletteLayoutObjects.push({ object, offsetX, y });
+            return object;
+        };
+
+        addPaletteUi(this.add.rectangle(0, 0, MAP_PALETTE_PANEL_WIDTH, this.scale.height, 0x171717, 0.58).setOrigin(0), 0, 0);
+        addPaletteUi(this.add.text(0, 12, 'MAP PALETTE', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4,
+        }), MAP_PALETTE_MARGIN_X, 12);
+        const layer1Button = addPaletteUi(this.add.text(0, 12, 'LAYER 1', {
+            fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
+            backgroundColor: '#2468a8', padding: { left: 8, right: 8, top: 5, bottom: 5 },
+        }).setInteractive({ useHandCursor: true }), 270, 12);
+        const layer2Button = addPaletteUi(this.add.text(0, 12, 'LAYER 2', {
+            fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 5, bottom: 5 },
+        }).setInteractive({ useHandCursor: true }), 378, 12);
+        this.mapPaletteSideButton = addPaletteUi(this.add.text(0, 38, 'MOVE →', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            backgroundColor: '#5d5d5d', padding: { left: 8, right: 8, top: 4, bottom: 4 },
+        }).setInteractive({ useHandCursor: true }), MAP_PALETTE_MARGIN_X, 38);
+        this.mapLayerButtons = [
+            { layer: 1, button: layer1Button },
+            { layer: 2, button: layer2Button },
+        ];
+        layer1Button.on('pointerdown', () => this.setActiveMapLayer(1));
+        layer2Button.on('pointerdown', () => this.setActiveMapLayer(2));
+        this.mapPaletteSideButton.on('pointerdown', () => this.toggleMapPaletteSide());
+        addPaletteUi(this.add.image(0, MAP_PALETTE_Y, ASSETS.image.topdownTilesetPalette.key).setOrigin(0), MAP_PALETTE_MARGIN_X, MAP_PALETTE_Y);
+
+        this.mapPaletteHitArea = addPaletteUi(
+            this.add.rectangle(0, MAP_PALETTE_Y, MAP_PALETTE_SIZE, MAP_PALETTE_SIZE, 0xffffff, 0.001)
+                .setOrigin(0)
+                .setInteractive({ useHandCursor: true }),
+            MAP_PALETTE_MARGIN_X,
+            MAP_PALETTE_Y,
+        );
+        this.mapPaletteSelection = addPaletteUi(
+            this.add.rectangle(0, 0, MAP_PALETTE_TILE_SIZE, MAP_PALETTE_TILE_SIZE)
+                .setOrigin(0)
+                .setStrokeStyle(2, 0xffff00, 1),
+            MAP_PALETTE_MARGIN_X,
+            MAP_PALETTE_Y,
+        );
+        this.mapEditorStatusText = addPaletteUi(this.add.text(0, MAP_PALETTE_Y + MAP_PALETTE_SIZE + 10, '', {
+            fontFamily: 'Arial', fontSize: 14, color: '#d7ffd7',
+            wordWrap: { width: MAP_PALETTE_SIZE },
+        }), MAP_PALETTE_MARGIN_X, MAP_PALETTE_Y + MAP_PALETTE_SIZE + 10);
+
+        const draftNameInput = document.createElement('input');
+        draftNameInput.type = 'text';
+        draftNameInput.maxLength = 48;
+        draftNameInput.placeholder = 'Map name';
+        draftNameInput.value = 'untitled-map';
+        draftNameInput.setAttribute('aria-label', 'Saved map name');
+        draftNameInput.style.cssText = [
+            'width: 400px', 'height: 28px', 'box-sizing: border-box', 'padding: 4px 8px',
+            'border: 1px solid #8fbd8f', 'border-radius: 3px', 'background: rgba(15,25,15,0.88)',
+            'color: #ffffff', 'font: 14px Arial',
+        ].join(';');
+        this.mapDraftNameInput = this.add.dom(0, this.scale.height - 108, draftNameInput)
+            .setOrigin(0, 0.5)
+            .setDepth(UI_DEPTH + 21)
+            .setScrollFactor(0);
+
+        const saveButton = addPaletteUi(this.add.text(0, this.scale.height - 78, 'SAVE DRAFT', {
+            fontFamily: 'Arial Black', fontSize: 17, color: '#ffffff',
+            backgroundColor: '#2468a8', padding: { left: 10, right: 10, top: 7, bottom: 7 },
+        }).setInteractive({ useHandCursor: true }), MAP_PALETTE_MARGIN_X, this.scale.height - 78);
+        const loadButton = addPaletteUi(this.add.text(0, this.scale.height - 78, 'LOAD MAP', {
+            fontFamily: 'Arial Black', fontSize: 17, color: '#ffffff',
+            backgroundColor: '#7a4b9e', padding: { left: 10, right: 10, top: 7, bottom: 7 },
+        }).setInteractive({ useHandCursor: true }), MAP_PALETTE_MARGIN_X + 150, this.scale.height - 78);
+        const importButton = addPaletteUi(this.add.text(0, this.scale.height - 78, 'IMPORT LEGACY', {
+            fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
+            backgroundColor: '#865d25', padding: { left: 8, right: 8, top: 9, bottom: 9 },
+        }).setInteractive({ useHandCursor: true }), MAP_PALETTE_MARGIN_X + 290, this.scale.height - 78);
+        saveButton.on('pointerdown', () => this.saveMapDraft());
+        loadButton.on('pointerdown', () => this.loadMapDraft());
+        importButton.on('pointerdown', () => this.importLegacyMapDraft());
+
+        this.updateMapPaletteLayout();
+        this.selectMapFrame(0);
+        this.setActiveMapLayer(1);
+    }
+
+    getMapPalettePanelX() {
+        if (this.mapPaletteSide === 'right') {
+            return Math.max(0, this.scale.width - MAP_PALETTE_PANEL_WIDTH);
+        }
+        return 0;
+    }
+
+    getMapPaletteX() {
+        return this.getMapPalettePanelX() + MAP_PALETTE_MARGIN_X;
+    }
+
+    updateMapPaletteLayout() {
+        const panelX = this.getMapPalettePanelX();
+        this.mapPaletteLayoutObjects.forEach(({ object, offsetX, y }) => {
+            object?.setPosition(panelX + offsetX, y);
+        });
+        this.mapDraftNameInput?.setPosition(this.getMapPaletteX(), this.scale.height - 108);
+        this.mapPaletteSideButton?.setText(this.mapPaletteSide === 'right' ? '← MOVE' : 'MOVE →');
+        this.updateMapPaletteSelectionPosition();
+    }
+
+    toggleMapPaletteSide() {
+        this.mapPaletteSide = this.mapPaletteSide === 'right' ? 'left' : 'right';
+        this.updateMapPaletteLayout();
+    }
+
+    setMapEditorStatus(message) {
+        this.mapEditorStatusText?.setText(message);
+    }
+
+    selectMapFrame(frame) {
+        if (!Number.isInteger(frame) || frame < 0 || frame >= MAP_FRAME_COUNT) return;
+        this.selectMapPattern(frame % MAP_PALETTE_COLUMNS, Math.floor(frame / MAP_PALETTE_COLUMNS), frame % MAP_PALETTE_COLUMNS, Math.floor(frame / MAP_PALETTE_COLUMNS));
+    }
+
+    selectMapPattern(startCol, startRow, endCol, endRow) {
+        const minCol = Phaser.Math.Clamp(Math.min(startCol, endCol), 0, MAP_PALETTE_COLUMNS - 1);
+        const maxCol = Phaser.Math.Clamp(Math.max(startCol, endCol), 0, MAP_PALETTE_COLUMNS - 1);
+        const minRow = Phaser.Math.Clamp(Math.min(startRow, endRow), 0, MAP_PALETTE_COLUMNS - 1);
+        const maxRow = Phaser.Math.Clamp(Math.max(startRow, endRow), 0, MAP_PALETTE_COLUMNS - 1);
+        const width = maxCol - minCol + 1;
+        const height = maxRow - minRow + 1;
+        const frames = [];
+        for (let row = minRow; row <= maxRow; row++) {
+            for (let col = minCol; col <= maxCol; col++) {
+                frames.push(row * MAP_PALETTE_COLUMNS + col);
+            }
+        }
+        this.selectedMapFrame = frames[0];
+        this.selectedMapPattern = { frames, width, height };
+        this.updateMapPaletteSelectionPosition(minCol, minRow);
+        this.mapPaletteSelection?.setSize(width * MAP_PALETTE_TILE_SIZE, height * MAP_PALETTE_TILE_SIZE);
+        this.mapPaletteSelection?.setDisplaySize(width * MAP_PALETTE_TILE_SIZE, height * MAP_PALETTE_TILE_SIZE);
+        this.updateMapEditorStatus();
+    }
+
+    updateMapPaletteSelectionPosition(col = null, row = null) {
+        const selectedCol = Number.isInteger(col) ? col : this.selectedMapFrame % MAP_PALETTE_COLUMNS;
+        const selectedRow = Number.isInteger(row) ? row : Math.floor(this.selectedMapFrame / MAP_PALETTE_COLUMNS);
+        this.mapPaletteSelection?.setPosition(
+            this.getMapPaletteX() + selectedCol * MAP_PALETTE_TILE_SIZE,
+            MAP_PALETTE_Y + selectedRow * MAP_PALETTE_TILE_SIZE,
+        );
+    }
+
+    setActiveMapLayer(layer) {
+        this.activeMapLayer = layer === 2 ? 2 : 1;
+        this.mapLayerButtons.forEach(({ layer: buttonLayer, button }) => {
+            button.setBackgroundColor(buttonLayer === this.activeMapLayer ? '#2468a8' : '#4b4b4b');
+        });
+        this.updateMapEditorStatus();
+    }
+
+    updateMapEditorStatus() {
+        const { width, height } = this.selectedMapPattern;
+        this.setMapEditorStatus(
+            'Layer ' + this.activeMapLayer + ' · ' + width + '×' + height
+            + ' pattern. Drag on palette to select; drag on map to stamp. Middle-click picks; right-click drag removes.',
+        );
+    }
+
+    getPaletteCellFromPointer(pointer) {
+        const col = Math.floor((pointer.x - this.getMapPaletteX()) / MAP_PALETTE_TILE_SIZE);
+        const row = Math.floor((pointer.y - MAP_PALETTE_Y) / MAP_PALETTE_TILE_SIZE);
+        if (col < 0 || row < 0 || col >= MAP_PALETTE_COLUMNS || row >= MAP_PALETTE_COLUMNS) return null;
+        return { col, row };
+    }
+
+    getMapCellFromPointer(pointer) {
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        if (!worldPoint) return null;
+        const mapWidth = this.getMapEditorBoundaryWidth();
+        const mapHeight = this.getMapEditorBoundaryHeight();
+        if (worldPoint.x < 0 || worldPoint.y < 0 || worldPoint.x >= mapWidth || worldPoint.y >= mapHeight) return null;
+        const col = Math.floor(worldPoint.x / MAP_TILE_SIZE);
+        const row = Math.floor(worldPoint.y / MAP_TILE_SIZE);
+        return { col, row };
+    }
+
+    getMapEditorBoundaryWidth() {
+        return this.isMapEditor ? Math.min(this.worldWidth, DEFAULT_WORLD_WIDTH) : this.worldWidth;
+    }
+
+    getMapEditorBoundaryHeight() {
+        return this.isMapEditor ? Math.min(this.worldHeight, DEFAULT_WORLD_HEIGHT) : this.worldHeight;
+    }
+
+    isMapCellInsideEditorBoundary(col, row) {
+        return col >= 0 && row >= 0
+            && col < this.getMapEditorBoundaryWidth() / MAP_TILE_SIZE
+            && row < this.getMapEditorBoundaryHeight() / MAP_TILE_SIZE;
+    }
+
+    stampMapPattern(col, row) {
+        this.markMapDirty();
+        const { frames, width, height } = this.selectedMapPattern;
+        for (let patternRow = 0; patternRow < height; patternRow++) {
+            for (let patternCol = 0; patternCol < width; patternCol++) {
+                if (!this.isMapCellInsideEditorBoundary(col + patternCol, row + patternRow)) continue;
+                const frame = frames[patternRow * width + patternCol];
+                RoomClient.sendPlaceMapTile(col + patternCol, row + patternRow, frame, this.activeMapLayer);
+            }
+        }
+    }
+
+    eraseMapTile(col, row) {
+        this.markMapDirty();
+        RoomClient.sendRemoveMapTile(col, row, this.activeMapLayer);
+    }
+
+    markMapDirty() {
+        if (this.mapDirty) return;
+        this.mapDirty = true;
+        this.setMapEditorStatus('Unsaved changes. Click SAVE DRAFT to write this map to the server.');
+    }
+
+    pickMapTile(col, row) {
+        const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
+        const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
+        const chunk = this.mapEditorChunks.get(chunkCol + ':' + chunkRow);
+        if (!chunk) {
+            this.setMapEditorStatus('No tile to pick on the active layer.');
+            return;
+        }
+        const layerData = this.activeMapLayer === 2 ? chunk.layer2 : chunk.layer1;
+        const values = this.decodeMapChunk(layerData);
+        const tileValue = values?.[(row % MAP_CHUNK_SIZE) * MAP_CHUNK_SIZE + (col % MAP_CHUNK_SIZE)] || 0;
+        if (tileValue === 0) {
+            this.setMapEditorStatus('No tile to pick on the active layer.');
+            return;
+        }
+        this.selectMapFrame(tileValue - 1);
+        this.setMapEditorStatus('Picked tile from Layer ' + this.activeMapLayer + '. Left-click to place it.');
+    }
+
+    getMapDrafts() {
+        try {
+            const drafts = JSON.parse(window.localStorage.getItem(MAP_DRAFT_STORAGE_KEY) || '{}');
+            return drafts && typeof drafts === 'object' ? drafts : {};
+        } catch (_error) {
+            return {};
+        }
+    }
+
+    saveMapDraft() {
+        const draftName = String(this.mapDraftNameInput?.node?.value || '').trim().slice(0, 48);
+        if (!draftName) {
+            this.setMapEditorStatus('Enter a map name, then click SAVE DRAFT.');
+            return;
+        }
+        const normalizedName = draftName.toLowerCase().replace(/\s+/g, '-');
+        const overwrite = this.serverMapNames.has(normalizedName);
+        if (overwrite && !window.confirm('Overwrite saved map "' + normalizedName + '"?')) {
+            this.setMapEditorStatus('Save cancelled.');
+            return;
+        }
+        if (!RoomClient.sendSaveMap(draftName, overwrite)) {
+            this.setMapEditorStatus('No server connection. Map was not saved.');
+            return;
+        }
+        this.setMapEditorStatus('Saving map "' + normalizedName + '"…');
+    }
+
+    loadMapDraft() {
+        const name = String(this.mapDraftNameInput?.node?.value || '').trim();
+        if (!name) {
+            this.setMapEditorStatus('Enter a saved map name to load.');
+            return;
+        }
+        if (this.mapDirty && !window.confirm('Load a saved map and discard unsaved editor changes?')) return;
+        if (!RoomClient.sendLoadMap(name)) {
+            this.setMapEditorStatus('No server connection. Map was not loaded.');
+            return;
+        }
+        this.setMapEditorStatus('Loading saved map "' + name + '"…');
+    }
+
+    importLegacyMapDraft() {
+        const drafts = this.getMapDrafts();
+        const names = Object.keys(drafts);
+        if (names.length === 0) {
+            this.setMapEditorStatus('No local map drafts have been saved yet.');
+            return;
+        }
+        const name = String(this.mapDraftNameInput?.node?.value || '').trim();
+        if (!drafts[name]) {
+            this.setMapEditorStatus('Draft not found. Saved drafts: ' + names.join(', '));
+            return;
+        }
+        const draft = drafts[name];
+        if (
+            draft?.version !== MAP_DRAFT_VERSION
+            || draft.width !== this.worldWidth
+            || draft.height !== this.worldHeight
+            || !Array.isArray(draft.chunks)
+        ) {
+            this.setMapEditorStatus('That draft is not compatible with this editor map.');
+            return;
+        }
+        const validationError = this.validateMapDraftChunks(draft.chunks);
+        if (validationError) {
+            this.setMapEditorStatus(validationError);
+            return;
+        }
+        if (!RoomClient.sendReplaceMap(draft.chunks)) {
+            this.setMapEditorStatus('This draft is too large to send and was not loaded.');
+            return;
+        }
+        
+        this.setMapEditorStatus('Loading draft "' + name + '"…');
+    }
+
+    validateMapDraftChunks(chunks) {
+        const maxChunkCols = Math.ceil(this.worldWidth / (MAP_TILE_SIZE * MAP_CHUNK_SIZE));
+        const maxChunkRows = Math.ceil(this.worldHeight / (MAP_TILE_SIZE * MAP_CHUNK_SIZE));
+        const maxChunkCount = maxChunkCols * maxChunkRows;
+        if (chunks.length > maxChunkCount) {
+            return 'This draft has too many map chunks and was not loaded.';
+        }
+
+        const keys = new Set();
+        let tileCount = 0;
+        for (const chunk of chunks) {
+            if (!chunk || typeof chunk.key !== 'string' || typeof chunk.layer1 !== 'string' || typeof chunk.layer2 !== 'string') {
+                return 'This draft has invalid map chunk data and was not loaded.';
+            }
+            const position = this.getMapChunkPosition(chunk.key);
+            if (
+                !position
+                || position.col >= maxChunkCols
+                || position.row >= maxChunkRows
+                || keys.has(chunk.key)
+                || chunk.layer1.length !== MAP_CHUNK_ENCODED_LENGTH
+                || chunk.layer2.length !== MAP_CHUNK_ENCODED_LENGTH
+            ) {
+                return 'This draft has invalid map chunk data and was not loaded.';
+            }
+            keys.add(chunk.key);
+
+            const layer1 = this.decodeMapChunk(chunk.layer1);
+            const layer2 = this.decodeMapChunk(chunk.layer2);
+            if (!layer1 || !layer2) {
+                return 'This draft has invalid map chunk data and was not loaded.';
+            }
+            for (const value of layer1) tileCount += value === 0 ? 0 : 1;
+            for (const value of layer2) tileCount += value === 0 ? 0 : 1;
+            if (tileCount > MAP_MAX_FILLED_CELLS) {
+                return 'This draft contains too many tiles and was not loaded.';
+            }
+        }
+
+        return null;
+    }
+
+    getMapChunkPosition(key) {
+        const match = /^(\d+):(\d+)$/.exec(key || '');
+        if (!match) return null;
+        return { col: Number(match[1]), row: Number(match[2]) };
+    }
+
+    decodeMapChunk(data) {
+        try {
+            const decoded = window.atob(data);
+            if (decoded.length !== MAP_CHUNK_CELL_COUNT * 2) return null;
+            const values = new Uint16Array(MAP_CHUNK_CELL_COUNT);
+            for (let index = 0; index < MAP_CHUNK_CELL_COUNT; index++) {
+                values[index] = decoded.charCodeAt(index * 2) | (decoded.charCodeAt(index * 2 + 1) << 8);
+                if (values[index] > MAP_FRAME_COUNT) return null;
+            }
+            return values;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    renderMapEditorChunk(key, data, layer) {
+        const position = this.getMapChunkPosition(key);
+        const values = this.decodeMapChunk(data);
+        if (!position || !values) return;
+        const baseCol = position.col * MAP_CHUNK_SIZE;
+        const baseRow = position.row * MAP_CHUNK_SIZE;
+        for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+            for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                const col = baseCol + localCol;
+                const row = baseRow + localRow;
+                if (col >= this.worldWidth / MAP_TILE_SIZE || row >= this.worldHeight / MAP_TILE_SIZE) continue;
+                const value = values[localRow * MAP_CHUNK_SIZE + localCol];
+                const cellKey = layer + ':' + col + ':' + row;
+                const existingSprite = this.mapEditorTileSprites.get(cellKey);
+                if (value === 0) {
+                    existingSprite?.destroy();
+                    this.mapEditorTileSprites.delete(cellKey);
+                } else {
+                    const frame = value - 1;
+                    if (existingSprite) {
+                        existingSprite.setFrame(frame);
+                    } else {
+                        const sprite = this.add.image(
+                            col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+                            row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+                            ASSETS.spritesheet.topdownTileset.key,
+                            frame,
+                        ).setDisplaySize(MAP_TILE_SIZE, MAP_TILE_SIZE).setDepth(-96 + layer);
+                        this.registerWorldObject(sprite);
+                        this.mapEditorTileSprites.set(cellKey, sprite);
+                    }
+                }
+            }
+        }
+    }
+
+    clearMapEditorChunk(key) {
+        const position = this.getMapChunkPosition(key);
+        if (!position) return;
+        const baseCol = position.col * MAP_CHUNK_SIZE;
+        const baseRow = position.row * MAP_CHUNK_SIZE;
+        for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+            for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                for (const layer of [1, 2]) {
+                    const cellKey = layer + ':' + (baseCol + localCol) + ':' + (baseRow + localRow);
+                    this.mapEditorTileSprites.get(cellKey)?.destroy();
+                    this.mapEditorTileSprites.delete(cellKey);
+                }
+            }
+        }
+    }
+
     initInput() {
         this.keys = this.input.keyboard.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -1066,6 +1570,34 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointerdown', (pointer, gameObjects = []) => {
+            if (this.isMapEditor) {
+                if (gameObjects.includes(this.mapPaletteHitArea)) {
+                    if (pointer.leftButtonDown()) {
+                        const cell = this.getPaletteCellFromPointer(pointer);
+                        if (cell) {
+                            this.paletteDragPointerId = pointer.id;
+                            this.paletteDragStart = cell;
+                            this.selectMapPattern(cell.col, cell.row, cell.col, cell.row);
+                        }
+                    }
+                    return;
+                }
+                if (gameObjects.some(gameObject => this.mapEditorUiObjects.has(gameObject))) return;
+                const cell = this.getMapCellFromPointer(pointer);
+                if (!cell) return;
+                if (pointer.leftButtonDown()) {
+                    this.activeMapPaintPointerId = pointer.id;
+                    this.lastMapPaintCellKey = cell.col + ':' + cell.row;
+                    this.stampMapPattern(cell.col, cell.row);
+                } else if (pointer.rightButtonDown()) {
+                    this.activeMapErasePointerId = pointer.id;
+                    this.lastMapEraseCellKey = cell.col + ':' + cell.row;
+                    this.eraseMapTile(cell.col, cell.row);
+                } else if (pointer.middleButtonDown()) {
+                    this.pickMapTile(cell.col, cell.row);
+                }
+                return;
+            }
             if (
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
@@ -1094,6 +1626,34 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointermove', (pointer) => {
+            if (this.isMapEditor) {
+                if (this.paletteDragPointerId === pointer.id && pointer.leftButtonDown()) {
+                    const cell = this.getPaletteCellFromPointer(pointer);
+                    if (cell && this.paletteDragStart) {
+                        this.selectMapPattern(this.paletteDragStart.col, this.paletteDragStart.row, cell.col, cell.row);
+                    }
+                    return;
+                }
+                if (this.activeMapPaintPointerId === pointer.id && pointer.leftButtonDown()) {
+                    const cell = this.getMapCellFromPointer(pointer);
+                    if (!cell) return;
+                    const cellKey = cell.col + ':' + cell.row;
+                    if (cellKey !== this.lastMapPaintCellKey) {
+                        this.lastMapPaintCellKey = cellKey;
+                        this.stampMapPattern(cell.col, cell.row);
+                    }
+                }
+                if (this.activeMapErasePointerId === pointer.id && pointer.rightButtonDown()) {
+                    const cell = this.getMapCellFromPointer(pointer);
+                    if (!cell) return;
+                    const cellKey = cell.col + ':' + cell.row;
+                    if (cellKey !== this.lastMapEraseCellKey) {
+                        this.lastMapEraseCellKey = cellKey;
+                        this.eraseMapTile(cell.col, cell.row);
+                    }
+                }
+                return;
+            }
             if (this.isBuildModeActive) {
                 this.updateBuildPreview(pointer);
                 this.handleBuildModePointerDrag(pointer);
@@ -1101,6 +1661,21 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointerup', (pointer) => {
+            if (this.isMapEditor) {
+                if (this.paletteDragPointerId === pointer.id) {
+                    this.paletteDragPointerId = null;
+                    this.paletteDragStart = null;
+                }
+                if (this.activeMapPaintPointerId === pointer.id) {
+                    this.activeMapPaintPointerId = null;
+                    this.lastMapPaintCellKey = null;
+                }
+                if (this.activeMapErasePointerId === pointer.id) {
+                    this.activeMapErasePointerId = null;
+                    this.lastMapEraseCellKey = null;
+                }
+                return;
+            }
             if (this.activeBuildPointerId === pointer.id) {
                 this.activeBuildPointerId = null;
                 this.activeBuildPointer = null;
@@ -1180,6 +1755,70 @@ export class Game extends Phaser.Scene {
 
         this.localSessionId = room.sessionId || RoomClient.sessionId;
         const state = room.state;
+
+        if (this.isMapEditor) {
+            const addMapChunk = (chunk, key) => {
+                if (!key || !chunk) return;
+                const render = () => {
+                    if (typeof chunk.layer1 !== 'string' || typeof chunk.layer2 !== 'string') return;
+                    this.mapEditorChunks.set(key, { layer1: chunk.layer1, layer2: chunk.layer2 });
+                    this.renderMapEditorChunk(key, chunk.layer1, 1);
+                    this.renderMapEditorChunk(key, chunk.layer2, 2);
+                };
+                chunk.onChange(render);
+                render();
+            };
+            state.mapChunks.onAdd(addMapChunk);
+            state.mapChunks.forEach(addMapChunk);
+            state.mapChunks.onRemove((_chunk, key) => {
+                if (!key) return;
+                this.mapEditorChunks.delete(key);
+                this.clearMapEditorChunk(key);
+            });
+
+            room.onMessage('mapList', (event) => {
+                const names = Array.isArray(event?.names) ? event.names.filter((name) => typeof name === 'string') : [];
+                this.serverMapNames = new Set(names);
+                this.setMapEditorStatus(names.length > 0 ? `Saved maps: ${names.join(', ')}` : 'No saved maps yet.');
+            });
+            room.onMessage('mapSaveConflict', (event) => {
+                const name = typeof event?.name === 'string' ? event.name : '';
+                if (!name) return;
+                if (window.confirm(`Overwrite saved map "${name}"?`)) {
+                    RoomClient.sendSaveMap(name, true);
+                    this.setMapEditorStatus(`Saving map "${name}"…`);
+                } else {
+                    this.setMapEditorStatus('Save cancelled.');
+                }
+            });
+            room.onMessage('mapSaved', (event) => {
+                const name = typeof event?.name === 'string' ? event.name : 'map';
+                this.mapDirty = false;
+                if (this.mapDraftNameInput?.node) this.mapDraftNameInput.node.value = name;
+                this.setMapEditorStatus(`Saved map "${name}" to the server.`);
+            });
+            room.onMessage('mapLoaded', (event) => {
+                const name = typeof event?.name === 'string' ? event.name : 'map';
+                const trimmed = !!event?.trimmed;
+                this.mapDirty = trimmed;
+                if (this.mapDraftNameInput?.node) this.mapDraftNameInput.node.value = name;
+                this.setMapEditorStatus(trimmed
+                    ? `Loaded map "${name}" and removed tiles outside the red boundary. Save to update it.`
+                    : `Loaded map "${name}".`);
+            });
+            room.onMessage('mapImported', (event) => {
+                if (!event?.accepted) {
+                    this.setMapEditorStatus('Legacy draft was rejected.');
+                    return;
+                }
+                this.mapDirty = true;
+                this.setMapEditorStatus('Legacy draft imported. Click SAVE DRAFT to store it on the server.');
+            });
+            room.onMessage('mapStorageError', (event) => {
+                this.setMapEditorStatus(event?.message || 'Map storage failed.');
+            });
+            RoomClient.sendListMaps();
+        }
 
         room.onMessage('treeHit', (hit) => {
             if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
@@ -2165,14 +2804,65 @@ export class Game extends Phaser.Scene {
 
     // Flat world background
     initWorldBackground() {
-        this.localCamera.setBackgroundColor(WORLD_BACKGROUND_CSS);
-        this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, WORLD_BACKGROUND_COLOR)
+        const backgroundColor = this.isMapEditor ? EDITOR_WORLD_BACKGROUND_COLOR : WORLD_BACKGROUND_COLOR;
+        this.localCamera.setBackgroundColor(this.isMapEditor ? EDITOR_WORLD_BACKGROUND_CSS : WORLD_BACKGROUND_CSS);
+        this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, backgroundColor)
             .setOrigin(0)
             .setDepth(-100);
         this.registerWorldObject(this.worldBackground);
-        this.createGrassNoiseLayer();
+        if (this.isMapEditor) {
+            this.createMapEditorTileRenderer();
+            this.createEditorGrid();
+            this.createEditorBoundary();
+        } else {
+            this.createGrassNoiseLayer();
+        }
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);
-        this.createBuildGrid();
+        if (!this.isMapEditor) this.createBuildGrid();
+    }
+
+    createMapEditorTileRenderer() {
+        this.mapEditorTileSprites.clear();
+    }
+
+    createEditorGrid() {
+        this.editorGridGraphics?.destroy();
+        this.editorGridGraphics = this.add.graphics().setDepth(-90);
+        this.registerWorldObject(this.editorGridGraphics);
+        this.editorGridRenderKey = '';
+        this.updateEditorGrid(true);
+    }
+
+    createEditorBoundary() {
+        this.editorBoundaryGraphics?.destroy();
+        const boundary = this.add.graphics().setDepth(-85);
+        boundary.lineStyle(5, 0xff3030, 0.95);
+        boundary.strokeRect(0, 0, this.getMapEditorBoundaryWidth(), this.getMapEditorBoundaryHeight());
+        this.registerWorldObject(boundary);
+        this.editorBoundaryGraphics = boundary;
+    }
+
+    updateEditorGrid(force = false) {
+        if (!this.isMapEditor || !this.editorGridGraphics) return;
+        const camera = this.localCamera;
+        const view = camera.worldView;
+        const startCol = Math.max(0, Math.floor(view.x / MAP_TILE_SIZE));
+        const endCol = Math.min(Math.ceil(this.worldWidth / MAP_TILE_SIZE), Math.ceil((view.x + view.width) / MAP_TILE_SIZE));
+        const startRow = Math.max(0, Math.floor(view.y / MAP_TILE_SIZE));
+        const endRow = Math.min(Math.ceil(this.worldHeight / MAP_TILE_SIZE), Math.ceil((view.y + view.height) / MAP_TILE_SIZE));
+        const renderKey = `${startCol}:${endCol}:${startRow}:${endRow}:${camera.zoom}`;
+        if (!force && renderKey === this.editorGridRenderKey) return;
+        this.editorGridRenderKey = renderKey;
+
+        const grid = this.editorGridGraphics;
+        grid.clear();
+        grid.lineStyle(1, BUILD_GRID_LINE_COLOR, 0.34);
+        const x1 = startCol * MAP_TILE_SIZE;
+        const x2 = endCol * MAP_TILE_SIZE;
+        const y1 = startRow * MAP_TILE_SIZE;
+        const y2 = endRow * MAP_TILE_SIZE;
+        for (let col = startCol; col <= endCol; col++) this.drawDottedLine(grid, col * MAP_TILE_SIZE, y1, col * MAP_TILE_SIZE, y2);
+        for (let row = startRow; row <= endRow; row++) this.drawDottedLine(grid, x1, row * MAP_TILE_SIZE, x2, row * MAP_TILE_SIZE);
     }
 
     createGrassNoiseLayer() {
@@ -3847,6 +4537,32 @@ export class Game extends Phaser.Scene {
             this.buildGridGraphics.destroy();
             this.buildGridGraphics = null;
         }
+        if (this.editorGridGraphics) {
+            this.editorGridGraphics.destroy();
+            this.editorGridGraphics = null;
+        }
+        if (this.editorBoundaryGraphics) {
+            this.editorBoundaryGraphics.destroy();
+            this.editorBoundaryGraphics = null;
+        }
+        if (this.mapEditorLayer) {
+            this.mapEditorLayer.destroy();
+            this.mapEditorLayer = null;
+        }
+        this.mapEditorTilemap?.destroy();
+        this.mapEditorTilemap = null;
+        this.mapEditorChunks.clear();
+        this.mapEditorTileSprites.forEach((sprite) => sprite.destroy());
+        this.mapEditorTileSprites.clear();
+        this.mapDraftNameInput?.destroy();
+        this.mapDraftNameInput = null;
+        this.mapPaletteLayoutObjects = [];
+        this.mapPaletteSideButton = null;
+        this.mapPaletteHitArea = null;
+        this.mapPaletteSelection = null;
+        this.mapEditorStatusText = null;
+        this.mapEditorUiObjects.clear();
+        this.mapLayerButtons = [];
         if (this.buildPreview) {
             this.buildPreview.destroy();
             this.buildPreview = null;

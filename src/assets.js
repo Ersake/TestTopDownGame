@@ -86,6 +86,10 @@ export default {
             key: 'hammer-icon',
             args: ['assets/hammer.png']
         },
+        topdownTilesetPalette: {
+            key: 'topdown-tileset-palette',
+            args: ['assets/Topdowntileset.png']
+        },
     },
     'spritesheet': {
         campfire: {
@@ -107,6 +111,13 @@ export default {
             args: ['assets/tiles.png', {
                 frameWidth: 32,
                 frameHeight: 32
+            }]
+        },
+        topdownTileset: {
+            key: 'topdown-tileset',
+            args: ['assets/Topdowntileset.png', {
+                frameWidth: 16,
+                frameHeight: 16,
             }]
         },
         playerRun: {

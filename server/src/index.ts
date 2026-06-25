@@ -1,6 +1,7 @@
 import { createServer } from "http";
 import express from "express";
 import { Server } from "colyseus";
+import { WebSocketTransport } from "@colyseus/ws-transport";
 import { monitor } from "@colyseus/monitor";
 import { ShmupRoom } from "./rooms/ShmupRoom";
 
@@ -11,7 +12,12 @@ app.use(express.json());
 
 const httpServer = createServer(app);
 
-const gameServer = new Server({ server: httpServer });
+const gameServer = new Server({
+    transport: new WebSocketTransport({
+        server: httpServer,
+        maxPayload: 512 * 1024,
+    }),
+});
 gameServer.define("shmup_room", ShmupRoom);
 
 // Colyseus dashboard — only enabled in development
