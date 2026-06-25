@@ -47,6 +47,7 @@ const FIREBALL_DISPLAY_SIZE = 48;
 const FIREBALL_DEPTH = 84;
 const FIRECHARGE_DISPLAY_SIZE = 48;
 const FIRECHARGE_Y_OFFSET = 4;
+const FIRECHARGE_DIRECTION_OFFSET = 12;
 const FIRECHARGE_DEPTH_OFFSET = 4;
 const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
@@ -4001,8 +4002,12 @@ export class Game extends Phaser.Scene {
             return;
         }
 
+        const directionVector = this.getDirectionVector(animationState.direction || 'S');
         effect
-            .setPosition(sprite.x, sprite.y + FIRECHARGE_Y_OFFSET)
+            .setPosition(
+                sprite.x + directionVector.x * FIRECHARGE_DIRECTION_OFFSET,
+                sprite.y + FIRECHARGE_Y_OFFSET + directionVector.y * FIRECHARGE_DIRECTION_OFFSET,
+            )
             .setDepth(sprite.depth + FIRECHARGE_DEPTH_OFFSET)
             .setVisible(true);
     }
