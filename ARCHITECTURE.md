@@ -174,6 +174,10 @@ Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no t
 
 `Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
 
+Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
+
+Enemy navigation treats player-built wood blocks and solid saved-map tiles as blocked cells, so pathing routes around authored colliders instead of walking through them.
+
 ## Deployment Architecture
 
 ### Client

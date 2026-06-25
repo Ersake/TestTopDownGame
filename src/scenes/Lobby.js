@@ -4,6 +4,7 @@ const ROOM_CODE_DISPLAY_MS = 2000; // ms to show the created room code before en
 const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
 const PLAYER_NAME_MAX_LENGTH = 12;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
+const DEV_GAME_MAP_OPTIONS = ['DEFAULT', 'lvlone'];
 
 /**
  * Lobby scene — lets players create a new room or join an existing one
@@ -20,6 +21,7 @@ export class Lobby extends Phaser.Scene {
         this._nameInput = this._loadPlayerName();
         this._nameDraft = this._nameInput;
         this._isEditingName = false;
+        this._selectedGameMapIndex = 0;
         RoomClient.setPlayerName(this._nameInput);
 
         const cx = this.scale.width  * 0.5;
@@ -62,6 +64,16 @@ export class Lobby extends Phaser.Scene {
             this._createMapBtn.on('pointerover', () => this._createMapBtn.setBackgroundColor('#21aa45'));
             this._createMapBtn.on('pointerout', () => this._createMapBtn.setBackgroundColor('#168a35'));
             this._createMapBtn.on('pointerdown', () => this._onCreateMap());
+
+            this._gameMapBtn = this.add.text(this.scale.width - 22, 72, '', {
+                fontFamily: 'Arial Black', fontSize: 17, color: '#ffffff',
+                backgroundColor: '#344f99', padding: { left: 12, right: 12, top: 7, bottom: 7 },
+                stroke: '#111d48', strokeThickness: 3,
+            }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+            this._gameMapBtn.on('pointerover', () => this._gameMapBtn.setBackgroundColor('#4566c0'));
+            this._gameMapBtn.on('pointerout', () => this._gameMapBtn.setBackgroundColor('#344f99'));
+            this._gameMapBtn.on('pointerdown', () => this._toggleGameMapSelection());
+            this._updateGameMapDisplay();
         }
 
         // ── Divider ─────────────────────────────────────────────────────────
@@ -204,6 +216,20 @@ export class Lobby extends Phaser.Scene {
         this._codeText.setText(chars);
     }
 
+    _selectedGameMapName() {
+        return DEV_GAME_MAP_OPTIONS[this._selectedGameMapIndex] || 'DEFAULT';
+    }
+
+    _toggleGameMapSelection() {
+        if (this._state !== 'idle') return;
+        this._selectedGameMapIndex = (this._selectedGameMapIndex + 1) % DEV_GAME_MAP_OPTIONS.length;
+        this._updateGameMapDisplay();
+    }
+
+    _updateGameMapDisplay() {
+        this._gameMapBtn?.setText(`GAME MAP: ${this._selectedGameMapName()}`);
+    }
+
     // ── Create Room ──────────────────────────────────────────────────────────
     async _onCreateRoom() {
         if (this._state !== 'idle') return;
@@ -216,13 +242,18 @@ export class Lobby extends Phaser.Scene {
         this._setStatus('Creating room…', '#ffffff');
 
         try {
-            await RoomClient.createRoom();
+            const options = {};
+            if (IS_DEVELOPMENT_BUILD) {
+                const selectedMap = this._selectedGameMapName();
+                if (selectedMap !== 'DEFAULT') options.mapName = selectedMap;
+            }
+            await RoomClient.createRoom(options);
             const code = RoomClient.room.id;
             this._setStatus(`Room created: ${code}\nShare this code with friends!`, '#00ff88');
             // Brief pause so the player can see and share the code
             this.time.delayedCall(ROOM_CODE_DISPLAY_MS, () => this.scene.start('Game'));
         } catch (e) {
-            this._setStatus('Failed to create room. Is the server running?', '#ff4444');
+            this._setStatus(e?.message || 'Failed to create room. Is the server running?', '#ff4444');
             this._state = 'idle';
         }
     }

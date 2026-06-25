@@ -501,6 +501,12 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
+        const activeMapName = RoomClient.room?.state?.activeMapName || '';
+        this.activeMapText = this.add.text(this.centreX, 50, activeMapName ? `Map: ${activeMapName}` : '', {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#ff6666',
+            stroke: '#000000', strokeThickness: 5,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(IS_DEVELOPMENT_BUILD && !!activeMapName);
+
         this.hitboxToggleButton = this.add.text(
             this.scale.width - 12,
             this.scale.height - 12,
@@ -534,6 +540,7 @@ export class Game extends Phaser.Scene {
             this.gameOverText,
             this.quitButton,
             this.roomCodeText,
+            this.activeMapText,
             this.hitboxToggleButton,
             this.debugRoundStatusText,
         );
@@ -1571,6 +1578,12 @@ export class Game extends Phaser.Scene {
 
         this.input.on('pointerdown', (pointer, gameObjects = []) => {
             if (this.isMapEditor) {
+                if (
+                    gameObjects.includes(this.quitButton)
+                    || gameObjects.includes(this.hitboxToggleButton)
+                ) {
+                    return;
+                }
                 if (gameObjects.includes(this.mapPaletteHitArea)) {
                     if (pointer.leftButtonDown()) {
                         const cell = this.getPaletteCellFromPointer(pointer);
@@ -1756,26 +1769,26 @@ export class Game extends Phaser.Scene {
         this.localSessionId = room.sessionId || RoomClient.sessionId;
         const state = room.state;
 
-        if (this.isMapEditor) {
-            const addMapChunk = (chunk, key) => {
-                if (!key || !chunk) return;
-                const render = () => {
-                    if (typeof chunk.layer1 !== 'string' || typeof chunk.layer2 !== 'string') return;
-                    this.mapEditorChunks.set(key, { layer1: chunk.layer1, layer2: chunk.layer2 });
-                    this.renderMapEditorChunk(key, chunk.layer1, 1);
-                    this.renderMapEditorChunk(key, chunk.layer2, 2);
-                };
-                chunk.onChange(render);
-                render();
+        const addMapChunk = (chunk, key) => {
+            if (!key || !chunk) return;
+            const render = () => {
+                if (typeof chunk.layer1 !== 'string' || typeof chunk.layer2 !== 'string') return;
+                this.mapEditorChunks.set(key, { layer1: chunk.layer1, layer2: chunk.layer2 });
+                this.renderMapEditorChunk(key, chunk.layer1, 1);
+                this.renderMapEditorChunk(key, chunk.layer2, 2);
             };
-            state.mapChunks.onAdd(addMapChunk);
-            state.mapChunks.forEach(addMapChunk);
-            state.mapChunks.onRemove((_chunk, key) => {
-                if (!key) return;
-                this.mapEditorChunks.delete(key);
-                this.clearMapEditorChunk(key);
-            });
+            chunk.onChange(render);
+            render();
+        };
+        state.mapChunks.onAdd(addMapChunk);
+        state.mapChunks.forEach(addMapChunk);
+        state.mapChunks.onRemove((_chunk, key) => {
+            if (!key) return;
+            this.mapEditorChunks.delete(key);
+            this.clearMapEditorChunk(key);
+        });
 
+        if (this.isMapEditor) {
             room.onMessage('mapList', (event) => {
                 const names = Array.isArray(event?.names) ? event.names.filter((name) => typeof name === 'string') : [];
                 this.serverMapNames = new Set(names);
@@ -2798,14 +2811,25 @@ export class Game extends Phaser.Scene {
         this.quitButton
             .setPosition(this.centreX, this.centreY)
             .setVisible(shouldShowQuitScreen);
+        if (shouldShowQuitScreen) {
+            this.quitButton.setInteractive({ useHandCursor: true });
+        } else {
+            this.quitButton.disableInteractive();
+        }
         this.hitboxToggleButton.setVisible(IS_DEVELOPMENT_BUILD && shouldShowQuitScreen);
+        if (IS_DEVELOPMENT_BUILD && shouldShowQuitScreen) {
+            this.hitboxToggleButton.setInteractive({ useHandCursor: true });
+        } else {
+            this.hitboxToggleButton.disableInteractive();
+        }
         this.setDebugRoundControlsVisible(shouldShowQuitScreen);
     }
 
     // Flat world background
     initWorldBackground() {
-        const backgroundColor = this.isMapEditor ? EDITOR_WORLD_BACKGROUND_COLOR : WORLD_BACKGROUND_COLOR;
-        this.localCamera.setBackgroundColor(this.isMapEditor ? EDITOR_WORLD_BACKGROUND_CSS : WORLD_BACKGROUND_CSS);
+        const hasSavedGameMap = !this.isMapEditor && !!RoomClient.room?.state?.activeMapName;
+        const backgroundColor = this.isMapEditor || hasSavedGameMap ? EDITOR_WORLD_BACKGROUND_COLOR : WORLD_BACKGROUND_COLOR;
+        this.localCamera.setBackgroundColor(this.isMapEditor || hasSavedGameMap ? EDITOR_WORLD_BACKGROUND_CSS : WORLD_BACKGROUND_CSS);
         this.worldBackground = this.add.rectangle(0, 0, this.worldWidth, this.worldHeight, backgroundColor)
             .setOrigin(0)
             .setDepth(-100);
@@ -2814,7 +2838,7 @@ export class Game extends Phaser.Scene {
             this.createMapEditorTileRenderer();
             this.createEditorGrid();
             this.createEditorBoundary();
-        } else {
+        } else if (!hasSavedGameMap) {
             this.createGrassNoiseLayer();
         }
         this.localCamera.setBounds(0, 0, this.worldWidth, this.worldHeight);

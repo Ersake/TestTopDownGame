@@ -458,15 +458,26 @@ export class ShmupRoom extends Room<GameRoomState> {
         return code;
     }
 
-    onCreate(options: { mode?: unknown } = {}) {
+    async onCreate(options: { mode?: unknown; mapName?: unknown } = {}) {
         this.roomId = this.generateRoomCode();
         const state = new GameRoomState();
         const mapEditorRequested = options.mode === MAP_EDITOR_MODE;
         const isMapEditor = mapEditorRequested && process.env.NODE_ENV !== "production";
+        const requestedMapName = !isMapEditor && process.env.NODE_ENV !== "production"
+            ? normalizeMapName(options.mapName)
+            : null;
         state.mode = isMapEditor ? MAP_EDITOR_MODE : "game";
         state.worldWidth = isMapEditor ? EDITOR_WORLD_WIDTH : WORLD_WIDTH;
         state.worldHeight = isMapEditor ? EDITOR_WORLD_HEIGHT : WORLD_HEIGHT;
         this.setState(state);
+        if (requestedMapName) {
+            try {
+                await this.loadInitialGameMap(requestedMapName);
+            } catch (error) {
+                _usedCodes.delete(this.roomId);
+                throw error;
+            }
+        }
         if (!isMapEditor) this.generateTrees();
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
@@ -687,7 +698,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         return { chunkCol, chunkRow };
     }
 
-    private parseEditorCanvasChunkKey(value: unknown): { chunkCol: number; chunkRow: number } | null {
+    private parseSourceChunkKey(value: unknown, sourceWidth: number, sourceHeight: number): { chunkCol: number; chunkRow: number } | null {
         if (typeof value !== "string") return null;
         const match = /^(\d+):(\d+)$/.exec(value);
         if (!match) return null;
@@ -696,9 +707,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!Number.isSafeInteger(chunkCol) || !Number.isSafeInteger(chunkRow)) return null;
         const firstCol = chunkCol * MAP_CHUNK_SIZE;
         const firstRow = chunkRow * MAP_CHUNK_SIZE;
-        const editorColumns = Math.floor(this.state.worldWidth / MAP_TILE_SIZE);
-        const editorRows = Math.floor(this.state.worldHeight / MAP_TILE_SIZE);
-        if (firstCol < 0 || firstRow < 0 || firstCol >= editorColumns || firstRow >= editorRows) return null;
+        const sourceColumns = Math.floor(sourceWidth / MAP_TILE_SIZE);
+        const sourceRows = Math.floor(sourceHeight / MAP_TILE_SIZE);
+        if (firstCol < 0 || firstRow < 0 || firstCol >= sourceColumns || firstRow >= sourceRows) return null;
         return { chunkCol, chunkRow };
     }
 
@@ -846,7 +857,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         return trimmed;
     }
 
-    private applyMapChunks(chunks: unknown[], trimOutOfBounds = false): { accepted: boolean; trimmed: boolean } {
+    private applyMapChunks(
+        chunks: unknown[],
+        trimOutOfBounds = false,
+        sourceBounds = { width: this.state.worldWidth, height: this.state.worldHeight },
+    ): { accepted: boolean; trimmed: boolean } {
         const nextTiles = new Map<string, { layer1: Uint16Array; layer2: Uint16Array }>();
         let tileCount = 0;
         let trimmed = false;
@@ -854,7 +869,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             const key = (entry as { key?: unknown })?.key;
             const layer1Data = (entry as { layer1?: unknown })?.layer1;
             const layer2Data = (entry as { layer2?: unknown })?.layer2;
-            const position = trimOutOfBounds ? this.parseEditorCanvasChunkKey(key) : this.parseMapChunkKey(key);
+            const position = trimOutOfBounds
+                ? this.parseSourceChunkKey(key, sourceBounds.width, sourceBounds.height)
+                : this.parseMapChunkKey(key);
             const layer1 = this.decodeMapChunk(layer1Data);
             const layer2 = this.decodeMapChunk(layer2Data);
             if (!position || !layer1 || !layer2 || nextTiles.has(key as string)) return { accepted: false, trimmed: false };
@@ -886,6 +903,37 @@ export class ShmupRoom extends Room<GameRoomState> {
     private replaceMap(data: unknown): boolean {
         const chunks = (data as { chunks?: unknown })?.chunks;
         return Array.isArray(chunks) && this.applyMapChunks(chunks).accepted;
+    }
+
+    private isStoredMapDocument(value: Partial<StoredMapDocument>, name: string): value is StoredMapDocument {
+        return value.version === MAP_SAVE_VERSION
+            && value.name === name
+            && Number.isInteger(value.width)
+            && Number.isInteger(value.height)
+            && Array.isArray(value.chunks);
+    }
+
+    private canLoadDocumentIntoCurrentRoom(document: StoredMapDocument): boolean {
+        if (document.width === this.state.worldWidth && document.height === this.state.worldHeight) return true;
+        if (!this.isMapEditor() && document.width === EDITOR_WORLD_WIDTH && document.height === EDITOR_WORLD_HEIGHT) return true;
+        return false;
+    }
+
+    private async loadInitialGameMap(name: string): Promise<void> {
+        try {
+            const document = await this.mapStorage.load(name) as Partial<StoredMapDocument>;
+            if (
+                !this.isStoredMapDocument(document, name)
+                || !this.canLoadDocumentIntoCurrentRoom(document)
+                || !this.applyMapChunks(document.chunks, true, { width: document.width, height: document.height }).accepted
+            ) {
+                throw new Error(`Saved map '${name}' is invalid or incompatible.`);
+            }
+            this.state.activeMapName = name;
+        } catch (error) {
+            console.error(`Unable to create room with map '${name}':`, error);
+            throw new Error(`Unable to load saved map '${name}'.`);
+        }
     }
 
     private async sendMapList(client: Client): Promise<void> {
@@ -933,12 +981,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
         try {
             const document = await this.mapStorage.load(name) as Partial<StoredMapDocument>;
-            const result = document.version === MAP_SAVE_VERSION
-                && document.name === name
-                && document.width === this.state.worldWidth
-                && document.height === this.state.worldHeight
-                && Array.isArray(document.chunks)
-                ? this.applyMapChunks(document.chunks, true)
+            const result = this.isStoredMapDocument(document, name)
+                && this.canLoadDocumentIntoCurrentRoom(document)
+                ? this.applyMapChunks(document.chunks, true, { width: document.width, height: document.height })
                 : { accepted: false, trimmed: false };
             if (!result.accepted) {
                 client.send("mapStorageError", { message: "That saved map is invalid or incompatible." });
@@ -974,7 +1019,6 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private collidesWithMapTiles(playerX: number, playerY: number): boolean {
-        if (!this.isMapEditor()) return false;
         const footX = playerX;
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
         const startCol = Math.floor((footX - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
@@ -992,26 +1036,58 @@ export class ShmupRoom extends Room<GameRoomState> {
         return false;
     }
 
+    private mapSolidOverlapsAabb(x: number, y: number, halfWidth: number, halfHeight: number): boolean {
+        const startCol = Math.floor((x - halfWidth) / MAP_TILE_SIZE);
+        const endCol = Math.floor((x + halfWidth) / MAP_TILE_SIZE);
+        const startRow = Math.floor((y - halfHeight) / MAP_TILE_SIZE);
+        const endRow = Math.floor((y + halfHeight) / MAP_TILE_SIZE);
+        for (let row = startRow; row <= endRow; row++) {
+            for (let col = startCol; col <= endCol; col++) {
+                for (const layer of [1, 2] as const) {
+                    const value = this.getMapTileValue(col, row, layer);
+                    if (value > 0 && this.isSolidMapFrame(value - 1)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private treeOverlapsSolidMapTile(x: number, y: number): boolean {
+        return this.mapSolidOverlapsAabb(
+            x,
+            y + TREE_TRUNK_Y_OFFSET,
+            TREE_TRUNK_HW,
+            TREE_TRUNK_HH,
+        );
+    }
+
     private relocatePlayersFromSolidMapTiles(): void {
         this.state.players.forEach((player) => {
             if (!this.collidesWithMapTiles(player.x, player.y)) return;
-            const originCol = Math.floor(player.x / MAP_TILE_SIZE);
-            const originRow = Math.floor((player.y + PLAYER_TREE_Y_OFFSET) / MAP_TILE_SIZE);
-            for (let radius = 1; radius <= 128; radius++) {
-                for (let row = originRow - radius; row <= originRow + radius; row++) {
-                    for (let col = originCol - radius; col <= originCol + radius; col++) {
-                        if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
-                        const x = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
-                        const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
-                        if (!this.collidesWithMapTiles(x, y)) {
-                            player.x = x;
-                            player.y = y;
-                            return;
-                        }
-                    }
+            const position = this.findNearestOpenPlayerPosition(player.x, player.y);
+            player.x = position.x;
+            player.y = position.y;
+        });
+    }
+
+    private findNearestOpenPlayerPosition(originX: number, originY: number): { x: number; y: number } {
+        const clampedOriginX = clamp(originX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
+        const clampedOriginY = clamp(originY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+        if (!this.collidesWithMapTiles(clampedOriginX, clampedOriginY)) return { x: clampedOriginX, y: clampedOriginY };
+
+        const originCol = Math.floor(clampedOriginX / MAP_TILE_SIZE);
+        const originRow = Math.floor((clampedOriginY + PLAYER_TREE_Y_OFFSET) / MAP_TILE_SIZE);
+        for (let radius = 1; radius <= 128; radius++) {
+            for (let row = originRow - radius; row <= originRow + radius; row++) {
+                for (let col = originCol - radius; col <= originCol + radius; col++) {
+                    if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
+                    const x = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
+                    const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+                    if (!this.collidesWithMapTiles(x, y)) return { x, y };
                 }
             }
-        });
+        }
+        return { x: clampedOriginX, y: clampedOriginY };
     }
 
     private equipPlayerSlot(sessionId: string, data: unknown) {
@@ -1331,6 +1407,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.displayName = sanitizeDisplayName(options.displayName);
         ps.x = this.playableWorldWidth() / 2;
         ps.y = this.playableWorldHeight() / 2;
+        const spawn = this.findNearestOpenPlayerPosition(ps.x, ps.y);
+        ps.x = spawn.x;
+        ps.y = spawn.y;
         ps.maxHealth = PLAYER_MAX_HEALTH;
         ps.health = PLAYER_MAX_HEALTH;
         ps.kills = 0;
@@ -1390,8 +1469,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.generateTrees();
 
         this.state.players.forEach((player, sid) => {
-            player.x = WORLD_WIDTH / 2;
-            player.y = WORLD_HEIGHT / 2;
+            const spawn = this.findNearestOpenPlayerPosition(this.playableWorldWidth() / 2, this.playableWorldHeight() / 2);
+            player.x = spawn.x;
+            player.y = spawn.y;
             player.maxHealth = PLAYER_MAX_HEALTH;
             player.health = PLAYER_MAX_HEALTH;
             player.kills = 0;
@@ -1478,11 +1558,14 @@ export class ShmupRoom extends Room<GameRoomState> {
                 let x = 0;
                 let y = 0;
 
-                for (let attempt = 0; attempt < 12; attempt++) {
+                for (let attempt = 0; attempt < 24; attempt++) {
                     x = TREE_EDGE_PADDING + col * cellWidth + rndReal(cellWidth * 0.2, cellWidth * 0.8);
                     y = TREE_EDGE_PADDING + row * cellHeight + rndReal(cellHeight * 0.2, cellHeight * 0.8);
 
-                    if (Math.hypot(x - spawnX, y - spawnY) >= TREE_SPAWN_CLEAR_RADIUS) break;
+                    if (
+                        Math.hypot(x - spawnX, y - spawnY) >= TREE_SPAWN_CLEAR_RADIUS
+                        && !this.treeOverlapsSolidMapTile(x, y)
+                    ) break;
                 }
 
                 if (Math.hypot(x - spawnX, y - spawnY) < TREE_SPAWN_CLEAR_RADIUS) {
@@ -1493,6 +1576,23 @@ export class ShmupRoom extends Room<GameRoomState> {
                     y = spawnY + (dy / length) * TREE_SPAWN_CLEAR_RADIUS;
                     x = clamp(x, TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
                     y = clamp(y, TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+                }
+
+                if (this.treeOverlapsSolidMapTile(x, y)) {
+                    let relocated = false;
+                    for (let attempt = 0; attempt < 64; attempt++) {
+                        const candidateX = rndReal(TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
+                        const candidateY = rndReal(TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+                        if (
+                            Math.hypot(candidateX - spawnX, candidateY - spawnY) < TREE_SPAWN_CLEAR_RADIUS
+                            || this.treeOverlapsSolidMapTile(candidateX, candidateY)
+                        ) continue;
+                        x = candidateX;
+                        y = candidateY;
+                        relocated = true;
+                        break;
+                    }
+                    if (!relocated) continue;
                 }
 
                 const tree = new TreeState();
@@ -2264,6 +2364,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         return collides;
     }
 
+    private collidesWithEnemyWorldFoot(x: number, y: number, radius: number): boolean {
+        return this.collidesWithWoodBlockFoot(x, y, radius)
+            || this.mapSolidOverlapsAabb(x, y, radius, radius);
+    }
+
     private collidesWithPlayerWorldColliders(playerX: number, playerY: number): boolean {
         const footX = playerX;
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
@@ -2993,12 +3098,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         let resolvedX = clamp(nextX, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
         let resolvedY = enemy.y;
 
-        if (this.collidesWithWoodBlockFoot(resolvedX, resolvedY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+        if (this.collidesWithEnemyWorldFoot(resolvedX, resolvedY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
             resolvedX = enemy.x;
         }
 
         const candidateY = clamp(nextY, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
-        if (!this.collidesWithWoodBlockFoot(resolvedX, candidateY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+        if (!this.collidesWithEnemyWorldFoot(resolvedX, candidateY + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
             resolvedY = candidateY;
         }
 
@@ -3022,7 +3127,21 @@ export class ShmupRoom extends Room<GameRoomState> {
             );
         });
 
+        if (!clear) return false;
+        clear = !this.segmentOverlapsSolidMapTile(fromX, fromY, toX, toY, ENEMY_FOOT_RADIUS);
         return clear;
+    }
+
+    private segmentOverlapsSolidMapTile(fromX: number, fromY: number, toX: number, toY: number, radius: number): boolean {
+        const distance = Math.hypot(toX - fromX, toY - fromY);
+        const steps = Math.max(1, Math.ceil(distance / (MAP_TILE_SIZE * 0.5)));
+        for (let step = 0; step <= steps; step++) {
+            const t = step / steps;
+            const x = fromX + (toX - fromX) * t;
+            const y = fromY + (toY - fromY) * t;
+            if (this.mapSolidOverlapsAabb(x, y, radius, radius)) return true;
+        }
+        return false;
     }
 
     private shouldRefreshEnemyPath(se: ServerEnemy, target: PlayerState): boolean {
@@ -3386,7 +3505,9 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private isBuildPathCellBlocked(col: number, row: number): boolean {
-        return this.state.woodBlocks.has(`wood-${col}-${row}`);
+        if (this.state.woodBlocks.has(`wood-${col}-${row}`)) return true;
+        const center = this.buildCellCenter({ col, row });
+        return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);
     }
 
     private separateEnemyFeet() {
@@ -3430,11 +3551,11 @@ export class ShmupRoom extends Room<GameRoomState> {
                     const nextBx = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
                     const nextBy = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
 
-                    if (!this.collidesWithWoodBlockFoot(nextAx, nextAy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+                    if (!this.collidesWithEnemyWorldFoot(nextAx, nextAy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
                         enemyA.x = nextAx;
                         enemyA.y = nextAy;
                     }
-                    if (!this.collidesWithWoodBlockFoot(nextBx, nextBy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+                    if (!this.collidesWithEnemyWorldFoot(nextBx, nextBy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
                         enemyB.x = nextBx;
                         enemyB.y = nextBy;
                     }
