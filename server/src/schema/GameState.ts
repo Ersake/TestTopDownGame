@@ -120,8 +120,8 @@ export class GameRoomState extends Schema {
     @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
     @type({ map: MapChunkState })     mapChunks     = new MapSchema<MapChunkState>();
 
-    @type("int32")  worldWidth:  number = 3840;
-    @type("int32")  worldHeight: number = 2160;
+    @type("int32")  worldWidth:  number = 4800;
+    @type("int32")  worldHeight: number = 2700;
     @type("string") mode: string = "game";
     @type("string") activeMapName: string = "";
 

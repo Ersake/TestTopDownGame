@@ -60,13 +60,15 @@ const HITBOX_BUTTON_SIZE = 34;
 const OFFSCREEN_PLAYER_INDICATOR_RADIUS = 6;
 const OFFSCREEN_PLAYER_INDICATOR_COLOR = 0x89cff0;
 const OFFSCREEN_DEAD_PLAYER_INDICATOR_COLOR = 0xff9d2e;
-const BUILD_GRID_SIZE = 32;
+const TILE_WORLD_SCALE = 1.25;
+const BASE_TILE_SIZE = 32;
+const BUILD_GRID_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
 const BUILD_GRID_LINE_COLOR = 0xd8f5d0;
 const BUILD_GRID_LINE_ALPHA = 0.22;
 const BUILD_GRID_DOT_LENGTH = 6;
 const BUILD_GRID_DOT_GAP = 10;
 const MAP_EDITOR_MODE = 'map-editor';
-const MAP_TILE_SIZE = 32;
+const MAP_TILE_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
 const MAP_PALETTE_TILE_SIZE = 16;
 const MAP_CHUNK_SIZE = 16;
 const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
@@ -82,7 +84,7 @@ const MAP_DRAFT_STORAGE_KEY = 'testtopdown-map-drafts:v1';
 const MAP_DRAFT_VERSION = 5;
 const EDITOR_WORLD_BACKGROUND_COLOR = 0x707070;
 const EDITOR_WORLD_BACKGROUND_CSS = '#707070';
-const WOOD_BLOCK_SIZE = 32;
+const WOOD_BLOCK_SIZE = BUILD_GRID_SIZE;
 const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
 const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
 const WOOD_BLOCK_HEALTH_BAR_WIDTH = 28;
@@ -112,8 +114,12 @@ const CAMPFIRE_HEAL_BAR_FILL_COLOR = 0xff941f;
 const UI_DEPTH = 1000;
 const BUFF_LIST_X_OFFSET = 20;
 const BUFF_LIST_Y = 96;
-const DEFAULT_WORLD_WIDTH = 3840;
-const DEFAULT_WORLD_HEIGHT = 2160;
+const BASE_WORLD_WIDTH = 3840;
+const BASE_WORLD_HEIGHT = 2160;
+const DEFAULT_WORLD_WIDTH = BASE_WORLD_WIDTH * TILE_WORLD_SCALE;
+const DEFAULT_WORLD_HEIGHT = BASE_WORLD_HEIGHT * TILE_WORLD_SCALE;
+const LEGACY_EDITOR_WORLD_WIDTH = BASE_WORLD_WIDTH * 2;
+const LEGACY_EDITOR_WORLD_HEIGHT = BASE_WORLD_HEIGHT * 2;
 const WORLD_BACKGROUND_COLOR = 0x2f7c31;
 const WORLD_BACKGROUND_CSS = '#2f7c31';
 const GRASS_NOISE_DEPTH = -99;
@@ -1410,8 +1416,7 @@ export class Game extends Phaser.Scene {
         const draft = drafts[name];
         if (
             draft?.version !== MAP_DRAFT_VERSION
-            || draft.width !== this.worldWidth
-            || draft.height !== this.worldHeight
+            || !this.isMapDraftBoundsCompatible(draft)
             || !Array.isArray(draft.chunks)
         ) {
             this.setMapEditorStatus('That draft is not compatible with this editor map.');
@@ -1428,6 +1433,12 @@ export class Game extends Phaser.Scene {
         }
         
         this.setMapEditorStatus('Loading draft "' + name + '"…');
+    }
+
+    isMapDraftBoundsCompatible(draft) {
+        return (draft.width === this.worldWidth && draft.height === this.worldHeight)
+            || (draft.width === BASE_WORLD_WIDTH && draft.height === BASE_WORLD_HEIGHT)
+            || (draft.width === LEGACY_EDITOR_WORLD_WIDTH && draft.height === LEGACY_EDITOR_WORLD_HEIGHT);
     }
 
     validateMapDraftChunks(chunks) {

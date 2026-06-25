@@ -178,6 +178,8 @@ Development lobby builds also expose a normal-game map selector. Selecting a sav
 
 Enemy navigation treats player-built wood blocks and solid saved-map tiles as blocked cells, so pathing routes around authored colliders instead of walking through them.
 
+In saved-map regular rooms, wood drops relocate to nearby green/walkable authored tiles and are not spawned on non-green tiles. Player projectiles are removed when their movement segment crosses a solid authored tile.
+
 ## Deployment Architecture
 
 ### Client
