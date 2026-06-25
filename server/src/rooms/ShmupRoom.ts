@@ -45,6 +45,12 @@ const TREE_GRID_ROWS = 5;
 const TREE_EDGE_PADDING = 192;
 const TREE_SPAWN_CLEAR_RADIUS = 300;
 const TREE_TRUNK_Y_OFFSET = -18;
+const TREE_VARIANT_TOPDOWN_3X3 = "topdown_3x3";
+const TOPDOWN_TREE_TILE_SPAN = 3;
+const TOPDOWN_TREE_HALF_SIZE = MAP_TILE_SIZE * TOPDOWN_TREE_TILE_SPAN * 0.5;
+const TREE_HITBOX_SCALE = 0.75;
+const TOPDOWN_TREE_HITBOX_RADIUS = TOPDOWN_TREE_HALF_SIZE * TREE_HITBOX_SCALE;
+const LEGACY_TREE_HITBOX_RADIUS = 28 * TREE_HITBOX_SCALE;
 
 // Half-extents used for AABB collision detection
 const PLAYER_HW  = 17;  const PLAYER_HH  = 17;
@@ -54,8 +60,6 @@ const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
 const PLAYER_TREE_FOOT_RADIUS = 5;
 const PLAYER_TREE_Y_OFFSET = 36;
 const PLAYER_BULLET_Y_OFFSET = 56;
-const TREE_TRUNK_HW = 5;
-const TREE_TRUNK_HH = 18;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
@@ -191,20 +195,9 @@ for (const region of SOLID_TILE_REGIONS) {
         }
     }
 }
-const GREEN_TILE_REGIONS = [
-    { x: 0, y: 4, width: 7, height: 2 }, // Floor/Grass
-    { x: 0, y: 6, width: 8, height: 2 }, // Grass variants
-    { x: 0, y: 8, width: 8, height: 2 }, // Garden/ground variants
-    { x: 0, y: 10, width: 8, height: 2 }, // Garden/ground variants
-];
-const GREEN_MAP_FRAMES = new Set<number>();
-for (const region of GREEN_TILE_REGIONS) {
-    for (let row = region.y; row < region.y + region.height; row++) {
-        for (let col = region.x; col < region.x + region.width; col++) {
-            GREEN_MAP_FRAMES.add(row * 32 + col);
-        }
-    }
-}
+const TREE_SPAWN_GROUND_FRAMES = new Set<number>([
+    40, // yellow grass/base ground
+]);
 
 // ─── CatmullRom spline (replicates Phaser.Curves.Spline.getPoint) ─────────────
 function catmullRom(t: number, p0: number, p1: number, p2: number, p3: number): number {
@@ -285,6 +278,12 @@ function capsuleOverlapsAabb(ax: number, ay: number, bx: number, by: number, rad
 
     const radiusSq = radius * radius;
     return candidates.some(([x, y]) => pointSegmentDistanceSq(x, y, ax, ay, bx, by) <= radiusSq);
+}
+
+function capsuleOverlapsCircle(ax: number, ay: number, bx: number, by: number, capsuleRadius: number,
+                               circleX: number, circleY: number, circleRadius: number): boolean {
+    const radius = capsuleRadius + circleRadius;
+    return pointSegmentDistanceSq(circleX, circleY, ax, ay, bx, by) <= radius * radius;
 }
 
 function segmentAabbIntersectionT(ax: number, ay: number, bx: number, by: number,
@@ -808,10 +807,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         return SOLID_MAP_FRAMES.has(frame);
     }
 
-    private isGreenMapFrame(frame: number): boolean {
-        return GREEN_MAP_FRAMES.has(frame);
-    }
-
     private getTopMapFrameAtWorldPoint(x: number, y: number): number | null {
         const col = Math.floor(x / MAP_TILE_SIZE);
         const row = Math.floor(y / MAP_TILE_SIZE);
@@ -822,9 +817,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         return layer1 > 0 ? layer1 - 1 : null;
     }
 
-    private isGreenMapTileAtWorldPoint(x: number, y: number): boolean {
-        const frame = this.getTopMapFrameAtWorldPoint(x, y);
-        return frame !== null && this.isGreenMapFrame(frame);
+    private isTreeSpawnGroundCell(col: number, row: number): boolean {
+        if (!this.isMapCellInside(col, row)) return false;
+        const layer2 = this.getMapTileValue(col, row, 2);
+        if (layer2 > 0) return TREE_SPAWN_GROUND_FRAMES.has(layer2 - 1);
+        const layer1 = this.getMapTileValue(col, row, 1);
+        return layer1 > 0 && TREE_SPAWN_GROUND_FRAMES.has(layer1 - 1);
     }
 
     private placeMapTile(data: unknown): void {
@@ -1113,12 +1111,63 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private treeOverlapsSolidMapTile(x: number, y: number): boolean {
+        const hitbox = this.getTreeHitbox({ x, y, variant: TREE_VARIANT_TOPDOWN_3X3 });
         return this.mapSolidOverlapsAabb(
-            x,
-            y + TREE_TRUNK_Y_OFFSET,
-            TREE_TRUNK_HW,
-            TREE_TRUNK_HH,
+            hitbox.x,
+            hitbox.y,
+            hitbox.radius,
+            hitbox.radius,
         );
+    }
+
+    private getTreeHitbox(tree: { x: number; y: number; variant?: string }): { x: number; y: number; radius: number } {
+        if (tree.variant === TREE_VARIANT_TOPDOWN_3X3) {
+            return {
+                x: tree.x,
+                y: tree.y - TOPDOWN_TREE_HALF_SIZE,
+                radius: TOPDOWN_TREE_HITBOX_RADIUS,
+            };
+        }
+
+        return {
+            x: tree.x,
+            y: tree.y + TREE_TRUNK_Y_OFFSET,
+            radius: LEGACY_TREE_HITBOX_RADIUS,
+        };
+    }
+
+    private topdownTreeHasSpawnSpace(x: number, y: number): boolean {
+        const centerY = y - TOPDOWN_TREE_HALF_SIZE;
+        const leftCol = Math.floor((x - TOPDOWN_TREE_HALF_SIZE) / MAP_TILE_SIZE);
+        const topRow = Math.floor((y - TOPDOWN_TREE_HALF_SIZE * 2) / MAP_TILE_SIZE);
+        if (
+            x - TOPDOWN_TREE_HALF_SIZE < 0
+            || x + TOPDOWN_TREE_HALF_SIZE > this.playableWorldWidth()
+            || y - TOPDOWN_TREE_HALF_SIZE * 2 < 0
+            || y > this.playableWorldHeight()
+        ) {
+            return false;
+        }
+
+        for (let row = 0; row < TOPDOWN_TREE_TILE_SPAN; row++) {
+            for (let col = 0; col < TOPDOWN_TREE_TILE_SPAN; col++) {
+                if (!this.isTreeSpawnGroundCell(leftCol + col, topRow + row)) return false;
+            }
+        }
+
+        return !this.mapSolidOverlapsAabb(x, centerY, TOPDOWN_TREE_HALF_SIZE, TOPDOWN_TREE_HALF_SIZE)
+            && !this.treeOverlapsSolidMapTile(x, y);
+    }
+
+    private snapTopdownTreeAnchor(x: number, y: number): { x: number; y: number } {
+        const maxLeftCol = Math.max(0, this.mapColumnCount() - TOPDOWN_TREE_TILE_SPAN);
+        const maxTopRow = Math.max(0, this.mapRowCount() - TOPDOWN_TREE_TILE_SPAN);
+        const leftCol = clamp(Math.round((x - TOPDOWN_TREE_HALF_SIZE) / MAP_TILE_SIZE), 0, maxLeftCol);
+        const topRow = clamp(Math.round((y - TOPDOWN_TREE_HALF_SIZE * 2) / MAP_TILE_SIZE), 0, maxTopRow);
+        return {
+            x: leftCol * MAP_TILE_SIZE + TOPDOWN_TREE_HALF_SIZE,
+            y: topRow * MAP_TILE_SIZE + TOPDOWN_TREE_HALF_SIZE * 2,
+        };
     }
 
     private relocatePlayersFromSolidMapTiles(): void {
@@ -1621,10 +1670,13 @@ export class ShmupRoom extends Room<GameRoomState> {
                 for (let attempt = 0; attempt < 24; attempt++) {
                     x = TREE_EDGE_PADDING + col * cellWidth + rndReal(cellWidth * 0.2, cellWidth * 0.8);
                     y = TREE_EDGE_PADDING + row * cellHeight + rndReal(cellHeight * 0.2, cellHeight * 0.8);
+                    const snapped = this.snapTopdownTreeAnchor(x, y);
+                    x = snapped.x;
+                    y = snapped.y;
 
                     if (
                         Math.hypot(x - spawnX, y - spawnY) >= TREE_SPAWN_CLEAR_RADIUS
-                        && !this.treeOverlapsSolidMapTile(x, y)
+                        && this.topdownTreeHasSpawnSpace(x, y)
                     ) break;
                 }
 
@@ -1636,19 +1688,23 @@ export class ShmupRoom extends Room<GameRoomState> {
                     y = spawnY + (dy / length) * TREE_SPAWN_CLEAR_RADIUS;
                     x = clamp(x, TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
                     y = clamp(y, TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+                    const snapped = this.snapTopdownTreeAnchor(x, y);
+                    x = snapped.x;
+                    y = snapped.y;
                 }
 
-                if (this.treeOverlapsSolidMapTile(x, y)) {
+                if (!this.topdownTreeHasSpawnSpace(x, y)) {
                     let relocated = false;
                     for (let attempt = 0; attempt < 64; attempt++) {
                         const candidateX = rndReal(TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
                         const candidateY = rndReal(TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+                        const snapped = this.snapTopdownTreeAnchor(candidateX, candidateY);
                         if (
-                            Math.hypot(candidateX - spawnX, candidateY - spawnY) < TREE_SPAWN_CLEAR_RADIUS
-                            || this.treeOverlapsSolidMapTile(candidateX, candidateY)
+                            Math.hypot(snapped.x - spawnX, snapped.y - spawnY) < TREE_SPAWN_CLEAR_RADIUS
+                            || !this.topdownTreeHasSpawnSpace(snapped.x, snapped.y)
                         ) continue;
-                        x = candidateX;
-                        y = candidateY;
+                        x = snapped.x;
+                        y = snapped.y;
                         relocated = true;
                         break;
                     }
@@ -1659,6 +1715,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 tree.id = `tree-${++treeIndex}`;
                 tree.x = x;
                 tree.y = y;
+                tree.variant = TREE_VARIANT_TOPDOWN_3X3;
                 this.state.trees.set(tree.id, tree);
                 this.serverTreeHealth.set(tree.id, TREE_HEALTH);
             }
@@ -1728,20 +1785,20 @@ export class ShmupRoom extends Room<GameRoomState> {
         let closestDistanceSq = Number.POSITIVE_INFINITY;
 
         this.state.trees.forEach((tree, id) => {
-            if (!capsuleOverlapsAabb(
+            const hitbox = this.getTreeHitbox(tree);
+            if (!capsuleOverlapsCircle(
                 attackStartX,
                 attackStartY,
                 attackEndX,
                 attackEndY,
                 ATTACK_HIT_RADIUS,
-                tree.x,
-                tree.y + TREE_TRUNK_Y_OFFSET,
-                TREE_TRUNK_HW,
-                TREE_TRUNK_HH,
+                hitbox.x,
+                hitbox.y,
+                hitbox.radius,
             )) return;
 
-            const dx = attackEndX - tree.x;
-            const dy = attackEndY - (tree.y + TREE_TRUNK_Y_OFFSET);
+            const dx = attackEndX - hitbox.x;
+            const dy = attackEndY - hitbox.y;
             const distanceSq = dx * dx + dy * dy;
             if (distanceSq < closestDistanceSq) {
                 closestDistanceSq = distanceSq;
@@ -1937,36 +1994,12 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private spawnLogsForTree(tree: TreeState) {
-        const position = this.findWoodDropPosition(tree.x, tree.y - 8);
-        if (!position) return;
         const log = new LogState();
         log.id = `log-${nextId()}`;
-        log.x = position.x;
-        log.y = position.y;
+        log.x = clamp(tree.x, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
+        log.y = clamp(tree.y - 8, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
         log.amount = WOOD_PILE_AMOUNT;
         this.state.logs.set(log.id, log);
-    }
-
-    private findWoodDropPosition(originX: number, originY: number): { x: number; y: number } | null {
-        const x = clamp(originX, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
-        const y = clamp(originY, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
-        if (this.state.activeMapName === "") return { x, y };
-        if (this.isGreenMapTileAtWorldPoint(x, y)) return { x, y };
-
-        const originCol = Math.floor(x / MAP_TILE_SIZE);
-        const originRow = Math.floor(y / MAP_TILE_SIZE);
-        for (let radius = 1; radius <= 8; radius++) {
-            for (let row = originRow - radius; row <= originRow + radius; row++) {
-                for (let col = originCol - radius; col <= originCol + radius; col++) {
-                    if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
-                    const candidateX = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
-                    const candidateY = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
-                    if (this.isGreenMapTileAtWorldPoint(candidateX, candidateY)) return { x: candidateX, y: candidateY };
-                }
-            }
-        }
-
-        return null;
     }
 
     private tryPickupWood(sessionId: string): number {
@@ -2152,15 +2185,15 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.trees.forEach((tree) => {
             if (occupied) return;
-            occupied = overlaps(
+            const hitbox = this.getTreeHitbox(tree);
+            occupied = circleOverlapsAabb(
+                hitbox.x,
+                hitbox.y,
+                hitbox.radius,
                 blockX,
                 blockY,
                 BUILD_BLOCK_HALF_SIZE,
                 BUILD_BLOCK_HALF_SIZE,
-                tree.x,
-                tree.y + TREE_TRUNK_Y_OFFSET,
-                TREE_TRUNK_HW,
-                TREE_TRUNK_HH,
             );
         });
 
@@ -2416,15 +2449,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         let collides = false;
         this.state.trees.forEach((tree) => {
             if (collides) return;
-            collides = circleOverlapsAabb(
-                playerX,
-                playerY + PLAYER_TREE_Y_OFFSET,
-                PLAYER_TREE_FOOT_RADIUS,
-                tree.x,
-                tree.y + TREE_TRUNK_Y_OFFSET,
-                TREE_TRUNK_HW,
-                TREE_TRUNK_HH,
-            );
+            const hitbox = this.getTreeHitbox(tree);
+            const dx = playerX - hitbox.x;
+            const dy = (playerY + PLAYER_TREE_Y_OFFSET) - hitbox.y;
+            const radius = PLAYER_TREE_FOOT_RADIUS + hitbox.radius;
+            collides = dx * dx + dy * dy < radius * radius;
         });
 
         return collides;

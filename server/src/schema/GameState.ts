@@ -79,6 +79,7 @@ export class TreeState extends Schema {
     @type("string")  id: string = "";
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
+    @type("string")  variant: string = "legacy";
 }
 
 export class LogState extends Schema {

@@ -28,6 +28,7 @@ const DARK_KNIGHT_DISPLAY_SIZE = ENEMY_DISPLAY_SIZE * 1.5;
 const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
+const LOG_DEPTH = 95;
 const PLAYER_HITBOX_HW = 17;
 const PLAYER_HITBOX_HH = 17;
 const PLAYER_FOOT_RADIUS = 5;
@@ -37,8 +38,6 @@ const ENEMY_HITBOX_HH = 28;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const TREE_TRUNK_Y_OFFSET = -18;
-const TREE_TRUNK_HW = 5;
-const TREE_TRUNK_HH = 18;
 const PLAYER_ATTACK_HIT_RADIUS = 44;
 const PLAYER_ATTACK_HIT_START_OFFSET = 10;
 const PLAYER_ATTACK_HIT_END_OFFSET = 40;
@@ -73,6 +72,13 @@ const BUILD_GRID_DOT_LENGTH = 6;
 const BUILD_GRID_DOT_GAP = 10;
 const MAP_EDITOR_MODE = 'map-editor';
 const MAP_TILE_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
+const TREE_VARIANT_TOPDOWN_3X3 = 'topdown_3x3';
+const TOPDOWN_TREE_FRAME_COL = 11;
+const TOPDOWN_TREE_FRAME_ROW = 11;
+const TOPDOWN_TREE_TILE_SPAN = 3;
+const TREE_HITBOX_SCALE = 0.75;
+const TOPDOWN_TREE_HITBOX_RADIUS = MAP_TILE_SIZE * TOPDOWN_TREE_TILE_SPAN * 0.5 * TREE_HITBOX_SCALE;
+const LEGACY_TREE_HITBOX_RADIUS = 28 * TREE_HITBOX_SCALE;
 const MAP_PALETTE_TILE_SIZE = 16;
 const MAP_CHUNK_SIZE = 16;
 const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
@@ -2330,6 +2336,28 @@ export class Game extends Phaser.Scene {
             const treeId = id || tree.id;
             if (!treeId || this.treeSprites.has(treeId)) return;
 
+            if (tree.variant === TREE_VARIANT_TOPDOWN_3X3) {
+                const sprites = [];
+                for (let row = 0; row < TOPDOWN_TREE_TILE_SPAN; row++) {
+                    for (let col = 0; col < TOPDOWN_TREE_TILE_SPAN; col++) {
+                        const frame = (TOPDOWN_TREE_FRAME_ROW + row) * MAP_PALETTE_COLUMNS + TOPDOWN_TREE_FRAME_COL + col;
+                        const sprite = this.add.image(
+                            tree.x + (col - 1) * MAP_TILE_SIZE,
+                            tree.y - (TOPDOWN_TREE_TILE_SPAN - row - 0.5) * MAP_TILE_SIZE,
+                            ASSETS.spritesheet.topdownTileset.key,
+                            frame,
+                        )
+                            .setOrigin(0.5)
+                            .setDisplaySize(MAP_TILE_SIZE, MAP_TILE_SIZE)
+                            .setDepth(row === TOPDOWN_TREE_TILE_SPAN - 1 ? 90 : 110);
+                        sprites.push(sprite);
+                    }
+                }
+                this.registerWorldObject(sprites);
+                this.treeSprites.set(treeId, { sprites, tree });
+                return;
+            }
+
             const bottom = this.add.image(tree.x, tree.y, ASSETS.image.treeBottom.key)
                 .setOrigin(0.5, 1)
                 .setDisplaySize(TREE_HALF_SIZE, TREE_HALF_SIZE)
@@ -2350,15 +2378,19 @@ export class Game extends Phaser.Scene {
         state.trees.onRemove((_tree, id) => {
             const sprites = this.treeSprites.get(id);
             if (!sprites) return;
-            sprites.bottom.destroy();
-            sprites.top.destroy();
+            if (sprites.sprites) {
+                sprites.sprites.forEach((sprite) => sprite.destroy());
+            } else {
+                sprites.bottom.destroy();
+                sprites.top.destroy();
+            }
             this.treeSprites.delete(id);
             if (!this.isSuppressingResetEffects() && this.shouldPlayWorldEventAudio()) {
                 this.playSfx(ASSETS.audio.treeFall.key, TREE_FALL_SOUND_VOLUME, {
                     serverEvent: true,
                     spatial: true,
-                    worldX: sprites.bottom.x,
-                    worldY: sprites.bottom.y,
+                    worldX: sprites.tree?.x ?? sprites.bottom?.x,
+                    worldY: sprites.tree?.y ?? sprites.bottom?.y,
                 });
             }
         });
@@ -2371,7 +2403,7 @@ export class Game extends Phaser.Scene {
             const sprites = LOG_PILE_OFFSETS.map((offset) => this.add.image(log.x + offset.x, log.y + offset.y, ASSETS.image.log.key)
                 .setOrigin(0.5, 0.5)
                 .setDisplaySize(LOG_DISPLAY_SIZE, LOG_DISPLAY_SIZE)
-                .setDepth(85));
+                .setDepth(LOG_DEPTH));
             this.registerWorldObject(sprites);
 
             this.logSprites.set(logId, { sprites, log });
@@ -3307,14 +3339,26 @@ export class Game extends Phaser.Scene {
 
     drawTreeHitboxes(graphics) {
         this.treeSprites.forEach(({ tree }) => {
+            const hitbox = this.getTreeHitbox(tree);
             graphics.lineStyle(2, 0x7dff62, 0.95);
-            graphics.strokeRect(
-                tree.x - TREE_TRUNK_HW,
-                tree.y + TREE_TRUNK_Y_OFFSET - TREE_TRUNK_HH,
-                TREE_TRUNK_HW * 2,
-                TREE_TRUNK_HH * 2,
-            );
+            graphics.strokeCircle(hitbox.x, hitbox.y, hitbox.radius);
         });
+    }
+
+    getTreeHitbox(tree) {
+        if (tree?.variant === TREE_VARIANT_TOPDOWN_3X3) {
+            return {
+                x: tree.x,
+                y: tree.y - (MAP_TILE_SIZE * TOPDOWN_TREE_TILE_SPAN * 0.5),
+                radius: TOPDOWN_TREE_HITBOX_RADIUS,
+            };
+        }
+
+        return {
+            x: tree.x,
+            y: tree.y + TREE_TRUNK_Y_OFFSET,
+            radius: LEGACY_TREE_HITBOX_RADIUS,
+        };
     }
 
     drawCampfireHitboxes(graphics) {
@@ -4605,9 +4649,13 @@ export class Game extends Phaser.Scene {
             background.destroy();
             fill.destroy();
         });
-        this.treeSprites.forEach(({ bottom, top }) => {
-            bottom.destroy();
-            top.destroy();
+        this.treeSprites.forEach(({ bottom, top, sprites }) => {
+            if (sprites) {
+                sprites.forEach((sprite) => sprite.destroy());
+            } else {
+                bottom.destroy();
+                top.destroy();
+            }
         });
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
