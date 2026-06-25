@@ -46,6 +46,9 @@ const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ARROW_DISPLAY_SIZE = 64;
 const FIREBALL_DISPLAY_SIZE = 48;
 const FIREBALL_DEPTH = 84;
+const FIRECHARGE_DISPLAY_SIZE = 48;
+const FIRECHARGE_Y_OFFSET = 4;
+const FIRECHARGE_DEPTH_OFFSET = 4;
 const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
 const ENEMY_ATTACK_RANGE = 26;
@@ -284,6 +287,7 @@ export class Game extends Phaser.Scene {
         this.updatePlayerLevelLabels();
         this.updateOffscreenPlayerIndicators();
         this.updateEnemyHealthBars();
+        this.updateCasterChargeEffects();
         this.updateCampfireHealBars();
         this.updateHitboxOverlay();
     }
@@ -335,6 +339,7 @@ export class Game extends Phaser.Scene {
         this.enemySprites        = new Map();
         this.enemyAnimationState = new Map();
         this.enemyHealthBars = new Map();
+        this.casterChargeEffects = new Map();
         this.casterChargeSounds = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
@@ -2529,7 +2534,10 @@ export class Game extends Phaser.Scene {
                 y: enemy.y,
             });
             this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
-            if (enemy.action === 'charge') this.startCasterChargeSound(enemyId);
+            if (enemy.action === 'charge') {
+                this.startCasterChargeSound(enemyId);
+                this.showCasterChargeEffect(enemyId);
+            }
 
             enemy.onChange(() => {
                 const s = this.enemySprites.get(enemyId);
@@ -2542,6 +2550,7 @@ export class Game extends Phaser.Scene {
                     animationState.x = enemy.x;
                     animationState.y = enemy.y;
                 }
+                this.updateCasterChargeEffect(enemyId);
                 this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
             });
 
@@ -2550,8 +2559,10 @@ export class Game extends Phaser.Scene {
                 this.setEnemyAnimation(enemyId, action || 'run', enemy.facingDirection || animationState?.direction || 'S');
                 if (action === 'charge') {
                     this.startCasterChargeSound(enemyId);
-                } else if (action !== 'attack') {
-                    this.stopCasterChargeSound(enemyId);
+                    this.showCasterChargeEffect(enemyId);
+                } else {
+                    this.hideCasterChargeEffect(enemyId);
+                    if (action !== 'attack') this.stopCasterChargeSound(enemyId);
                 }
             });
 
@@ -2571,6 +2582,7 @@ export class Game extends Phaser.Scene {
                 animationState.lastAttackSeq = enemy.attackSeq;
                 if (enemy.attackSeq <= 0) return;
                 this.stopCasterChargeSound(enemyId);
+                this.hideCasterChargeEffect(enemyId);
                 this.playEnemyAttackAnimation(enemyId, enemy.facingDirection || animationState.direction || 'S');
             });
 
@@ -2596,12 +2608,14 @@ export class Game extends Phaser.Scene {
             enemy.listen('isDead', (isDead) => {
                 if (isDead) {
                     this.stopCasterChargeSound(enemyId);
+                    this.hideCasterChargeEffect(enemyId);
                     this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
                 }
             });
 
             if (enemy.isDead) {
                 this.stopCasterChargeSound(enemyId);
+                this.hideCasterChargeEffect(enemyId);
                 this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
             }
         };
@@ -2622,6 +2636,7 @@ export class Game extends Phaser.Scene {
                 s.destroy();
             }
             this.stopCasterChargeSound(id);
+            this.hideCasterChargeEffect(id);
             if (animationState?.damageFlashEvent) {
                 animationState.damageFlashEvent.remove(false);
             }
@@ -3914,6 +3929,51 @@ export class Game extends Phaser.Scene {
         return animationState?.enemyType === 4 || animationState?.animationKey === 'dk';
     }
 
+    showCasterChargeEffect(enemyId) {
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!this.isCasterAnimationState(animationState) || animationState.dead) return;
+
+        let effect = this.casterChargeEffects.get(enemyId);
+        if (!effect) {
+            effect = this.add.image(0, 0, ASSETS.image.firecharge.key)
+                .setOrigin(0.5)
+                .setDisplaySize(FIRECHARGE_DISPLAY_SIZE, FIRECHARGE_DISPLAY_SIZE)
+                .setDepth(PLAYER_WEAPON_DEPTH + FIRECHARGE_DEPTH_OFFSET)
+                .setBlendMode(Phaser.BlendModes.ADD);
+            this.registerWorldObject(effect);
+            this.casterChargeEffects.set(enemyId, effect);
+        }
+
+        effect.setVisible(true);
+        this.updateCasterChargeEffect(enemyId);
+    }
+
+    updateCasterChargeEffect(enemyId) {
+        const effect = this.casterChargeEffects.get(enemyId);
+        const sprite = this.enemySprites.get(enemyId);
+        const animationState = this.enemyAnimationState.get(enemyId);
+        if (!effect || !sprite || !this.isCasterAnimationState(animationState) || animationState.action !== 'charge' || animationState.dead) {
+            effect?.setVisible(false);
+            return;
+        }
+
+        effect
+            .setPosition(sprite.x, sprite.y + FIRECHARGE_Y_OFFSET)
+            .setDepth(sprite.depth + FIRECHARGE_DEPTH_OFFSET)
+            .setVisible(true);
+    }
+
+    updateCasterChargeEffects() {
+        this.casterChargeEffects.forEach((_effect, enemyId) => this.updateCasterChargeEffect(enemyId));
+    }
+
+    hideCasterChargeEffect(enemyId) {
+        const effect = this.casterChargeEffects.get(enemyId);
+        if (!effect) return;
+        effect.destroy();
+        this.casterChargeEffects.delete(enemyId);
+    }
+
     startCasterChargeSound(enemyId) {
         const animationState = this.enemyAnimationState.get(enemyId);
         if (!this.isCasterAnimationState(animationState) || animationState.dead) return;
@@ -4540,6 +4600,7 @@ export class Game extends Phaser.Scene {
         });
         this.offscreenPlayerIndicators.forEach(indicator => indicator.destroy());
         this.enemySprites.forEach(s => s.destroy());
+        this.casterChargeEffects.forEach(effect => effect.destroy());
         this.enemyHealthBars.forEach(({ background, fill }) => {
             background.destroy();
             fill.destroy();
@@ -4631,6 +4692,7 @@ export class Game extends Phaser.Scene {
         this.clearUpgradeUi();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
+        this.casterChargeEffects.clear();
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();

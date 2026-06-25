@@ -86,6 +86,10 @@ export default {
             key: 'hammer-icon',
             args: ['assets/hammer.png']
         },
+        firecharge: {
+            key: 'firecharge',
+            args: ['assets/firecharge.png']
+        },
         topdownTilesetPalette: {
             key: 'topdown-tileset-palette',
             args: ['assets/Topdowntileset.png']
