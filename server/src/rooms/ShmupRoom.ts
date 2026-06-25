@@ -3040,7 +3040,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.darkKnightTargetKind = null;
         }
 
-        if (distance <= DARK_KNIGHT_DETECTION_RANGE) {
+        if (distance <= DARK_KNIGHT_DETECTION_RANGE && this.hasDarkKnightLineOfSightToPlayer(enemy, target.player)) {
             this.startDarkKnightRush(enemy, se, target.player);
             return;
         }
@@ -3082,6 +3082,16 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         enemy.x = directResolved.x;
         enemy.y = directResolved.y;
+    }
+
+    private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
+        return !this.segmentOverlapsSolidMapTile(
+            enemy.x,
+            enemy.y + ENEMY_FOOT_Y_OFFSET,
+            player.x,
+            player.y + PLAYER_TREE_Y_OFFSET,
+            1,
+        );
     }
 
     private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: PlayerState) {
@@ -3185,6 +3195,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (blockingBlock) {
                 se.targetWoodBlockId = blockingBlock.id;
                 se.darkKnightTargetKind = "woodBlock";
+            } else {
+                return false;
             }
         }
 
