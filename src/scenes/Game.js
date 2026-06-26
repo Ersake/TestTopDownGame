@@ -139,6 +139,7 @@ const GRASS_NOISE_CELL_SIZE = 96;
 const GRASS_NOISE_PATCH_COUNT = 24;
 const GRASS_NOISE_FLECK_COUNT = 460;
 const PUNCH_SOUND_VOLUME = 0.6;
+const AXE_ATTACK_HIT_SOUND_DELAY_MS = 200;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
@@ -3918,12 +3919,24 @@ export class Game extends Phaser.Scene {
         if (!didPlayWeapon) this.hidePlayerWeapon(sessionId);
 
         if (playAudio) {
-            const audioKey = attackItem === ITEM_WOOD_BOW ? ASSETS.audio.arrowLaunch.key : ASSETS.audio.punchWhoosh.key;
-            this.playSfx(audioKey, PUNCH_SOUND_VOLUME, {
-                spatial: !this.isLocalSession(sessionId),
-                worldX: sprite.x,
-                worldY: sprite.y,
-            });
+            if (attackItem === ITEM_WOOD_BOW) {
+                this.playSfx(ASSETS.audio.arrowLaunch.key, PUNCH_SOUND_VOLUME, {
+                    spatial: !this.isLocalSession(sessionId),
+                    worldX: sprite.x,
+                    worldY: sprite.y,
+                });
+            } else {
+                this.time.delayedCall(AXE_ATTACK_HIT_SOUND_DELAY_MS, () => {
+                    const currentSprite = this.playerSprites.get(sessionId);
+                    const currentState = this.playerAnimationState.get(sessionId);
+                    if (!currentSprite || !currentState || currentState.dead) return;
+                    this.playSfx(ASSETS.audio.punchWhoosh.key, PUNCH_SOUND_VOLUME, {
+                        spatial: !this.isLocalSession(sessionId),
+                        worldX: currentSprite.x,
+                        worldY: currentSprite.y,
+                    });
+                });
+            }
         }
 
         sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {

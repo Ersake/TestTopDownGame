@@ -63,8 +63,9 @@ const PLAYER_BULLET_Y_OFFSET = 56;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
-const TREE_ATTACK_IMPACT_DELAY_MS = 100;
-const ENEMY_ATTACK_IMPACT_DELAY_MS = 100;
+const AXE_ATTACK_IMPACT_DELAY_MS = 200;
+const TREE_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
+const ENEMY_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
 const BOW_CHARGE_MS = 1000;
 const ARROW_SPEED = 900;
 const ARROW_RANGE = 1200;
@@ -551,15 +552,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackItem = attackItem;
             player.attackSeq++;
             sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
-            const attackOrigin = { x: player.x, y: player.y };
             const targetX = data?.targetX;
             const targetY = data?.targetY;
 
             setTimeout(() => {
-                this.applyDelayedTreeAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
+                this.applyDelayedTreeAttackImpact(client.sessionId, attackDirection, targetX, targetY);
             }, TREE_ATTACK_IMPACT_DELAY_MS);
             setTimeout(() => {
-            this.applyDelayedEnemyAttackImpact(client.sessionId, attackOrigin, attackDirection, targetX, targetY);
+                this.applyDelayedEnemyAttackImpact(client.sessionId, attackDirection, targetX, targetY);
             }, ENEMY_ATTACK_IMPACT_DELAY_MS);
         });
 
@@ -1755,20 +1755,22 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
-    private applyDelayedTreeAttackImpact(attackerId: string, attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown) {
+    private applyDelayedTreeAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
         const sp = this.serverPlayers.get(attackerId);
         const player = this.state.players.get(attackerId);
         if (!sp || !sp.alive || !player || this.state.gameOver) return;
 
+        const attackOrigin = { x: player.x, y: player.y };
         const treeHit = this.damageTreeFromAttack(attackOrigin, attackerId, direction, targetX, targetY);
         if (treeHit) this.broadcast("treeHit", treeHit);
     }
 
-    private applyDelayedEnemyAttackImpact(attackerId: string, attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown) {
+    private applyDelayedEnemyAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
         const sp = this.serverPlayers.get(attackerId);
         const player = this.state.players.get(attackerId);
         if (!sp || !sp.alive || !player || this.state.gameOver) return;
 
+        const attackOrigin = { x: player.x, y: player.y };
         const enemyHits = this.damageEnemiesFromAttack(attackOrigin, attackerId, direction, targetX, targetY);
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
     }
