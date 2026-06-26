@@ -1567,6 +1567,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.attackSeq = 0;
         ps.axeAttackHitboxActive = false;
         ps.axeWhirlwind = false;
+        ps.axeWhirlwindHitSeq = 0;
         ps.bowCharging = false;
         ps.bowChargeProgress = 0;
         ps.bowChargeSeq = 0;
@@ -1635,6 +1636,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackSeq = 0;
             player.axeAttackHitboxActive = false;
             player.axeWhirlwind = false;
+            player.axeWhirlwindHitSeq = 0;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
             player.bowChargeSeq = 0;
@@ -1878,6 +1880,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
+        player.axeWhirlwindHitSeq++;
         const treeHits = this.damageTreesFromAxeWhirlwind(player.x, player.y, attackerId);
         treeHits.forEach((treeHit) => this.broadcast("treeHit", treeHit));
 
@@ -2605,6 +2608,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         target.reviveProgress = 0;
         target.axeAttackHitboxActive = false;
         target.axeWhirlwind = false;
+        target.axeWhirlwindHitSeq = 0;
         target.bowCharging = false;
         target.bowChargeProgress = 0;
     }
@@ -4198,6 +4202,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.health = 0;
         player.reviveProgress = 0;
         player.axeAttackHitboxActive = false;
+        player.axeWhirlwindHitSeq = 0;
         this.cancelRevive(sid);
         this.checkAllDead();
     }
@@ -4227,6 +4232,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.players.forEach((player) => {
             player.axeAttackHitboxActive = false;
             player.axeWhirlwind = false;
+            player.axeWhirlwindHitSeq = 0;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
         });

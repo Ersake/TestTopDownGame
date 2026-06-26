@@ -35,10 +35,15 @@ const PLAYER_FOOT_RADIUS = 5;
 const PLAYER_FOOT_Y_OFFSET = 32;
 const ENEMY_HITBOX_HW = 28;
 const ENEMY_HITBOX_HH = 28;
+const PLAYER_BULLET_HITBOX_HW = 6;
+const PLAYER_BULLET_HITBOX_HH = 16;
+const ARROW_HITBOX_ROTATION_OFFSET = Phaser.Math.DegToRad(90);
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const TREE_TRUNK_Y_OFFSET = -18;
 const PLAYER_ATTACK_HIT_RADIUS = 33;
+const PLAYER_AXE_WHIRLWIND_HIT_RADIUS = 56;
+const PLAYER_AXE_WHIRLWIND_HITBOX_DEBUG_MS = 120;
 const PLAYER_ATTACK_HIT_START_OFFSET = 10;
 const PLAYER_ATTACK_HIT_END_OFFSET = 40;
 const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
@@ -2052,6 +2057,8 @@ export class Game extends Phaser.Scene {
                 lastAttackSeq: player.attackSeq || 0,
                 axeAttackHitboxActive: !!player.axeAttackHitboxActive,
                 axeWhirlwind: !!player.axeWhirlwind,
+                lastAxeWhirlwindHitSeq: player.axeWhirlwindHitSeq || 0,
+                axeWhirlwindHitboxUntil: 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
@@ -2190,6 +2197,13 @@ export class Game extends Phaser.Scene {
                     this.axeWhirlwindSoundNextAt.set(playerSessionId, 0);
                     this.playPlayerAxeWhirlwindAnimation(playerSessionId, animationState.direction || player.facingDirection || DEFAULT_PLAYER_DIRECTION);
                 }
+            });
+
+            player.listen('axeWhirlwindHitSeq', () => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (!animationState || player.axeWhirlwindHitSeq <= animationState.lastAxeWhirlwindHitSeq) return;
+                animationState.lastAxeWhirlwindHitSeq = player.axeWhirlwindHitSeq;
+                animationState.axeWhirlwindHitboxUntil = this.time.now + PLAYER_AXE_WHIRLWIND_HITBOX_DEBUG_MS;
             });
 
             player.listen('bowCharging', (charging) => {
@@ -2770,10 +2784,10 @@ export class Game extends Phaser.Scene {
                     .setRotation(bullet.angle || 0);
             }
             this.registerWorldObject(sprite);
-            this.playerBulletSprites.set(bulletId, sprite);
+            this.playerBulletSprites.set(bulletId, { sprite, bullet });
 
             bullet.onChange(() => {
-                const s = this.playerBulletSprites.get(bulletId);
+                const s = this.playerBulletSprites.get(bulletId)?.sprite;
                 if (s) {
                     s.x = bullet.x;
                     s.y = bullet.y;
@@ -2786,7 +2800,7 @@ export class Game extends Phaser.Scene {
         state.playerBullets.forEach(addPlayerBullet);
 
         state.playerBullets.onRemove((_bullet, id) => {
-            const s = this.playerBulletSprites.get(id);
+            const s = this.playerBulletSprites.get(id)?.sprite;
             if (s) s.destroy();
             this.playerBulletSprites.delete(id);
         });
@@ -3364,6 +3378,7 @@ export class Game extends Phaser.Scene {
         g.clear();
 
         this.drawPlayerHitboxes(g);
+        this.drawPlayerBulletHitboxes(g);
         this.drawEnemyHitboxes(g);
         this.drawTreeHitboxes(g);
         this.drawCampfireHitboxes(g);
@@ -3383,6 +3398,9 @@ export class Game extends Phaser.Scene {
 
             if (animationState?.axeAttackHitboxActive) {
                 this.drawPlayerAttackHitbox(graphics, x, y, animationState);
+            }
+            if ((animationState?.axeWhirlwindHitboxUntil || 0) > this.time.now) {
+                this.drawPlayerAxeWhirlwindHitbox(graphics, x, y);
             }
         });
     }
@@ -3468,6 +3486,48 @@ export class Game extends Phaser.Scene {
         graphics.strokeCircle(startX, startY, PLAYER_ATTACK_HIT_RADIUS);
         graphics.strokeCircle(endX, endY, PLAYER_ATTACK_HIT_RADIUS);
         graphics.lineBetween(startX, startY, endX, endY);
+    }
+
+    drawPlayerAxeWhirlwindHitbox(graphics, x, y) {
+        graphics.lineStyle(2, 0x66ffff, 0.95);
+        graphics.strokeCircle(x, y, PLAYER_AXE_WHIRLWIND_HIT_RADIUS);
+    }
+
+    drawPlayerBulletHitboxes(graphics) {
+        this.playerBulletSprites.forEach(({ sprite, bullet }) => {
+            if (!sprite?.visible || bullet?.kind !== 'arrow') return;
+            graphics.lineStyle(2, 0x8bdcff, 0.95);
+            this.strokeRotatedRect(
+                graphics,
+                sprite.x,
+                sprite.y,
+                PLAYER_BULLET_HITBOX_HW,
+                PLAYER_BULLET_HITBOX_HH,
+                (bullet.angle || sprite.rotation || 0) + ARROW_HITBOX_ROTATION_OFFSET,
+            );
+        });
+    }
+
+    strokeRotatedRect(graphics, x, y, halfWidth, halfHeight, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const points = [
+            { x: -halfWidth, y: -halfHeight },
+            { x: halfWidth, y: -halfHeight },
+            { x: halfWidth, y: halfHeight },
+            { x: -halfWidth, y: halfHeight },
+        ].map(point => ({
+            x: x + point.x * cos - point.y * sin,
+            y: y + point.x * sin + point.y * cos,
+        }));
+
+        graphics.beginPath();
+        graphics.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            graphics.lineTo(points[i].x, points[i].y);
+        }
+        graphics.closePath();
+        graphics.strokePath();
     }
 
     drawEnemyAttackHitbox(graphics, x, y, direction) {
@@ -4064,6 +4124,7 @@ export class Game extends Phaser.Scene {
         animationState.attacking = false;
         animationState.axeAttackHitboxActive = false;
         animationState.axeWhirlwind = false;
+        animationState.axeWhirlwindHitboxUntil = 0;
         animationState.moving = false;
 
         const direction = animationState.direction || DEFAULT_PLAYER_DIRECTION;
@@ -4087,6 +4148,7 @@ export class Game extends Phaser.Scene {
         animationState.attacking = false;
         animationState.axeAttackHitboxActive = false;
         animationState.axeWhirlwind = false;
+        animationState.axeWhirlwindHitboxUntil = 0;
         animationState.moving = false;
         animationState.bowCharging = false;
         animationState.bowChargeProgress = 0;
@@ -4978,7 +5040,7 @@ export class Game extends Phaser.Scene {
             radius?.destroy();
             healBar?.destroy();
         });
-        this.playerBulletSprites.forEach(s => s.destroy());
+        this.playerBulletSprites.forEach(({ sprite }) => sprite.destroy());
         this.enemyBulletSprites.forEach(s => s.destroy());
         if (this.grassNoiseLayer) {
             this.grassNoiseLayer.destroy();

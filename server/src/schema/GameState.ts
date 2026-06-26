@@ -23,6 +23,7 @@ export class PlayerState extends Schema {
     @type("int32")   attackSeq: number = 0;
     @type("boolean") axeAttackHitboxActive: boolean = false;
     @type("boolean") axeWhirlwind: boolean = false;
+    @type("int32")   axeWhirlwindHitSeq: number = 0;
     @type("boolean") bowCharging: boolean = false;
     @type("float32") bowChargeProgress: number = 0;
     @type("int32")   bowChargeSeq: number = 0;
