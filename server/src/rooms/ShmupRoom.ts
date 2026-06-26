@@ -58,12 +58,13 @@ const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
 const PLAYER_TREE_FOOT_RADIUS = 5;
-const PLAYER_TREE_Y_OFFSET = 36;
+const PLAYER_TREE_Y_OFFSET = 32;
 const PLAYER_BULLET_Y_OFFSET = 56;
 const MAX_PLAYER_MOVE_STEP = 3;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
 const AXE_ATTACK_IMPACT_DELAY_MS = 200;
+const AXE_ATTACK_LINGER_MS = 400;
 const TREE_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
 const ENEMY_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
 const BOW_CHARGE_MS = 1000;
@@ -82,7 +83,7 @@ const FIRST_LEVEL_UP_KILLS = 5;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const REVIVE_HEALTH = 3;
-const ATTACK_HIT_RADIUS = 44;
+const ATTACK_HIT_RADIUS = 33;
 const AXE_WHIRLWIND_RADIUS = 56;
 const AXE_WHIRLWIND_TICK_MS = 500;
 const AXE_WHIRLWIND_DAMAGE = 1;
@@ -391,6 +392,14 @@ interface AttackVector {
     x: number;
     y: number;
 }
+interface ActiveAxeAttack {
+    attackerId: string;
+    direction: string;
+    targetX: unknown;
+    targetY: unknown;
+    remainingMs: number;
+    hitEnemyIds: Set<string>;
+}
 interface TreeHitPayload {
     treeId: string;
     attackerId: string;
@@ -464,6 +473,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverPlayerBullets = new Map<string, ServerBullet>();
     private serverEnemyBullets  = new Map<string, ServerEnemyBullet>();
     private serverTreeHealth    = new Map<string, number>();
+    private activeAxeAttacks: ActiveAxeAttack[] = [];
     private elapsedMs           = 0;
     private lastScheduledEnemyWaveMinute = -1;
     private pendingEnemySpawns: PendingEnemySpawn[] = [];
@@ -559,7 +569,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.applyDelayedTreeAttackImpact(client.sessionId, attackDirection, targetX, targetY);
             }, TREE_ATTACK_IMPACT_DELAY_MS);
             setTimeout(() => {
-                this.applyDelayedEnemyAttackImpact(client.sessionId, attackDirection, targetX, targetY);
+                this.startLingeringAxeEnemyAttack(client.sessionId, attackDirection, targetX, targetY);
             }, ENEMY_ATTACK_IMPACT_DELAY_MS);
         });
 
@@ -1557,6 +1567,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.attackDirection = "N";
         this.initializeHotbar(ps);
         ps.attackSeq = 0;
+        ps.axeAttackHitboxActive = false;
         ps.axeWhirlwind = false;
         ps.bowCharging = false;
         ps.bowChargeProgress = 0;
@@ -1602,6 +1613,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverPlayerBullets.clear();
         this.state.enemyBullets.clear();
         this.serverEnemyBullets.clear();
+        this.activeAxeAttacks = [];
         this.state.logs.clear();
         this.state.woodBlocks.clear();
         this.state.campfires.clear();
@@ -1623,6 +1635,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackDirection = "N";
             this.initializeHotbar(player);
             player.attackSeq = 0;
+            player.axeAttackHitboxActive = false;
             player.axeWhirlwind = false;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
@@ -1765,14 +1778,65 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (treeHit) this.broadcast("treeHit", treeHit);
     }
 
-    private applyDelayedEnemyAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
+    private startLingeringAxeEnemyAttack(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
         const sp = this.serverPlayers.get(attackerId);
         const player = this.state.players.get(attackerId);
         if (!sp || !sp.alive || !player || this.state.gameOver) return;
 
+        const attack: ActiveAxeAttack = {
+            attackerId,
+            direction,
+            targetX,
+            targetY,
+            remainingMs: AXE_ATTACK_LINGER_MS,
+            hitEnemyIds: new Set<string>(),
+        };
+        player.axeAttackHitboxActive = true;
+        this.applyLingeringAxeEnemyAttackImpact(attack);
+        this.activeAxeAttacks.push(attack);
+    }
+
+    private applyLingeringAxeEnemyAttackImpact(attack: ActiveAxeAttack): boolean {
+        const sp = this.serverPlayers.get(attack.attackerId);
+        const player = this.state.players.get(attack.attackerId);
+        if (!sp || !sp.alive || !player || player.isDead || this.state.gameOver) return false;
+
         const attackOrigin = { x: player.x, y: player.y };
-        const enemyHits = this.damageEnemiesFromAttack(attackOrigin, attackerId, direction, targetX, targetY);
+        const enemyHits = this.damageEnemiesFromAttack(
+            attackOrigin,
+            attack.attackerId,
+            attack.direction,
+            attack.targetX,
+            attack.targetY,
+            attack.hitEnemyIds,
+        );
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
+        return true;
+    }
+
+    private tickActiveAxeAttacks(dtMs: number) {
+        if (this.activeAxeAttacks.length <= 0) {
+            this.clearInactiveAxeAttackHitboxFlags(new Set<string>());
+            return;
+        }
+
+        const activeAttacks: ActiveAxeAttack[] = [];
+        const activeAttackerIds = new Set<string>();
+        this.activeAxeAttacks.forEach((attack) => {
+            attack.remainingMs -= dtMs;
+            if (attack.remainingMs <= 0) return;
+            if (!this.applyLingeringAxeEnemyAttackImpact(attack)) return;
+            activeAttacks.push(attack);
+            activeAttackerIds.add(attack.attackerId);
+        });
+        this.activeAxeAttacks = activeAttacks;
+        this.clearInactiveAxeAttackHitboxFlags(activeAttackerIds);
+    }
+
+    private clearInactiveAxeAttackHitboxFlags(activeAttackerIds: Set<string>) {
+        this.state.players.forEach((player, playerId) => {
+            player.axeAttackHitboxActive = activeAttackerIds.has(playerId);
+        });
     }
 
     private damageTreeFromAttack(attackOrigin: AttackOrigin, attackerId: string, direction: string, targetX: unknown, targetY: unknown): TreeHitPayload | null {
@@ -1956,11 +2020,19 @@ export class ShmupRoom extends Room<GameRoomState> {
         return closestTreeId;
     }
 
-    private damageEnemiesFromAttack(attackOrigin: AttackOrigin, attackerId: string, direction: string, targetX: unknown, targetY: unknown): EnemyHitPayload[] {
+    private damageEnemiesFromAttack(
+        attackOrigin: AttackOrigin,
+        attackerId: string,
+        direction: string,
+        targetX: unknown,
+        targetY: unknown,
+        hitEnemyIdsForAttack: Set<string> = new Set<string>(),
+    ): EnemyHitPayload[] {
         const hitEnemyIds = this.findEnemyHitsByAttack(attackOrigin, direction, targetX, targetY);
         const hitPayloads: EnemyHitPayload[] = [];
 
         hitEnemyIds.forEach((enemyId) => {
+            if (hitEnemyIdsForAttack.has(enemyId)) return;
             const enemy = this.state.enemies.get(enemyId);
             if (!enemy) {
                 this.serverEnemies.delete(enemyId);
@@ -1968,6 +2040,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
             if (enemy.isDead) return;
 
+            hitEnemyIdsForAttack.add(enemyId);
             const attacker = this.state.players.get(attackerId);
             const damage = 1 + Math.max(0, attacker?.axeEnemyDamageUpgrades || 0);
             enemy.health = Math.max(0, enemy.health - damage);
@@ -2424,6 +2497,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.tickElapsedTime(dt);
         this.tickPlayers(dtSec, dt);
+        this.tickActiveAxeAttacks(dt);
         this.tickRevives(dt);
         this.tickPlayerBullets(dtSec);
         this.tickEnemyWaves();
@@ -2531,6 +2605,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         target.health = REVIVE_HEALTH;
         target.isDead = false;
         target.reviveProgress = 0;
+        target.axeAttackHitboxActive = false;
         target.axeWhirlwind = false;
         target.bowCharging = false;
         target.bowChargeProgress = 0;
@@ -4114,6 +4189,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.isDead = true;
         player.health = 0;
         player.reviveProgress = 0;
+        player.axeAttackHitboxActive = false;
         this.cancelRevive(sid);
         this.checkAllDead();
     }
@@ -4127,6 +4203,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private startGameOverCountdown() {
         this.state.gameOver = true;
+        this.activeAxeAttacks = [];
         this.gameOverRestartMs = GAME_OVER_RESTART_SECONDS * 1000;
         this.state.gameOverCountdown = GAME_OVER_RESTART_SECONDS;
         this.serverPlayers.forEach((sp) => {
@@ -4140,6 +4217,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.revivingTargetId = null;
         });
         this.state.players.forEach((player) => {
+            player.axeAttackHitboxActive = false;
             player.axeWhirlwind = false;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
