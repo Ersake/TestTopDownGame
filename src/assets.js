@@ -145,6 +145,13 @@ export default {
                 frameHeight: 128,
             }]
         },
+        playerAttack2: {
+            key: 'player-attack-2',
+            args: ['assets/PlayerAttack2.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
         playerBow: {
             key: 'player-bow',
             args: ['assets/PlayerBow.png', {
@@ -168,7 +175,14 @@ export default {
         },
         woodAxeAttack: {
             key: 'wood-axe-attack',
-            args: ['assets/WoodAxeAttack.png', {
+            args: ['assets/WoodAxeAttack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodAxeWhirlwind: {
+            key: 'wood-axe-whirlwind',
+            args: ['assets/WoodAxeAttack2.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

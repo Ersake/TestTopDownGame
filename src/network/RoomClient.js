@@ -122,6 +122,11 @@ class RoomClient {
         this.room.send("bowCancel", {});
     }
 
+    sendAxeWhirlwind(active) {
+        if (!this.room) return;
+        this.room.send("axeWhirlwind", { active: !!active });
+    }
+
     sendEquipSlot(slot) {
         if (!this.room) return;
         this.room.send("equipSlot", { slot });

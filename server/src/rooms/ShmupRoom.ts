@@ -82,6 +82,9 @@ const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const REVIVE_HEALTH = 3;
 const ATTACK_HIT_RADIUS = 44;
+const AXE_WHIRLWIND_RADIUS = 56;
+const AXE_WHIRLWIND_TICK_MS = 500;
+const AXE_WHIRLWIND_DAMAGE = 1;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
@@ -344,6 +347,8 @@ interface ServerPlayer {
     bowChargeY: number;
     bowAimX: number;
     bowAimY: number;
+    axeWhirlwind: boolean;
+    axeWhirlwindTickMs: number;
     revivingTargetId: string | null;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
@@ -575,6 +580,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
             if (sp && player) this.clearBowCharge(player, sp);
+        });
+
+        this.onMessage("axeWhirlwind", (client, data) => {
+            this.setAxeWhirlwind(client.sessionId, !!(data as { active?: unknown })?.active);
         });
 
         this.onMessage("equipSlot", (client, data) => {
@@ -1212,6 +1221,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (player.activeItem !== ITEM_WOOD_BOW) {
             this.clearBowCharge(player, sp);
         }
+        if (player.activeItem !== ITEM_WOOD_AXE) {
+            this.setAxeWhirlwind(sessionId, false);
+        }
     }
 
     private setPlayerOutfitColor(sessionId: string, data: unknown) {
@@ -1498,6 +1510,26 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.bowChargeProgress = 0;
     }
 
+    private setAxeWhirlwind(sessionId: string, active: boolean) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp) return;
+
+        if (!active || !sp.alive || player.isDead || this.state.gameOver || player.activeItem !== ITEM_WOOD_AXE) {
+            sp.axeWhirlwind = false;
+            sp.axeWhirlwindTickMs = 0;
+            player.axeWhirlwind = false;
+            return;
+        }
+
+        this.cancelRevive(sessionId);
+        this.clearBowCharge(player, sp);
+        sp.axeWhirlwind = true;
+        sp.axeWhirlwindTickMs = 0;
+        player.axeWhirlwind = true;
+        player.attackItem = ITEM_WOOD_AXE;
+    }
+
     private getBowAimVector(player: PlayerState, data: unknown): AttackVector {
         const vector = this.getAttackVector(
             { x: player.x, y: player.y },
@@ -1530,6 +1562,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.attackDirection = "N";
         this.initializeHotbar(ps);
         ps.attackSeq = 0;
+        ps.axeWhirlwind = false;
         ps.bowCharging = false;
         ps.bowChargeProgress = 0;
         ps.bowChargeSeq = 0;
@@ -1548,6 +1581,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             bowChargeY: ps.y,
             bowAimX: 0,
             bowAimY: -1,
+            axeWhirlwind: false,
+            axeWhirlwindTickMs: 0,
             revivingTargetId: null,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
@@ -1593,6 +1628,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackDirection = "N";
             this.initializeHotbar(player);
             player.attackSeq = 0;
+            player.axeWhirlwind = false;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
             player.bowChargeSeq = 0;
@@ -1623,6 +1659,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeY = player.y;
             sp.bowAimX = 0;
             sp.bowAimY = -1;
+            sp.axeWhirlwind = false;
+            sp.axeWhirlwindTickMs = 0;
             sp.revivingTargetId = null;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.alive = true;
@@ -1771,6 +1809,118 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.trees.delete(hitTreeId);
         this.serverTreeHealth.delete(hitTreeId);
         return hitPayload;
+    }
+
+    private applyAxeWhirlwindImpact(attackerId: string) {
+        const sp = this.serverPlayers.get(attackerId);
+        const player = this.state.players.get(attackerId);
+        if (!sp || !sp.alive || !player || player.isDead || this.state.gameOver || player.activeItem !== ITEM_WOOD_AXE) {
+            if (player && sp) this.setAxeWhirlwind(attackerId, false);
+            return;
+        }
+
+        const treeHits = this.damageTreesFromAxeWhirlwind(player.x, player.y, attackerId);
+        treeHits.forEach((treeHit) => this.broadcast("treeHit", treeHit));
+
+        const enemyHits = this.damageEnemiesFromAxeWhirlwind(player.x, player.y, attackerId);
+        enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
+    }
+
+    private damageTreesFromAxeWhirlwind(x: number, y: number, attackerId: string): TreeHitPayload[] {
+        const hitPayloads: TreeHitPayload[] = [];
+        const hitTreeIds: string[] = [];
+
+        this.state.trees.forEach((tree, id) => {
+            const hitbox = this.getTreeHitbox(tree);
+            const dx = x - hitbox.x;
+            const dy = y - hitbox.y;
+            const radius = AXE_WHIRLWIND_RADIUS + hitbox.radius;
+            if (dx * dx + dy * dy <= radius * radius) hitTreeIds.push(id);
+        });
+
+        hitTreeIds.forEach((treeId) => {
+            const tree = this.state.trees.get(treeId);
+            if (!tree) {
+                this.serverTreeHealth.delete(treeId);
+                return;
+            }
+
+            const nextHealth = Math.max(0, (this.serverTreeHealth.get(treeId) ?? TREE_HEALTH) - AXE_WHIRLWIND_DAMAGE);
+            hitPayloads.push({
+                treeId,
+                attackerId,
+                x: tree.x,
+                y: tree.y,
+                remainingHealth: nextHealth,
+            });
+
+            if (nextHealth > 0) {
+                this.serverTreeHealth.set(treeId, nextHealth);
+                return;
+            }
+
+            this.spawnLogsForTree(tree);
+            this.awardPlayerExperience(attackerId, 1);
+            this.state.trees.delete(treeId);
+            this.serverTreeHealth.delete(treeId);
+        });
+
+        return hitPayloads;
+    }
+
+    private damageEnemiesFromAxeWhirlwind(x: number, y: number, attackerId: string): EnemyHitPayload[] {
+        const hitPayloads: EnemyHitPayload[] = [];
+        const hitEnemyIds: string[] = [];
+
+        this.state.enemies.forEach((enemy, id) => {
+            if (enemy.isDead) return;
+            if (!circleOverlapsAabb(
+                x,
+                y,
+                AXE_WHIRLWIND_RADIUS,
+                enemy.x,
+                enemy.y,
+                ENEMY_MELEE_HIT_HW,
+                ENEMY_MELEE_HIT_HH,
+            )) return;
+            hitEnemyIds.push(id);
+        });
+
+        hitEnemyIds.forEach((enemyId) => {
+            const enemy = this.state.enemies.get(enemyId);
+            if (!enemy) {
+                this.serverEnemies.delete(enemyId);
+                return;
+            }
+            if (enemy.isDead) return;
+
+            enemy.health = Math.max(0, enemy.health - AXE_WHIRLWIND_DAMAGE);
+            if (enemy.health > 0) {
+                enemy.damageSeq++;
+                const se = this.serverEnemies.get(enemyId);
+                if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
+                    se.mode = "stun";
+                    se.modeMs = ENEMY_HIT_STUN_MS;
+                    enemy.action = "idle";
+                }
+            }
+
+            hitPayloads.push({
+                enemyId,
+                attackerId,
+                x: enemy.x,
+                y: enemy.y,
+                remainingHealth: enemy.health,
+            });
+
+            if (enemy.health <= 0) {
+                this.awardPlayerKill(attackerId, enemy);
+                this.state.teamScore += 10;
+                this.killEnemy(enemyId, enemy);
+            }
+        });
+
+        return hitPayloads;
     }
 
     private findTreeHitByAttack(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string | null {
@@ -2378,10 +2528,13 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.bowChargeY = target.y;
         targetSp.bowAimX = 0;
         targetSp.bowAimY = -1;
+        targetSp.axeWhirlwind = false;
+        targetSp.axeWhirlwindTickMs = 0;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
         target.isDead = false;
         target.reviveProgress = 0;
+        target.axeWhirlwind = false;
         target.bowCharging = false;
         target.bowChargeProgress = 0;
     }
@@ -2416,6 +2569,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
             }
 
+            if (sp.axeWhirlwind && (player.activeItem !== ITEM_WOOD_AXE || player.isDead || this.state.gameOver)) {
+                this.setAxeWhirlwind(sid, false);
+            }
+
             if (isAttackLocked) {
                 sp.vx = 0;
                 sp.vy = 0;
@@ -2435,6 +2592,14 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
                 player.x = resolved.x;
                 player.y = resolved.y;
+            }
+
+            if (sp.axeWhirlwind) {
+                sp.axeWhirlwindTickMs -= dtMs;
+                while (sp.axeWhirlwind && sp.axeWhirlwindTickMs <= 0) {
+                    this.applyAxeWhirlwindImpact(sid);
+                    sp.axeWhirlwindTickMs += AXE_WHIRLWIND_TICK_MS;
+                }
             }
 
             sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
@@ -3947,6 +4112,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.vx = 0;
         sp.vy = 0;
         this.clearBowCharge(player, sp);
+        this.setAxeWhirlwind(sid, false);
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
         player.health = 0;
@@ -3971,10 +4137,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.vy = 0;
             sp.bowCharging = false;
             sp.bowChargeMs = 0;
+            sp.axeWhirlwind = false;
+            sp.axeWhirlwindTickMs = 0;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.revivingTargetId = null;
         });
         this.state.players.forEach((player) => {
+            player.axeWhirlwind = false;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
         });
