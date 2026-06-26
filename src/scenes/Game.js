@@ -1076,12 +1076,14 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.axe).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.axeRunAttack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.axeWhirlwind).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.bow).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.die).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeIdle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeRun).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeAttack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodAxeRunAttack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeWhirlwind).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodBowIdle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodBowRun).forEach(animation => this.createAnimation(animation));
@@ -3709,22 +3711,22 @@ export class Game extends Phaser.Scene {
         return this.getDirectionFromVector(worldPoint.x - origin.x, worldPoint.y - origin.y) || fallbackDirection;
     }
 
-    getPlayerAttackMode(item) {
-        if (item === ITEM_WOOD_AXE) return 'axe';
+    getPlayerAttackMode(item, moving = false) {
+        if (item === ITEM_WOOD_AXE) return moving ? 'axeRunAttack' : 'axe';
         if (item === ITEM_WOOD_BOW) return 'bow';
         return null;
     }
 
     getWeaponAnimationGroup(item, mode = 'idle') {
         if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
-        const suffix = mode === 'whirlwind' ? 'Whirlwind' : mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
+        const suffix = mode === 'whirlwind' ? 'Whirlwind' : mode === 'runAttack' ? 'RunAttack' : mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ANIMATION.weapon[`${prefix}${suffix}`];
     }
 
     getWeaponTextureKey(item, mode = 'idle') {
         if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
-        const suffix = mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
+        const suffix = mode === 'runAttack' ? 'RunAttack1' : mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodAxeIdle.key;
     }
@@ -3793,19 +3795,24 @@ export class Game extends Phaser.Scene {
         return true;
     }
 
-    playPlayerWeaponAnimation(sessionId, item, direction, { restart = false, preserveProgress = false } = {}) {
+    playPlayerWeaponAnimation(sessionId, item, direction, { mode = 'attack', restart = false, preserveProgress = false } = {}) {
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
         if (!weapon || !animationState || !weapon.visible) return false;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
-        const animation = this.getWeaponAnimationGroup(item, 'attack')?.[nextDirection];
+        const animation = this.getWeaponAnimationGroup(item, mode)?.[nextDirection];
         if (!animation) return false;
 
         weapon.setVisible(true);
         this.playDirectionalAnimation(weapon, animation.key, { restart, preserveProgress });
 
         return true;
+    }
+
+    isLocalMovementInputActive() {
+        if (!this.keys) return false;
+        return !!(this.keys.left?.isDown || this.keys.right?.isDown || this.keys.up?.isDown || this.keys.down?.isDown);
     }
 
     playPlayerAxeWhirlwindAnimation(sessionId, direction, { preserveProgress = true } = {}) {
@@ -3897,9 +3904,13 @@ export class Game extends Phaser.Scene {
         if (animationState.attacking && !allowWhileCharging && !restart) return;
         animationState.attacking = true;
 
-        const attackMode = this.getPlayerAttackMode(attackItem);
+        const useRunAttack = attackItem === ITEM_WOOD_AXE
+            && !animationState.bowCharging
+            && (animationState.moving || (this.isLocalSession(sessionId) && this.isLocalMovementInputActive()));
+        const attackMode = this.getPlayerAttackMode(attackItem, useRunAttack);
+        const weaponAttackMode = useRunAttack ? 'runAttack' : 'attack';
         const didPlay = this.playPlayerAnimation(sessionId, attackMode, direction, { force: true, restart, preserveProgress });
-        const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { restart, preserveProgress });
+        const didPlayWeapon = this.playPlayerWeaponAnimation(sessionId, attackItem, direction, { mode: weaponAttackMode, restart, preserveProgress });
         if (!didPlay) {
             animationState.attacking = false;
             return;

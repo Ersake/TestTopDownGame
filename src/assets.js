@@ -145,6 +145,13 @@ export default {
                 frameHeight: 128,
             }]
         },
+        playerRunAttack1: {
+            key: 'player-run-attack-1',
+            args: ['assets/PlayerRunAttack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
         playerAttack2: {
             key: 'player-attack-2',
             args: ['assets/PlayerAttack2.png', {
@@ -176,6 +183,13 @@ export default {
         woodAxeAttack: {
             key: 'wood-axe-attack',
             args: ['assets/WoodAxeAttack1.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodAxeRunAttack1: {
+            key: 'wood-axe-run-attack-1',
+            args: ['assets/WoodAxeRunAttack1.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

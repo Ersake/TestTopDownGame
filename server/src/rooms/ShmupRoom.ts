@@ -550,12 +550,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackDirection = attackDirection;
             player.attackItem = attackItem;
             player.attackSeq++;
-            sp.attackLockMs = ATTACK_LOCK_MS;
-            sp.attackLockX = player.x;
-            sp.attackLockY = player.y;
             sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
-            sp.vx = 0;
-            sp.vy = 0;
             const attackOrigin = { x: player.x, y: player.y };
             const targetX = data?.targetX;
             const targetY = data?.targetY;
