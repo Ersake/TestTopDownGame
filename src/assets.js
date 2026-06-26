@@ -4,6 +4,10 @@ export default {
             key: 'punch-whoosh',
             args: ['assets/jofae-swing-whoosh-110410.mp3']
         },
+        swordSpin: {
+            key: 'sword-spin',
+            args: ['assets/swordspin.mp3']
+        },
         arrowPull: {
             key: 'arrow-pull',
             args: ['assets/arrowpull.mp3']

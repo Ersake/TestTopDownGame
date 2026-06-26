@@ -140,6 +140,9 @@ const GRASS_NOISE_PATCH_COUNT = 24;
 const GRASS_NOISE_FLECK_COUNT = 460;
 const PUNCH_SOUND_VOLUME = 0.6;
 const AXE_ATTACK_HIT_SOUND_DELAY_MS = 200;
+const SWORD_SPIN_SOUND_VOLUME = 0.48;
+const SWORD_SPIN_HIGH_PASS_HZ = 180;
+const AXE_WHIRLWIND_SOUND_INTERVAL_MS = 500;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
@@ -287,6 +290,7 @@ export class Game extends Phaser.Scene {
         this.updateBowChargeAim();
         this.updateHeldAttack();
         this.updateAxeWhirlwind();
+        this.updateAxeWhirlwindSounds();
         this.updateBuildHold();
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
@@ -415,6 +419,7 @@ export class Game extends Phaser.Scene {
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.activeSfxStacks = new Map();
+        this.axeWhirlwindSoundNextAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.suppressResetEffectsUntil = 0;
         this.isTabActive = this.isDocumentActive();
@@ -2176,11 +2181,15 @@ export class Game extends Phaser.Scene {
                         this.axeWhirlwindPointerId = null;
                         this.axeWhirlwindPointer = null;
                     }
+                    this.axeWhirlwindSoundNextAt.delete(playerSessionId);
                     this.clearAxeWhirlwindPresentationState(playerSessionId, { updateAnimation: true });
                     return;
                 }
                 animationState.attackItem = ITEM_WOOD_AXE;
-                this.playPlayerAxeWhirlwindAnimation(playerSessionId, animationState.direction || player.facingDirection || DEFAULT_PLAYER_DIRECTION);
+                if (!this.axeWhirlwindSoundNextAt.has(playerSessionId)) {
+                    this.axeWhirlwindSoundNextAt.set(playerSessionId, 0);
+                    this.playPlayerAxeWhirlwindAnimation(playerSessionId, animationState.direction || player.facingDirection || DEFAULT_PLAYER_DIRECTION);
+                }
             });
 
             player.listen('bowCharging', (charging) => {
@@ -2388,6 +2397,7 @@ export class Game extends Phaser.Scene {
             this.playerSprites.delete(sessionId);
             this.playerWeaponSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
+            this.axeWhirlwindSoundNextAt.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
             this.playerBowChargeBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
@@ -3583,6 +3593,11 @@ export class Game extends Phaser.Scene {
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.dead || this.isBuildModeActive) return;
         if (animationState.activeItem !== ITEM_WOOD_AXE) return;
+        if (animationState.axeWhirlwind) {
+            this.axeWhirlwindPointerId = pointer.id;
+            this.axeWhirlwindPointer = pointer;
+            return;
+        }
 
         this.stopHeldAttack();
         this.cancelBowCharge();
@@ -3600,6 +3615,7 @@ export class Game extends Phaser.Scene {
         animationState.attackTargetY = null;
         sprite.anims.stop();
         this.playerWeaponSprites.get(sessionId)?.anims?.stop();
+        this.axeWhirlwindSoundNextAt.set(sessionId, 0);
         RoomClient.sendAxeWhirlwind(true);
         this.playPlayerAxeWhirlwindAnimation(sessionId, direction);
     }
@@ -3610,6 +3626,7 @@ export class Game extends Phaser.Scene {
         RoomClient.sendAxeWhirlwind(false);
         this.axeWhirlwindPointerId = null;
         this.axeWhirlwindPointer = null;
+        if (this.localSessionId) this.axeWhirlwindSoundNextAt.delete(this.localSessionId);
         if (animationState) {
             animationState.axeWhirlwind = false;
             this.clearAxeWhirlwindPresentationState(this.localSessionId, { updateAnimation: true });
@@ -3696,6 +3713,33 @@ export class Game extends Phaser.Scene {
         if (!this.isRightMouseButtonDown(this.axeWhirlwindPointer) || animationState?.activeItem !== ITEM_WOOD_AXE || animationState?.dead) {
             this.stopAxeWhirlwind();
         }
+    }
+
+    updateAxeWhirlwindSounds() {
+        const now = this.time.now;
+        this.playerAnimationState.forEach((animationState, sessionId) => {
+            if (!animationState.axeWhirlwind || animationState.dead) {
+                this.axeWhirlwindSoundNextAt.delete(sessionId);
+                return;
+            }
+
+            const nextAt = this.axeWhirlwindSoundNextAt.get(sessionId) ?? 0;
+            if (now < nextAt) return;
+            if (!this.shouldPlayAttackAudio(sessionId)) {
+                this.axeWhirlwindSoundNextAt.set(sessionId, now + AXE_WHIRLWIND_SOUND_INTERVAL_MS);
+                return;
+            }
+
+            const sprite = this.playerSprites.get(sessionId);
+            if (!sprite) return;
+            this.playSfx(ASSETS.audio.swordSpin.key, SWORD_SPIN_SOUND_VOLUME, {
+                spatial: !this.isLocalSession(sessionId),
+                worldX: sprite.x,
+                worldY: sprite.y,
+                highPassHz: SWORD_SPIN_HIGH_PASS_HZ,
+            });
+            this.axeWhirlwindSoundNextAt.set(sessionId, now + AXE_WHIRLWIND_SOUND_INTERVAL_MS);
+        });
     }
 
     isRightMouseButtonDown(pointer = null) {
@@ -4117,6 +4161,7 @@ export class Game extends Phaser.Scene {
         stackVolumeMultiplier = 1,
         groupKey = null,
         groupWindowMs = 0,
+        highPassHz = null,
     } = {}) {
         if (serverEvent && !this.shouldPlayServerEventAudio()) return null;
 
@@ -4162,7 +4207,41 @@ export class Game extends Phaser.Scene {
             cleanup();
             return null;
         }
+
+        const filterNode = this.applyHighPassFilter(sound, highPassHz);
+        if (filterNode) {
+            const disconnectFilter = () => {
+                try {
+                    filterNode.disconnect();
+                } catch (_error) {
+                    // The browser may already disconnect nodes when the sound is destroyed.
+                }
+            };
+            sound.once('complete', disconnectFilter);
+            sound.once('stop', disconnectFilter);
+        }
         return sound;
+    }
+
+    applyHighPassFilter(sound, highPassHz) {
+        if (!Number.isFinite(highPassHz) || highPassHz <= 0) return null;
+        const context = sound?.manager?.context;
+        const source = sound?.source;
+        const destination = sound?.muteNode;
+        if (!context?.createBiquadFilter || !source?.disconnect || !source?.connect || !destination) return null;
+
+        try {
+            const filter = context.createBiquadFilter();
+            filter.type = 'highpass';
+            filter.frequency.value = highPassHz;
+            filter.Q.value = 0.7;
+            source.disconnect();
+            source.connect(filter);
+            filter.connect(destination);
+            return filter;
+        } catch (_error) {
+            return null;
+        }
     }
 
     updateSfxStackVolumes(stackKey) {
@@ -4869,6 +4948,7 @@ export class Game extends Phaser.Scene {
             label.destroy();
         });
         this.offscreenPlayerIndicators.forEach(indicator => indicator.destroy());
+        this.axeWhirlwindSoundNextAt.clear();
         this.enemySprites.forEach(s => s.destroy());
         this.casterChargeEffects.forEach(effect => effect.destroy());
         this.enemyHealthBars.forEach(({ background, fill }) => {
