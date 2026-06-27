@@ -40,6 +40,7 @@ const MAP_EDITOR_MODE = "map-editor";
 const MAP_CHUNK_ENCODED_BYTES = MAP_CHUNK_CELL_COUNT * 2;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil(MAP_CHUNK_ENCODED_BYTES / 3) * 4;
 const MAP_SAVE_VERSION = 1;
+const PRODUCTION_GAME_MAP_NAME = "lvlone";
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
@@ -516,8 +517,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         const state = new GameRoomState();
         const mapEditorRequested = options.mode === MAP_EDITOR_MODE;
         const isMapEditor = mapEditorRequested && process.env.NODE_ENV !== "production";
-        const requestedMapName = !isMapEditor && process.env.NODE_ENV !== "production"
-            ? normalizeMapName(options.mapName)
+        const requestedMapName = !isMapEditor
+            ? process.env.NODE_ENV === "production"
+                ? PRODUCTION_GAME_MAP_NAME
+                : normalizeMapName(options.mapName)
             : null;
         state.mode = isMapEditor ? MAP_EDITOR_MODE : "game";
         state.worldWidth = isMapEditor ? EDITOR_WORLD_WIDTH : WORLD_WIDTH;
