@@ -86,6 +86,7 @@ const REVIVE_HEALTH = 3;
 const ATTACK_HIT_RADIUS = 33;
 const AXE_WHIRLWIND_RADIUS = 56;
 const AXE_WHIRLWIND_TICK_MS = 500;
+const AXE_WHIRLWIND_RESTART_COOLDOWN_MS = AXE_WHIRLWIND_TICK_MS;
 const AXE_WHIRLWIND_DAMAGE = 1;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
@@ -349,6 +350,7 @@ interface ServerPlayer {
     bowAimY: number;
     axeWhirlwind: boolean;
     axeWhirlwindTickMs: number;
+    axeWhirlwindRestartCooldownMs: number;
     revivingTargetId: string | null;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
@@ -1524,11 +1526,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.axeWhirlwind = false;
             return;
         }
+        if (sp.axeWhirlwind || sp.axeWhirlwindRestartCooldownMs > 0) return;
 
         this.cancelRevive(sessionId);
         this.clearBowCharge(player, sp);
         sp.axeWhirlwind = true;
         sp.axeWhirlwindTickMs = 0;
+        sp.axeWhirlwindRestartCooldownMs = AXE_WHIRLWIND_RESTART_COOLDOWN_MS;
         player.axeWhirlwind = true;
         player.attackItem = ITEM_WOOD_AXE;
     }
@@ -1588,6 +1592,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             bowAimY: -1,
             axeWhirlwind: false,
             axeWhirlwindTickMs: 0,
+            axeWhirlwindRestartCooldownMs: 0,
             revivingTargetId: null,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
@@ -1669,6 +1674,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowAimY = -1;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
+            sp.axeWhirlwindRestartCooldownMs = 0;
             sp.revivingTargetId = null;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.alive = true;
@@ -2602,6 +2608,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.bowAimY = -1;
         targetSp.axeWhirlwind = false;
         targetSp.axeWhirlwindTickMs = 0;
+        targetSp.axeWhirlwindRestartCooldownMs = 0;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
         target.isDead = false;
@@ -2622,6 +2629,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const isAttackLocked = sp.attackLockMs > 0;
             sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
             sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
+            sp.axeWhirlwindRestartCooldownMs = Math.max(0, sp.axeWhirlwindRestartCooldownMs - dtMs);
 
             const inputX = Number(right) - Number(left);
             const inputY = Number(down) - Number(up);
@@ -4226,6 +4234,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeMs = 0;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
+            sp.axeWhirlwindRestartCooldownMs = 0;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.revivingTargetId = null;
         });

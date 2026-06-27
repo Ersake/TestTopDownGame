@@ -37,6 +37,8 @@ const ENEMY_HITBOX_HW = 28;
 const ENEMY_HITBOX_HH = 28;
 const PLAYER_BULLET_HITBOX_HW = 6;
 const PLAYER_BULLET_HITBOX_HH = 16;
+const ENEMY_BULLET_HITBOX_HW = 8;
+const ENEMY_BULLET_HITBOX_HH = 12;
 const ARROW_HITBOX_ROTATION_OFFSET = Phaser.Math.DegToRad(90);
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
@@ -148,6 +150,7 @@ const AXE_ATTACK_HIT_SOUND_DELAY_MS = 200;
 const SWORD_SPIN_SOUND_VOLUME = 0.48;
 const SWORD_SPIN_HIGH_PASS_HZ = 180;
 const AXE_WHIRLWIND_SOUND_INTERVAL_MS = 500;
+const AXE_WHIRLWIND_RESTART_COOLDOWN_MS = AXE_WHIRLWIND_SOUND_INTERVAL_MS;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
@@ -413,6 +416,7 @@ export class Game extends Phaser.Scene {
         this.bowChargePointer = null;
         this.nextBowAimSendAt = 0;
         this.nextHeldAttackAt = 0;
+        this.nextAxeWhirlwindAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
         this.cameraZoom = CAMERA_MIN_ZOOM;
@@ -2826,10 +2830,10 @@ export class Game extends Phaser.Scene {
                 sprite.setFlipY(true);
             }
             this.registerWorldObject(sprite);
-            this.enemyBulletSprites.set(bulletId, sprite);
+            this.enemyBulletSprites.set(bulletId, { sprite, bullet });
 
             bullet.onChange(() => {
-                const s = this.enemyBulletSprites.get(bulletId);
+                const s = this.enemyBulletSprites.get(bulletId)?.sprite;
                 if (s) {
                     s.x = bullet.x;
                     s.y = bullet.y;
@@ -2842,7 +2846,7 @@ export class Game extends Phaser.Scene {
         state.enemyBullets.forEach(addEnemyBullet);
 
         state.enemyBullets.onRemove((_bullet, id) => {
-            const s = this.enemyBulletSprites.get(id);
+            const s = this.enemyBulletSprites.get(id)?.sprite;
             if (s) s.destroy();
             this.enemyBulletSprites.delete(id);
         });
@@ -3379,6 +3383,7 @@ export class Game extends Phaser.Scene {
 
         this.drawPlayerHitboxes(g);
         this.drawPlayerBulletHitboxes(g);
+        this.drawEnemyBulletHitboxes(g);
         this.drawEnemyHitboxes(g);
         this.drawTreeHitboxes(g);
         this.drawCampfireHitboxes(g);
@@ -3504,6 +3509,19 @@ export class Game extends Phaser.Scene {
                 PLAYER_BULLET_HITBOX_HW,
                 PLAYER_BULLET_HITBOX_HH,
                 (bullet.angle || sprite.rotation || 0) + ARROW_HITBOX_ROTATION_OFFSET,
+            );
+        });
+    }
+
+    drawEnemyBulletHitboxes(graphics) {
+        this.enemyBulletSprites.forEach(({ sprite, bullet }) => {
+            if (!sprite?.visible || bullet?.kind !== 'fireball') return;
+            graphics.lineStyle(2, 0xff7744, 0.95);
+            graphics.strokeRect(
+                bullet.x - ENEMY_BULLET_HITBOX_HW,
+                bullet.y - ENEMY_BULLET_HITBOX_HH,
+                ENEMY_BULLET_HITBOX_HW * 2,
+                ENEMY_BULLET_HITBOX_HH * 2,
             );
         });
     }
@@ -3658,6 +3676,7 @@ export class Game extends Phaser.Scene {
             this.axeWhirlwindPointer = pointer;
             return;
         }
+        if (this.time.now < this.nextAxeWhirlwindAt) return;
 
         this.stopHeldAttack();
         this.cancelBowCharge();
@@ -3676,6 +3695,7 @@ export class Game extends Phaser.Scene {
         sprite.anims.stop();
         this.playerWeaponSprites.get(sessionId)?.anims?.stop();
         this.axeWhirlwindSoundNextAt.set(sessionId, 0);
+        this.nextAxeWhirlwindAt = this.time.now + AXE_WHIRLWIND_RESTART_COOLDOWN_MS;
         RoomClient.sendAxeWhirlwind(true);
         this.playPlayerAxeWhirlwindAnimation(sessionId, direction);
     }
@@ -5041,7 +5061,7 @@ export class Game extends Phaser.Scene {
             healBar?.destroy();
         });
         this.playerBulletSprites.forEach(({ sprite }) => sprite.destroy());
-        this.enemyBulletSprites.forEach(s => s.destroy());
+        this.enemyBulletSprites.forEach(({ sprite }) => sprite.destroy());
         if (this.grassNoiseLayer) {
             this.grassNoiseLayer.destroy();
             this.grassNoiseLayer = null;
@@ -5094,6 +5114,7 @@ export class Game extends Phaser.Scene {
         this.resetBuildDragState();
         this.stopHeldAttack();
         this.cancelBowCharge();
+        this.nextAxeWhirlwindAt = 0;
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();
         this.playerAnimationState.clear();
