@@ -175,7 +175,6 @@ const AXE_ATTACK_HIT_SOUND_DELAY_MS = 200;
 const SWORD_SPIN_SOUND_VOLUME = 0.48;
 const SWORD_SPIN_HIGH_PASS_HZ = 180;
 const AXE_WHIRLWIND_SOUND_INTERVAL_MS = 500;
-const AXE_WHIRLWIND_RESTART_COOLDOWN_MS = AXE_WHIRLWIND_SOUND_INTERVAL_MS;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
@@ -232,6 +231,10 @@ const HOTBAR_BOTTOM_GAP = 12;
 const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
 const HOTBAR_DRAG_START_DISTANCE = 6;
+const HOTBAR_COOLDOWN_OVERLAY_COLOR = 0x000000;
+const HOTBAR_COOLDOWN_OVERLAY_ALPHA = 0.55;
+const HOTBAR_ACTIVE_OVERLAY_COLOR = 0xffffff;
+const HOTBAR_ACTIVE_OVERLAY_ALPHA = 0.42;
 const OUTFIT_TAN_INDEX = 4;
 const OUTFIT_COLOR_BUTTON_RADIUS = 11;
 const OUTFIT_COLOR_BUTTON_X = 40;
@@ -417,6 +420,8 @@ export class Game extends Phaser.Scene {
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
         this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
         this.hotbarDrag = null;
+        this.localAxeWhirlwindProgress = 0;
+        this.localAxeWhirlwindCooldownProgress = 0;
         this.upgradeUiMode = 'root';
         this.upgradeUiObjects = [];
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
@@ -489,7 +494,6 @@ export class Game extends Phaser.Scene {
         this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
         this.nextHeldAttackAt = 0;
-        this.nextAxeWhirlwindAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
         this.cameraZoom = CAMERA_MIN_ZOOM;
@@ -883,6 +887,8 @@ export class Game extends Phaser.Scene {
             slot.icon?.destroy();
             slot.label?.destroy();
             slot.countLabel?.destroy();
+            slot.cooldownOverlay?.destroy();
+            slot.activeOverlay?.destroy();
         });
         this.hotbarSlots = [];
 
@@ -925,12 +931,19 @@ export class Game extends Phaser.Scene {
                     stroke: '#000000', strokeThickness: 3,
                 }).setOrigin(1, 0.5).setDepth(UI_DEPTH + 6).setScrollFactor(0)
                 : null;
+            const cooldownOverlay = this.add.graphics()
+                .setDepth(UI_DEPTH + 7)
+                .setScrollFactor(0);
+            const activeOverlay = this.add.graphics()
+                .setDepth(UI_DEPTH + 8)
+                .setScrollFactor(0);
 
-            this.hotbarSlots.push({ box, icon, label, countLabel, slot });
-            this.registerFixedUi(box, icon, label, countLabel);
+            this.hotbarSlots.push({ box, icon, label, countLabel, cooldownOverlay, activeOverlay, slot });
+            this.registerFixedUi(box, icon, label, countLabel, cooldownOverlay, activeOverlay);
         }
 
         this.updateHotbarSelection();
+        this.updateHotbarAxeOverlays();
     }
 
     beginHotbarDrag(slot, pointer) {
@@ -1023,9 +1036,38 @@ export class Game extends Phaser.Scene {
         return slot?.slot || 0;
     }
 
+    updateHotbarAxeOverlays() {
+        const activeProgress = Phaser.Math.Clamp(this.localAxeWhirlwindProgress || 0, 0, 1);
+        const cooldownProgress = Phaser.Math.Clamp(this.localAxeWhirlwindCooldownProgress || 0, 0, 1);
+        this.hotbarSlots.forEach(({ box, cooldownOverlay, activeOverlay, slot }) => {
+            if (!cooldownOverlay) return;
+            cooldownOverlay.clear();
+            activeOverlay?.clear();
+            if (!box || this.getItemForHotbarSlot(slot) !== ITEM_WOOD_AXE) return;
+
+            const x = box.x - HOTBAR_SLOT_SIZE * 0.5;
+            const bottomY = box.y + HOTBAR_SLOT_SIZE * 0.5;
+            if (cooldownProgress > 0) {
+                const height = HOTBAR_SLOT_SIZE * cooldownProgress;
+                cooldownOverlay.fillStyle(HOTBAR_COOLDOWN_OVERLAY_COLOR, HOTBAR_COOLDOWN_OVERLAY_ALPHA);
+                cooldownOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
+            }
+            if (activeOverlay && activeProgress > 0) {
+                const height = HOTBAR_SLOT_SIZE * activeProgress;
+                activeOverlay.fillStyle(HOTBAR_ACTIVE_OVERLAY_COLOR, HOTBAR_ACTIVE_OVERLAY_ALPHA);
+                activeOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
+            }
+        });
+    }
+
     isHotbarGameObject(gameObject) {
-        return this.hotbarSlots.some(({ box, icon, label, countLabel }) => (
-            gameObject === box || gameObject === icon || gameObject === label || gameObject === countLabel
+        return this.hotbarSlots.some(({ box, icon, label, countLabel, cooldownOverlay, activeOverlay }) => (
+            gameObject === box
+            || gameObject === icon
+            || gameObject === label
+            || gameObject === countLabel
+            || gameObject === cooldownOverlay
+            || gameObject === activeOverlay
         ));
     }
 
@@ -1052,6 +1094,7 @@ export class Game extends Phaser.Scene {
         this.initHotbar();
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
+        this.updateHotbarAxeOverlays();
     }
 
     addCraftingUiObject(object) {
@@ -2614,6 +2657,8 @@ export class Game extends Phaser.Scene {
                 lastAttackSeq: player.attackSeq || 0,
                 axeAttackHitboxActive: !!player.axeAttackHitboxActive,
                 axeWhirlwind: !!player.axeWhirlwind,
+                axeWhirlwindProgress: player.axeWhirlwindProgress || 0,
+                axeWhirlwindCooldownProgress: player.axeWhirlwindCooldownProgress || 0,
                 lastAxeWhirlwindHitSeq: player.axeWhirlwindHitSeq || 0,
                 axeWhirlwindHitboxUntil: 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
@@ -2763,6 +2808,26 @@ export class Game extends Phaser.Scene {
                 animationState.axeWhirlwindHitboxUntil = this.time.now + PLAYER_AXE_WHIRLWIND_HITBOX_DEBUG_MS;
             });
 
+            player.listen('axeWhirlwindProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localAxeWhirlwindProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
+            });
+
+            player.listen('axeWhirlwindCooldownProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindCooldownProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localAxeWhirlwindCooldownProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
+            });
+
             player.listen('bowCharging', (charging) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (!animationState) return;
@@ -2880,6 +2945,8 @@ export class Game extends Phaser.Scene {
                 this.updateHudHealthBar(player.health, player.maxHealth);
                 this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
+                this.localAxeWhirlwindProgress = Phaser.Math.Clamp(player.axeWhirlwindProgress || 0, 0, 1);
+                this.localAxeWhirlwindCooldownProgress = Phaser.Math.Clamp(player.axeWhirlwindCooldownProgress || 0, 0, 1);
                 this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
@@ -4317,33 +4384,19 @@ export class Game extends Phaser.Scene {
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.dead || this.isBuildModeActive) return;
         if (animationState.activeItem !== ITEM_WOOD_AXE) return;
+        if ((animationState.axeWhirlwindCooldownProgress || this.localAxeWhirlwindCooldownProgress || 0) > 0) return;
         if (animationState.axeWhirlwind) {
             this.axeWhirlwindPointerId = pointer.id;
             this.axeWhirlwindPointer = pointer;
             return;
         }
-        if (this.time.now < this.nextAxeWhirlwindAt) return;
 
         this.stopHeldAttack();
         this.cancelBowCharge();
 
-        const worldPoint = this.getPointerWorldPoint(pointer);
-        const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
-        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
-
         this.axeWhirlwindPointerId = pointer.id;
         this.axeWhirlwindPointer = pointer;
-        animationState.axeWhirlwind = true;
-        animationState.attackItem = ITEM_WOOD_AXE;
-        animationState.attacking = false;
-        animationState.attackTargetX = null;
-        animationState.attackTargetY = null;
-        sprite.anims.stop();
-        this.playerWeaponSprites.get(sessionId)?.anims?.stop();
-        this.axeWhirlwindSoundNextAt.set(sessionId, 0);
-        this.nextAxeWhirlwindAt = this.time.now + AXE_WHIRLWIND_RESTART_COOLDOWN_MS;
         RoomClient.sendAxeWhirlwind(true);
-        this.playPlayerAxeWhirlwindAnimation(sessionId, direction);
     }
 
     stopAxeWhirlwind() {
@@ -5818,7 +5871,9 @@ export class Game extends Phaser.Scene {
         this.resetBuildDragState();
         this.stopHeldAttack();
         this.cancelBowCharge();
-        this.nextAxeWhirlwindAt = 0;
+        this.localAxeWhirlwindProgress = 0;
+        this.localAxeWhirlwindCooldownProgress = 0;
+        this.updateHotbarAxeOverlays();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();
         this.playerAnimationState.clear();

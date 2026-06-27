@@ -98,7 +98,7 @@ Important server files:
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
 | `"dash"` | `RoomClient.sendDash()` | One-shot dash request; the server owns cooldown, facing direction, movement, and collision resolution. |
 | `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
-| `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state. |
+| `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
 | `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"` | Building helpers | Requests server-authoritative wood block placement, removal, or repair. |
@@ -166,7 +166,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, upgrade counters, outfit color, and hotbar inventory.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, axe whirlwind active/cooldown progress, upgrade counters, outfit color, and hotbar inventory.
 
 ### Enemy State
 
@@ -195,6 +195,7 @@ Current server-owned systems include:
 - Player join/leave and room reset after game over.
 - World bounds and tree generation.
 - Player movement, facing direction, attack lockout, attack cooldown, and interaction input.
+- Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a 10-second server-owned cooldown rendered on the hotbar.
 - Tree damage, tree removal, and log spawning.
 - Wood pickup.
 - Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal.
