@@ -71,6 +71,8 @@ const PLAYER_TREE_FOOT_RADIUS = 5;
 const PLAYER_TREE_Y_OFFSET = 32;
 const PLAYER_BULLET_Y_OFFSET = 56;
 const MAX_PLAYER_MOVE_STEP = 3;
+const PLAYER_DASH_DISTANCE = 180;
+const PLAYER_DASH_COOLDOWN_MS = 5000;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
 const AXE_ATTACK_IMPACT_DELAY_MS = 200;
@@ -362,6 +364,7 @@ interface ServerPlayer {
     attackLockX: number;
     attackLockY: number;
     attackCooldownMs: number;
+    dashCooldownMs: number;
     bowCharging: boolean;
     bowChargeMs: number;
     bowChargeX: number;
@@ -634,6 +637,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
             if (sp && player) this.clearBowCharge(player, sp);
+        });
+
+        this.onMessage("dash", (client) => {
+            this.tryDashPlayer(client.sessionId);
         });
 
         this.onMessage("axeWhirlwind", (client, data) => {
@@ -1701,6 +1708,24 @@ export class ShmupRoom extends Room<GameRoomState> {
         return pressed;
     }
 
+    private tryDashPlayer(sessionId: string) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
+        if (sp.attackLockMs > 0 || sp.bowCharging || sp.dashCooldownMs > 0) return;
+
+        const vector = DIRECTION_VECTORS[player.facingDirection] || DIRECTION_VECTORS.N;
+        const nextX = player.x + vector.x * PLAYER_DASH_DISTANCE;
+        const nextY = player.y + vector.y * PLAYER_DASH_DISTANCE;
+        const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
+
+        player.x = resolved.x;
+        player.y = resolved.y;
+        sp.vx = 0;
+        sp.vy = 0;
+        sp.dashCooldownMs = PLAYER_DASH_COOLDOWN_MS;
+    }
+
     private setAxeWhirlwind(sessionId: string, active: boolean) {
         const player = this.state.players.get(sessionId);
         const sp = this.serverPlayers.get(sessionId);
@@ -1770,6 +1795,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockX: ps.x,
             attackLockY: ps.y,
             attackCooldownMs: 0,
+            dashCooldownMs: 0,
             bowCharging: false,
             bowChargeMs: 0,
             bowChargeX: ps.x,
@@ -1857,6 +1883,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
             sp.attackCooldownMs = 0;
+            sp.dashCooldownMs = 0;
             sp.bowCharging = false;
             sp.bowChargeMs = 0;
             sp.bowChargeX = player.x;
@@ -2890,6 +2917,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.vy = 0;
         targetSp.attackLockMs = 0;
         targetSp.attackCooldownMs = 0;
+        targetSp.dashCooldownMs = 0;
         targetSp.revivingTargetId = null;
         targetSp.bowCharging = false;
         targetSp.bowChargeMs = 0;
@@ -2924,6 +2952,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const isAttackLocked = sp.attackLockMs > 0;
             sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
             sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
+            sp.dashCooldownMs = Math.max(0, sp.dashCooldownMs - dtMs);
             sp.axeWhirlwindRestartCooldownMs = Math.max(0, sp.axeWhirlwindRestartCooldownMs - dtMs);
 
             const inputX = Number(right) - Number(left);

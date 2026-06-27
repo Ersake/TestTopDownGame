@@ -96,6 +96,7 @@ Important server files:
 |---|---|---|
 | `"input"` | `RoomClient.sendInput()` | Movement, fire, and interact booleans. Sent only when changed. |
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
+| `"dash"` | `RoomClient.sendDash()` | One-shot dash request; the server owns cooldown, facing direction, movement, and collision resolution. |
 | `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |

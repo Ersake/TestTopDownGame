@@ -180,7 +180,7 @@ Use room messages for discrete events that are not naturally represented as dura
 
 Examples already in use:
 
-- Client to server gameplay: `"input"`, `"attack"`, `"bowChargeStart"`, `"bowAim"`, `"bowCancel"`, `"axeWhirlwind"`, `"equipSlot"`.
+- Client to server gameplay: `"input"`, `"attack"`, `"dash"`, `"bowChargeStart"`, `"bowAim"`, `"bowCancel"`, `"axeWhirlwind"`, `"equipSlot"`.
 - Client to server building/crafting: `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"`, `"placeCampfire"`, `"placeCaltrops"`, `"craftItem"`, `"selectUpgrade"`, `"setOutfitColor"`.
 - Map editor client to server: `"placeMapTile"`, `"removeMapTile"`, `"saveMap"`, `"loadMap"`, `"listMaps"`.
 - Development client to server: `"debugSetRound"`.
@@ -294,6 +294,7 @@ Use `NODE_ENV=production` in production so the Colyseus monitor is not exposed.
 ### General
 
 - Keep shared gameplay authority on the server.
+- Keep dash movement server-authoritative; the client only sends a one-shot `"dash"` request, and the server owns cooldown and collision resolution.
 - Keep `RoomClient.js` as the only client-side import of `colyseus.js`.
 - Do not import `phaser.js` as an ES module. It is loaded by `index.html` and exposed as global `Phaser`.
 - Keep `ARCHITECTURE.md` current when changing room flow, state shape, networking, deployment, or major gameplay systems.
