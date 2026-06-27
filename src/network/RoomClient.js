@@ -137,6 +137,11 @@ class RoomClient {
         this.room.send("equipSlot", { slot });
     }
 
+    sendSwapHotbarSlots(fromSlot, toSlot) {
+        if (!this.room) return;
+        this.room.send("swapHotbarSlots", { fromSlot, toSlot });
+    }
+
     sendBuildWoodBlock(x, y) {
         if (!this.room) return;
         this.room.send("buildWoodBlock", { x, y });

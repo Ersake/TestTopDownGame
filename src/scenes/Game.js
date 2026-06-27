@@ -231,6 +231,7 @@ const HOTBAR_ICON_SIZE = 35;
 const HOTBAR_BOTTOM_GAP = 12;
 const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
+const HOTBAR_DRAG_START_DISTANCE = 6;
 const OUTFIT_TAN_INDEX = 4;
 const OUTFIT_COLOR_BUTTON_RADIUS = 11;
 const OUTFIT_COLOR_BUTTON_X = 40;
@@ -415,6 +416,7 @@ export class Game extends Phaser.Scene {
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
         this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+        this.hotbarDrag = null;
         this.upgradeUiMode = 'root';
         this.upgradeUiObjects = [];
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
@@ -536,6 +538,9 @@ export class Game extends Phaser.Scene {
             this.handleEscapeQuit(event);
         };
         this.handleGlobalMouseUp = (event) => {
+            if (event?.button === 0 || (typeof event?.buttons === 'number' && (event.buttons & 1) === 0)) {
+                window.setTimeout(() => this.cancelHotbarDrag(), 0);
+            }
             if (event?.button === 2 || (typeof event?.buttons === 'number' && (event.buttons & 2) === 0)) {
                 this.stopAxeWhirlwind();
             }
@@ -553,6 +558,7 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('mouseup', this.handleGlobalMouseUp, true);
             this.disableBuildMode();
             this.closeCraftingMenu();
+            this.cancelHotbarDrag();
             this.stopAxeWhirlwind();
             this.stopAllCasterChargeSounds();
             this.destroyDebugRoundControls();
@@ -871,6 +877,7 @@ export class Game extends Phaser.Scene {
     }
 
     initHotbar() {
+        this.cancelHotbarDrag();
         this.hotbarSlots.forEach((slot) => {
             slot.box?.destroy();
             slot.icon?.destroy();
@@ -890,7 +897,12 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5)
                 .setStrokeStyle(2, HOTBAR_SLOT_FILL_COLOR, 0.5)
                 .setDepth(UI_DEPTH + 3)
-                .setScrollFactor(0);
+                .setScrollFactor(0)
+                .setInteractive({ useHandCursor: true });
+            box.on('pointerdown', (pointer, _localX, _localY, event) => {
+                event?.stopPropagation?.();
+                this.beginHotbarDrag(slot, pointer);
+            });
             const label = this.add.text(x - HOTBAR_SLOT_SIZE * 0.5 + 5, y - HOTBAR_SLOT_SIZE * 0.5 + 3, `${slot}`, {
                 fontFamily: 'Arial Black', fontSize: 10, color: '#ffffff',
                 stroke: '#000000', strokeThickness: 3,
@@ -919,6 +931,102 @@ export class Game extends Phaser.Scene {
         }
 
         this.updateHotbarSelection();
+    }
+
+    beginHotbarDrag(slot, pointer) {
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT || !pointer?.leftButtonDown?.()) return;
+        if (!this.getItemForHotbarSlot(slot)) {
+            this.equipHotbarSlot(slot);
+            return;
+        }
+        this.hotbarDrag = {
+            pointerId: pointer.id,
+            fromSlot: slot,
+            startX: pointer.x,
+            startY: pointer.y,
+            hasDragged: false,
+            ghost: null,
+        };
+    }
+
+    updateHotbarDrag(pointer) {
+        const drag = this.hotbarDrag;
+        if (!drag || drag.pointerId !== pointer.id) return false;
+        if (!pointer.leftButtonDown()) return false;
+
+        const dx = pointer.x - drag.startX;
+        const dy = pointer.y - drag.startY;
+        if (!drag.hasDragged && Math.hypot(dx, dy) < HOTBAR_DRAG_START_DISTANCE) return true;
+
+        if (!drag.hasDragged) {
+            drag.hasDragged = true;
+            drag.ghost = this.createHotbarDragGhost(drag.fromSlot, pointer.x, pointer.y);
+        }
+        drag.ghost?.setPosition(pointer.x, pointer.y);
+        return true;
+    }
+
+    finishHotbarDrag(pointer) {
+        const drag = this.hotbarDrag;
+        if (!drag || drag.pointerId !== pointer.id) return false;
+
+        if (drag.hasDragged) {
+            const targetSlot = this.getHotbarSlotAt(pointer.x, pointer.y);
+            if (targetSlot && targetSlot !== drag.fromSlot) {
+                RoomClient.sendSwapHotbarSlots(drag.fromSlot, targetSlot);
+            }
+        } else {
+            this.equipHotbarSlot(drag.fromSlot);
+        }
+        this.cancelHotbarDrag();
+        return true;
+    }
+
+    cancelHotbarDrag() {
+        this.hotbarDrag?.ghost?.destroy(true);
+        this.hotbarDrag = null;
+    }
+
+    createHotbarDragGhost(slot, x, y) {
+        const item = this.getItemForHotbarSlot(slot);
+        const count = this.hotbarSlotCounts[slot - 1] || 0;
+        const container = this.add.container(x, y)
+            .setDepth(UI_DEPTH + 30)
+            .setScrollFactor(0)
+            .setAlpha(0.86);
+        const background = this.add.rectangle(0, 0, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_ACTIVE_COLOR, 0.28)
+            .setOrigin(0.5)
+            .setStrokeStyle(2, HOTBAR_SLOT_ACTIVE_COLOR, 0.8);
+        container.add(background);
+
+        const iconKey = this.getHotbarIconKey(item);
+        if (iconKey) {
+            const icon = this.add.image(0, 2, iconKey).setOrigin(0.5);
+            if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+            if (item === ITEM_WOOD_CALTROPS) icon.setFrame(CALTROPS_FRAME);
+            icon.setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE);
+            container.add(icon);
+        }
+        if (count > 0) {
+            const countLabel = this.add.text(HOTBAR_SLOT_SIZE * 0.5 - 5, HOTBAR_SLOT_SIZE * 0.5 - 15, `${count}`, {
+                fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 3,
+            }).setOrigin(1, 0.5);
+            container.add(countLabel);
+        }
+        this.registerFixedUi(container, container.list);
+        return container;
+    }
+
+    getHotbarSlotAt(x, y) {
+        const slot = this.hotbarSlots.find(({ box }) => box?.getBounds().contains(x, y));
+        return slot?.slot || 0;
+    }
+
+    isHotbarGameObject(gameObject) {
+        return this.hotbarSlots.some(({ box, icon, label, countLabel }) => (
+            gameObject === box || gameObject === icon || gameObject === label || gameObject === countLabel
+        ));
     }
 
     getHotbarIconKey(item) {
@@ -2060,6 +2168,7 @@ export class Game extends Phaser.Scene {
                 if (
                     gameObjects.includes(this.quitButton)
                     || gameObjects.includes(this.hitboxToggleButton)
+                    || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 ) {
                     return;
                 }
@@ -2093,6 +2202,7 @@ export class Game extends Phaser.Scene {
             if (
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
+                || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 || gameObjects.some(gameObject => this.craftingUiObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.upgradeUiObjects.includes(gameObject))
@@ -2129,6 +2239,7 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointermove', (pointer) => {
+            if (this.updateHotbarDrag(pointer)) return;
             if (this.isMapEditor) {
                 if (this.paletteDragPointerId === pointer.id && pointer.leftButtonDown()) {
                     const cell = this.getPaletteCellFromPointer(pointer);
@@ -2164,6 +2275,7 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointerup', (pointer) => {
+            if (this.finishHotbarDrag(pointer)) return;
             if (this.isMapEditor) {
                 if (this.paletteDragPointerId === pointer.id) {
                     this.paletteDragPointerId = null;

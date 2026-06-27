@@ -655,6 +655,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.equipPlayerSlot(client.sessionId, data);
         });
 
+        this.onMessage("swapHotbarSlots", (client, data) => {
+            this.swapPlayerHotbarSlots(client.sessionId, data);
+        });
+
         this.onMessage("buildWoodBlock", (client, data) => {
             this.tryBuildWoodBlock(client.sessionId, data);
         });
@@ -1501,6 +1505,51 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         player.activeSlot = slot;
         player.activeItem = this.getHotbarItem(player, slot);
+        if (player.activeItem !== ITEM_WOOD_BOW) {
+            this.clearBowCharge(player, sp);
+        }
+        if (player.activeItem !== ITEM_WOOD_AXE) {
+            this.setAxeWhirlwind(sessionId, false);
+        }
+    }
+
+    private swapPlayerHotbarSlots(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
+
+        const fromSlot = Number((data as { fromSlot?: unknown })?.fromSlot);
+        const toSlot = Number((data as { toSlot?: unknown })?.toSlot);
+        if (
+            !Number.isInteger(fromSlot)
+            || !Number.isInteger(toSlot)
+            || fromSlot < 1
+            || fromSlot > HOTBAR_SLOT_COUNT
+            || toSlot < 1
+            || toSlot > HOTBAR_SLOT_COUNT
+            || fromSlot === toSlot
+        ) {
+            return;
+        }
+
+        this.normalizeHotbar(player);
+        const fromIndex = fromSlot - 1;
+        const toIndex = toSlot - 1;
+        if (!player.hotbarItems[fromIndex]) return;
+
+        const fromItem = player.hotbarItems[fromIndex];
+        const fromCount = player.hotbarCounts[fromIndex] || EMPTY_HOTBAR_COUNT;
+        player.hotbarItems[fromIndex] = player.hotbarItems[toIndex] || EMPTY_HOTBAR_ITEM;
+        player.hotbarCounts[fromIndex] = player.hotbarCounts[toIndex] || EMPTY_HOTBAR_COUNT;
+        player.hotbarItems[toIndex] = fromItem;
+        player.hotbarCounts[toIndex] = fromCount;
+
+        if (player.activeSlot === fromSlot) {
+            player.activeSlot = toSlot;
+        } else if (player.activeSlot === toSlot) {
+            player.activeSlot = fromSlot;
+        }
+        player.activeItem = this.getHotbarItem(player, player.activeSlot);
         if (player.activeItem !== ITEM_WOOD_BOW) {
             this.clearBowCharge(player, sp);
         }
