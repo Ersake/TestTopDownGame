@@ -103,11 +103,14 @@ const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
-const ENEMY_WAVE_SPAWN_INTERVAL_MS = 1000;
+const ENEMY_WAVE_SPAWN_INTERVAL_MS = 1500;
+const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 1;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
 const ENABLE_ENEMY_DIAGNOSTICS = process.env.NODE_ENV !== "production";
+const SLOW_TICK_LOG_THRESHOLD_MS = 75;
+const TICK_PHASE_LOG_MIN_MS = 1;
 const INITIAL_MELEE_WAVE_COUNT = 3;
 const MELEE_PER_MINUTE = 5;
 const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
@@ -154,6 +157,7 @@ const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
+const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
 const ENEMY_PATH_REFRESH_MS = 1500;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_TARGET_REFRESH_CELLS = 2;
@@ -442,6 +446,14 @@ interface PendingEnemySpawn {
     enemyType: number;
     edgeIndex: number;
     spawnAtMs: number;
+}
+interface TickMetrics {
+    phases: Record<string, number>;
+    spawnedEnemies: number;
+    scheduledWaveIndex: number | null;
+    scheduledEnemyCount: number;
+    separationChecks: number;
+    separationResolutions: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2689,7 +2701,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
         if (!this.state.gameStarted) return;
-        const tickStartedAt = ENABLE_ENEMY_DIAGNOSTICS ? performance.now() : 0;
+        const tickStartedAt = performance.now();
+        const tickMetrics = this.createTickMetrics();
         const dtSec = dt / 1000;
 
         if (this.isMapEditor()) {
@@ -2697,17 +2710,38 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        this.tickElapsedTime(dt);
-        this.tickPlayers(dtSec, dt);
-        this.tickActiveAxeAttacks(dt);
-        this.tickRevives(dt);
-        this.tickPlayerBullets(dtSec);
-        this.tickEnemyWaves();
-        this.tickEnemies(dtSec, dt);
-        this.tickEnemyBullets(dtSec);
-        this.tickCollisions();
-        this.tickCampfires(dt);
-        this.reportEnemySimulationStats(tickStartedAt);
+        this.measureTickPhase(tickMetrics, "elapsed", () => this.tickElapsedTime(dt));
+        this.measureTickPhase(tickMetrics, "players", () => this.tickPlayers(dtSec, dt));
+        this.measureTickPhase(tickMetrics, "axeAttacks", () => this.tickActiveAxeAttacks(dt));
+        this.measureTickPhase(tickMetrics, "revives", () => this.tickRevives(dt));
+        this.measureTickPhase(tickMetrics, "playerBullets", () => this.tickPlayerBullets(dtSec));
+        this.measureTickPhase(tickMetrics, "waves", () => this.tickEnemyWaves(tickMetrics));
+        this.measureTickPhase(tickMetrics, "enemyAI", () => this.tickEnemies(dtSec, dt));
+        this.measureTickPhase(tickMetrics, "enemySeparation", () => this.separateEnemyFeet(tickMetrics));
+        this.measureTickPhase(tickMetrics, "enemyBullets", () => this.tickEnemyBullets(dtSec));
+        this.measureTickPhase(tickMetrics, "collisions", () => this.tickCollisions());
+        this.measureTickPhase(tickMetrics, "campfires", () => this.tickCampfires(dt));
+        this.reportEnemySimulationStats(tickStartedAt, tickMetrics);
+    }
+
+    private createTickMetrics(): TickMetrics {
+        return {
+            phases: {},
+            spawnedEnemies: 0,
+            scheduledWaveIndex: null,
+            scheduledEnemyCount: 0,
+            separationChecks: 0,
+            separationResolutions: 0,
+        };
+    }
+
+    private measureTickPhase<T>(metrics: TickMetrics, label: string, run: () => T): T {
+        const startedAt = performance.now();
+        try {
+            return run();
+        } finally {
+            metrics.phases[label] = (metrics.phases[label] || 0) + (performance.now() - startedAt);
+        }
     }
 
     private tickGameOverRestart(dtMs: number) {
@@ -3074,23 +3108,27 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.scheduleEnemyWave(0);
     }
 
-    private tickEnemyWaves() {
-        if (
+    private tickEnemyWaves(metrics?: TickMetrics) {
+        let spawnedThisTick = 0;
+        while (
             this.pendingEnemySpawns.length > 0
             && this.elapsedMs >= this.nextEnemySpawnAllowedAtMs
             && this.pendingEnemySpawns[0]?.spawnAtMs <= this.elapsedMs
             && this.state.enemies.size < MAX_ACTIVE_ENEMIES
+            && spawnedThisTick < ENEMY_WAVE_MAX_SPAWNS_PER_TICK
         ) {
             const pendingSpawn = this.pendingEnemySpawns.shift();
             if (pendingSpawn) {
                 this.spawnEnemy(pendingSpawn.enemyType, pendingSpawn.edgeIndex);
+                spawnedThisTick++;
+                if (metrics) metrics.spawnedEnemies++;
                 this.nextEnemySpawnAllowedAtMs = this.elapsedMs + ENEMY_WAVE_SPAWN_INTERVAL_MS;
             }
         }
 
         if (this.pendingEnemySpawns.length > 0) return;
         if (this.hasLivingEnemies()) return;
-        this.scheduleEnemyWave(this.currentWaveIndex + 1);
+        this.scheduleEnemyWave(this.currentWaveIndex + 1, metrics);
     }
 
     private hasLivingEnemies(): boolean {
@@ -3101,7 +3139,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         return livingEnemyFound;
     }
 
-    private scheduleEnemyWave(waveIndex: number) {
+    private scheduleEnemyWave(waveIndex: number, metrics?: TickMetrics) {
         const waveStartMs = this.elapsedMs;
         const meleeCount = waveIndex === 0 ? INITIAL_MELEE_WAVE_COUNT : waveIndex * MELEE_PER_MINUTE;
         const casterCount = waveIndex === 0 ? 0 : waveIndex < DARK_KNIGHT_WAVE_INTERVAL_MINUTES ? 1 : 2;
@@ -3125,6 +3163,17 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.pendingEnemySpawns.sort((a, b) => a.spawnAtMs - b.spawnAtMs);
         this.currentWaveIndex = waveIndex;
         this.nextEnemySpawnAllowedAtMs = waveStartMs;
+        const scheduledEnemyCount = spawnIndex;
+        if (metrics) {
+            metrics.scheduledWaveIndex = waveIndex;
+            metrics.scheduledEnemyCount = scheduledEnemyCount;
+        }
+        console.log(
+            `[ShmupRoom ${this.roomId}] wave ${waveIndex} scheduled: total=${scheduledEnemyCount}, `
+            + `melee=${meleeCount}, casters=${casterCount}, darkKnights=${darkKnightCount}, `
+            + `spawnInterval=${ENEMY_WAVE_SPAWN_INTERVAL_MS}ms, active=${this.state.enemies.size}, `
+            + `queued=${this.pendingEnemySpawns.length}`,
+        );
     }
 
     private queueEnemySpawn(enemyType: number, waveStartMs: number, spawnIndex: number) {
@@ -3135,14 +3184,27 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
     }
 
-    private reportEnemySimulationStats(tickStartedAt: number) {
-        if (!ENABLE_ENEMY_DIAGNOSTICS || this.elapsedMs < this.nextEnemyDiagnosticAtMs) return;
-
-        this.nextEnemyDiagnosticAtMs = this.elapsedMs + ENEMY_DIAGNOSTIC_INTERVAL_MS;
+    private reportEnemySimulationStats(tickStartedAt: number, metrics: TickMetrics) {
         const tickDurationMs = performance.now() - tickStartedAt;
-        console.log(
-            `[ShmupRoom ${this.roomId}] enemy simulation: active=${this.state.enemies.size}/${MAX_ACTIVE_ENEMIES}, `
-            + `queued=${this.pendingEnemySpawns.length}, tick=${tickDurationMs.toFixed(1)}ms`,
+        const isSlowTick = tickDurationMs >= SLOW_TICK_LOG_THRESHOLD_MS;
+        const shouldLogDiagnostic = ENABLE_ENEMY_DIAGNOSTICS && this.elapsedMs >= this.nextEnemyDiagnosticAtMs;
+        if (!isSlowTick && !shouldLogDiagnostic) return;
+
+        if (shouldLogDiagnostic) this.nextEnemyDiagnosticAtMs = this.elapsedMs + ENEMY_DIAGNOSTIC_INTERVAL_MS;
+        const phaseText = Object.entries(metrics.phases)
+            .filter(([, ms]) => ms >= TICK_PHASE_LOG_MIN_MS)
+            .map(([label, ms]) => `${label}=${ms.toFixed(1)}ms`)
+            .join(", ");
+        const log = isSlowTick ? console.warn : console.log;
+        log(
+            `[ShmupRoom ${this.roomId}] ${isSlowTick ? "slow tick" : "enemy simulation"}: `
+            + `tick=${tickDurationMs.toFixed(1)}ms, active=${this.state.enemies.size}/${MAX_ACTIVE_ENEMIES}, `
+            + `queued=${this.pendingEnemySpawns.length}, players=${this.state.players.size}, `
+            + `playerBullets=${this.state.playerBullets.size}, enemyBullets=${this.state.enemyBullets.size}, `
+            + `woodBlocks=${this.state.woodBlocks.size}, spawned=${metrics.spawnedEnemies}, `
+            + `scheduledWave=${metrics.scheduledWaveIndex ?? "none"}, scheduledEnemies=${metrics.scheduledEnemyCount}, `
+            + `separationChecks=${metrics.separationChecks}, separationResolutions=${metrics.separationResolutions}, `
+            + `phases=[${phaseText || "none"}]`,
         );
     }
 
@@ -3361,7 +3423,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.setEnemyFacingFromMovement(enemy, prevDirectX, prevDirectY);
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
-        this.separateEnemyFeet();
     }
 
     private tickCasterEnemy(
@@ -4200,58 +4261,96 @@ export class ShmupRoom extends Room<GameRoomState> {
         return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);
     }
 
-    private separateEnemyFeet() {
-        const enemies = [...this.state.enemies.entries()];
+    private separateEnemyFeet(metrics?: TickMetrics) {
+        const enemies = [...this.state.enemies.entries()].filter(([id]) => this.serverEnemies.has(id));
+        if (enemies.length < 2) return;
+
         const minDistance = ENEMY_FOOT_RADIUS * 2;
         const minDistanceSq = minDistance * minDistance;
 
         for (let iteration = 0; iteration < ENEMY_SEPARATION_ITERATIONS; iteration++) {
-            for (let i = 0; i < enemies.length; i++) {
-                const [idA, enemyA] = enemies[i];
-                const serverA = this.serverEnemies.get(idA);
-                if (!serverA) continue;
+            const buckets = new Map<string, Array<[string, EnemyState]>>();
+            enemies.forEach(([id, enemy]) => {
+                const col = Math.floor(enemy.x / ENEMY_SEPARATION_GRID_CELL_SIZE);
+                const row = Math.floor((enemy.y + ENEMY_FOOT_Y_OFFSET) / ENEMY_SEPARATION_GRID_CELL_SIZE);
+                const key = `${col}:${row}`;
+                const bucket = buckets.get(key);
+                if (bucket) {
+                    bucket.push([id, enemy]);
+                } else {
+                    buckets.set(key, [[id, enemy]]);
+                }
+            });
 
-                for (let j = i + 1; j < enemies.length; j++) {
-                    const [idB, enemyB] = enemies[j];
-                    const serverB = this.serverEnemies.get(idB);
-                    if (!serverB) continue;
+            const checkedPairs = new Set<string>();
+            buckets.forEach((bucket, key) => {
+                const [col, row] = key.split(":").map(Number);
+                for (let rowOffset = -1; rowOffset <= 1; rowOffset++) {
+                    for (let colOffset = -1; colOffset <= 1; colOffset++) {
+                        const neighbor = buckets.get(`${col + colOffset}:${row + rowOffset}`);
+                        if (!neighbor) continue;
 
-                    const footAx = enemyA.x;
-                    const footAy = enemyA.y + ENEMY_FOOT_Y_OFFSET;
-                    const footBx = enemyB.x;
-                    const footBy = enemyB.y + ENEMY_FOOT_Y_OFFSET;
-                    let dx = footBx - footAx;
-                    let dy = footBy - footAy;
-                    let distanceSq = dx * dx + dy * dy;
-                    if (distanceSq >= minDistanceSq) continue;
-
-                    if (distanceSq === 0) {
-                        dx = idA < idB ? 1 : -1;
-                        dy = 0;
-                        distanceSq = 1;
-                    }
-
-                    const distance = Math.sqrt(distanceSq);
-                    const push = (minDistance - distance) * 0.5;
-                    const nx = dx / distance;
-                    const ny = dy / distance;
-
-                    const nextAx = clamp(enemyA.x - nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
-                    const nextAy = clamp(enemyA.y - ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
-                    const nextBx = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
-                    const nextBy = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
-
-                    if (!this.collidesWithEnemyWorldFoot(nextAx, nextAy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
-                        enemyA.x = nextAx;
-                        enemyA.y = nextAy;
-                    }
-                    if (!this.collidesWithEnemyWorldFoot(nextBx, nextBy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
-                        enemyB.x = nextBx;
-                        enemyB.y = nextBy;
+                        bucket.forEach(([idA, enemyA]) => {
+                            neighbor.forEach(([idB, enemyB]) => {
+                                if (idA === idB) return;
+                                const pairKey = idA < idB ? `${idA}:${idB}` : `${idB}:${idA}`;
+                                if (checkedPairs.has(pairKey)) return;
+                                checkedPairs.add(pairKey);
+                                if (metrics) metrics.separationChecks++;
+                                if (this.separateEnemyPair(idA, enemyA, idB, enemyB, minDistance, minDistanceSq)) {
+                                    if (metrics) metrics.separationResolutions++;
+                                }
+                            });
+                        });
                     }
                 }
-            }
+            });
         }
+    }
+
+    private separateEnemyPair(
+        idA: string,
+        enemyA: EnemyState,
+        idB: string,
+        enemyB: EnemyState,
+        minDistance: number,
+        minDistanceSq: number,
+    ): boolean {
+        const footAx = enemyA.x;
+        const footAy = enemyA.y + ENEMY_FOOT_Y_OFFSET;
+        const footBx = enemyB.x;
+        const footBy = enemyB.y + ENEMY_FOOT_Y_OFFSET;
+        let dx = footBx - footAx;
+        let dy = footBy - footAy;
+        let distanceSq = dx * dx + dy * dy;
+        if (distanceSq >= minDistanceSq) return false;
+
+        if (distanceSq === 0) {
+            dx = idA < idB ? 1 : -1;
+            dy = 0;
+            distanceSq = 1;
+        }
+
+        const distance = Math.sqrt(distanceSq);
+        const push = (minDistance - distance) * 0.5;
+        const nx = dx / distance;
+        const ny = dy / distance;
+
+        const nextAx = clamp(enemyA.x - nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+        const nextAy = clamp(enemyA.y - ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+        const nextBx = clamp(enemyB.x + nx * push, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
+        const nextBy = clamp(enemyB.y + ny * push, -ENEMY1_EDGE_OFFSET, WORLD_HEIGHT + ENEMY1_EDGE_OFFSET);
+
+        if (!this.collidesWithEnemyWorldFoot(nextAx, nextAy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+            enemyA.x = nextAx;
+            enemyA.y = nextAy;
+        }
+        if (!this.collidesWithEnemyWorldFoot(nextBx, nextBy + ENEMY_FOOT_Y_OFFSET, ENEMY_FOOT_RADIUS)) {
+            enemyB.x = nextBx;
+            enemyB.y = nextBy;
+        }
+
+        return true;
     }
 
     private findNearestAlivePlayer(x: number, y: number): { id: string; player: PlayerState; distanceSq: number } | null {

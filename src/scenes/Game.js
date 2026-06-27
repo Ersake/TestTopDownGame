@@ -2986,14 +2986,6 @@ export class Game extends Phaser.Scene {
                 .setDisplaySize(displaySize, displaySize);
             this.registerWorldObject(sprite);
             this.enemySprites.set(enemyId, sprite);
-            const enemyHealthBackground = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH);
-            const enemyHealthFill = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH + 1);
-            this.enemyHealthBars.set(enemyId, {
-                background: enemyHealthBackground,
-                fill: enemyHealthFill,
-                enemy,
-            });
-            this.registerWorldObject(enemyHealthBackground, enemyHealthFill);
             this.enemyAnimationState.set(enemyId, {
                 animationKey: enemyAnimationKey,
                 enemyType: Number(enemy.enemyType) || 1,
@@ -3011,6 +3003,7 @@ export class Game extends Phaser.Scene {
                 y: enemy.y,
             });
             this.setEnemyAnimation(enemyId, enemy.action || 'run', enemy.facingDirection || 'S');
+            this.updateEnemyHealthBar(enemyId, enemy);
             if (enemy.action === 'charge') {
                 this.startCasterChargeSound(enemyId);
                 this.showCasterChargeEffect(enemyId);
@@ -3049,7 +3042,7 @@ export class Game extends Phaser.Scene {
             });
 
             enemy.listen('health', () => {
-                this.updateEnemyHealthBar(enemyId);
+                this.updateEnemyHealthBar(enemyId, enemy);
             });
 
             enemy.listen('attackSeq', () => {
@@ -3084,6 +3077,7 @@ export class Game extends Phaser.Scene {
 
             enemy.listen('isDead', (isDead) => {
                 if (isDead) {
+                    this.destroyEnemyHealthBar(enemyId);
                     this.stopCasterChargeSound(enemyId);
                     this.hideCasterChargeEffect(enemyId);
                     this.playEnemyDeathAnimation(enemyId, enemy.facingDirection || 'S');
@@ -3103,11 +3097,7 @@ export class Game extends Phaser.Scene {
         state.enemies.onRemove((_enemy, id) => {
             const s = this.enemySprites.get(id);
             const animationState = this.enemyAnimationState.get(id);
-            const healthBar = this.enemyHealthBars.get(id);
-            if (healthBar) {
-                healthBar.background.destroy();
-                healthBar.fill.destroy();
-            }
+            this.destroyEnemyHealthBar(id);
             if (s) {
                 if (!animationState?.dead && !this.isSuppressingResetEffects()) this.addExplosion(s.x, s.y);
                 s.destroy();
@@ -5204,6 +5194,27 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    createEnemyHealthBar(enemyId, enemy) {
+        let healthBar = this.enemyHealthBars.get(enemyId);
+        if (healthBar) return healthBar;
+
+        const background = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH);
+        const fill = this.add.graphics().setDepth(ENEMY_HEALTH_BAR_DEPTH + 1);
+        healthBar = { background, fill, enemy };
+        this.enemyHealthBars.set(enemyId, healthBar);
+        this.registerWorldObject(background, fill);
+        return healthBar;
+    }
+
+    destroyEnemyHealthBar(enemyId) {
+        const healthBar = this.enemyHealthBars.get(enemyId);
+        if (!healthBar) return;
+
+        healthBar.background.destroy();
+        healthBar.fill.destroy();
+        this.enemyHealthBars.delete(enemyId);
+    }
+
     updatePlayerLevelLabel(sessionId) {
         const levelLabel = this.playerLevelLabels.get(sessionId);
         const sprite = this.playerSprites.get(sessionId);
@@ -5340,13 +5351,20 @@ export class Game extends Phaser.Scene {
         reviveBar.fill.fillRect(x, y, fillWidth, PLAYER_REVIVE_BAR_HEIGHT);
     }
 
-    updateEnemyHealthBar(enemyId) {
-        const healthBar = this.enemyHealthBars.get(enemyId);
+    updateEnemyHealthBar(enemyId, enemy = null) {
+        let healthBar = this.enemyHealthBars.get(enemyId);
+        const healthBarEnemy = enemy || healthBar?.enemy;
         const sprite = this.enemySprites.get(enemyId);
-        if (!healthBar || !sprite) return;
+        if (!healthBarEnemy || !sprite) return;
 
-        const maxHealth = Math.max(1, healthBar.enemy.maxHealth || ENEMY_MAX_HEALTH);
-        const health = Phaser.Math.Clamp(healthBar.enemy.health || 0, 0, maxHealth);
+        const maxHealth = Math.max(1, healthBarEnemy.maxHealth || ENEMY_MAX_HEALTH);
+        const health = Phaser.Math.Clamp(healthBarEnemy.health || 0, 0, maxHealth);
+        if (healthBarEnemy.isDead || health >= maxHealth) {
+            this.destroyEnemyHealthBar(enemyId);
+            return;
+        }
+
+        healthBar = this.createEnemyHealthBar(enemyId, healthBarEnemy);
         const fillWidth = (health / maxHealth) * ENEMY_HEALTH_BAR_WIDTH;
         const x = sprite.x - ENEMY_HEALTH_BAR_WIDTH * 0.5;
         const y = sprite.y + ENEMY_HEALTH_BAR_Y_OFFSET;
