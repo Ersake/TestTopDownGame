@@ -96,6 +96,10 @@ const MAP_MAX_FILLED_CELLS = 50000;
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
+const CALTROPS_FRAME = 449;
+const CALTROPS_DISPLAY_SIZE = 40;
+const CALTROPS_DEPTH = 85;
+const CALTROPS_SLOW_RADIUS = 44;
 const CRAFTING_PANEL_WIDTH = 760;
 const CRAFTING_PANEL_HEIGHT = 430;
 const CRAFTING_PANEL_PADDING = 28;
@@ -233,6 +237,7 @@ const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
 const ITEM_HAMMER = 'hammer';
 const ITEM_CAMPFIRE = 'campfire';
+const ITEM_WOOD_CALTROPS = 'wood_caltrops';
 const ITEM_WOOD = 'wood';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
@@ -286,6 +291,14 @@ const CRAFTING_RECIPES = [
         cost: 'Cost: 10 wood',
         enabled: true,
         icon: 'campfire',
+    },
+    {
+        id: 'wood_caltrops',
+        name: 'Wood Caltrops',
+        description: 'Slows enemies. Can upgrade to deal damage.',
+        cost: 'Cost: 4 wood',
+        enabled: true,
+        icon: 'caltrops',
     },
     {
         id: 'sword_shield',
@@ -407,6 +420,7 @@ export class Game extends Phaser.Scene {
         this.logSprites          = new Map();
         this.woodBlockSprites    = new Map();
         this.campfireSprites     = new Map();
+        this.caltropSprites      = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -873,6 +887,7 @@ export class Game extends Phaser.Scene {
             const icon = iconKey ? this.add.image(x, y + 2, iconKey).setOrigin(0.5) : null;
             if (icon) {
                 if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+                if (item === ITEM_WOOD_CALTROPS) icon.setFrame(CALTROPS_FRAME);
                 icon.setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE)
                     .setDepth(UI_DEPTH + 4)
                     .setScrollFactor(0);
@@ -896,6 +911,7 @@ export class Game extends Phaser.Scene {
         if (item === ITEM_WOOD_BOW) return ASSETS.image.woodBowIcon.key;
         if (item === ITEM_HAMMER) return ASSETS.image.hammerIcon.key;
         if (item === ITEM_CAMPFIRE) return ASSETS.spritesheet.campfire.key;
+        if (item === ITEM_WOOD_CALTROPS) return ASSETS.spritesheet.topdownTileset.key;
         if (item === ITEM_WOOD) return ASSETS.image.log.key;
         return null;
     }
@@ -992,6 +1008,9 @@ export class Game extends Phaser.Scene {
             let icon;
             if (recipe.icon === 'campfire') {
                 icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.spritesheet.campfire.key, CAMPFIRE_ICON_FRAME)
+                    .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
+            } else if (recipe.icon === 'caltrops') {
+                icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.spritesheet.topdownTileset.key, CALTROPS_FRAME)
                     .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
             } else {
                 icon = this.add.rectangle(48, CRAFTING_ROW_HEIGHT * 0.5, CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE, 0x1d1d1d, 0.85)
@@ -2101,7 +2120,7 @@ export class Game extends Phaser.Scene {
     }
 
     syncBuildModeForActiveItem(item) {
-        const shouldBuild = item === ITEM_WOOD || item === ITEM_HAMMER || item === ITEM_CAMPFIRE;
+        const shouldBuild = item === ITEM_WOOD || item === ITEM_HAMMER || item === ITEM_CAMPFIRE || item === ITEM_WOOD_CALTROPS;
         if (this.isBuildModeActive === shouldBuild && this.buildPreviewKind === item) return;
 
         this.isBuildModeActive = shouldBuild;
@@ -2927,6 +2946,34 @@ export class Game extends Phaser.Scene {
             this.campfireSprites.delete(id);
         });
 
+        const addCaltrops = (caltrops, id) => {
+            const caltropsId = id || caltrops.id;
+            if (!caltropsId || this.caltropSprites.has(caltropsId)) return;
+
+            const sprite = this.add.image(caltrops.x, caltrops.y, ASSETS.spritesheet.topdownTileset.key, CALTROPS_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CALTROPS_DISPLAY_SIZE, CALTROPS_DISPLAY_SIZE)
+                .setDepth(CALTROPS_DEPTH);
+            this.registerWorldObject(sprite);
+            this.caltropSprites.set(caltropsId, { sprite, caltrops });
+
+            caltrops.onChange(() => {
+                const entry = this.caltropSprites.get(caltropsId);
+                if (!entry) return;
+                entry.sprite.setPosition(caltrops.x, caltrops.y);
+            });
+        };
+
+        state.caltrops?.onAdd(addCaltrops);
+        state.caltrops?.forEach(addCaltrops);
+
+        state.caltrops?.onRemove((_caltrops, id) => {
+            const entry = this.caltropSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            this.caltropSprites.delete(id);
+        });
+
         const addEnemy = (enemy, id) => {
             const enemyId = id || enemy.id;
             if (!enemyId || this.enemySprites.has(enemyId)) return;
@@ -3417,6 +3464,13 @@ export class Game extends Phaser.Scene {
                 .setAlpha(0.65)
                 .setDepth(CAMPFIRE_DEPTH)
                 .setVisible(false);
+        } else if (item === ITEM_WOOD_CALTROPS) {
+            this.buildPreview = this.add.image(0, 0, ASSETS.spritesheet.topdownTileset.key, CALTROPS_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CALTROPS_DISPLAY_SIZE, CALTROPS_DISPLAY_SIZE)
+                .setAlpha(0.65)
+                .setDepth(CALTROPS_DEPTH)
+                .setVisible(false);
         } else {
             this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
                 .setOrigin(0.5)
@@ -3569,6 +3623,8 @@ export class Game extends Phaser.Scene {
             RoomClient.sendRepairWoodBlock(cell.x, cell.y);
         } else if (button === 0 && activeItem === ITEM_CAMPFIRE) {
             RoomClient.sendPlaceCampfire(cell.x, cell.y);
+        } else if (button === 0 && activeItem === ITEM_WOOD_CALTROPS) {
+            RoomClient.sendPlaceCaltrops(cell.x, cell.y);
         } else if (button === 2 && (activeItem === ITEM_HAMMER || activeItem === ITEM_WOOD)) {
             RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
         }
@@ -3693,6 +3749,7 @@ export class Game extends Phaser.Scene {
         this.drawEnemyHitboxes(g);
         this.drawTreeHitboxes(g);
         this.drawCampfireHitboxes(g);
+        this.drawCaltropsHitboxes(g);
     }
 
     drawPlayerHitboxes(graphics) {
@@ -3769,6 +3826,13 @@ export class Game extends Phaser.Scene {
         this.campfireSprites.forEach(({ campfire }) => {
             graphics.lineStyle(2, 0xffb23a, 0.9);
             graphics.strokeCircle(campfire.x, campfire.y, CAMPFIRE_HEAL_RADIUS);
+        });
+    }
+
+    drawCaltropsHitboxes(graphics) {
+        this.caltropSprites.forEach(({ caltrops }) => {
+            graphics.lineStyle(2, 0xb87944, 0.9);
+            graphics.strokeCircle(caltrops.x, caltrops.y, CALTROPS_SLOW_RADIUS);
         });
     }
 
@@ -5392,6 +5456,7 @@ export class Game extends Phaser.Scene {
             radius?.destroy();
             healBar?.destroy();
         });
+        this.caltropSprites.forEach(({ sprite }) => sprite.destroy());
         this.playerBulletSprites.forEach(({ sprite }) => sprite.destroy());
         this.enemyBulletSprites.forEach(({ sprite }) => sprite.destroy());
         if (this.grassNoiseLayer) {
@@ -5468,6 +5533,7 @@ export class Game extends Phaser.Scene {
         this.logSprites.clear();
         this.woodBlockSprites.clear();
         this.campfireSprites.clear();
+        this.caltropSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }

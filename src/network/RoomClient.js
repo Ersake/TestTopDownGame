@@ -152,6 +152,11 @@ class RoomClient {
         this.room.send("placeCampfire", { x, y });
     }
 
+    sendPlaceCaltrops(x, y) {
+        if (!this.room) return;
+        this.room.send("placeCaltrops", { x, y });
+    }
+
     sendCraftItem(recipeId) {
         if (!this.room) return;
         this.room.send("craftItem", { recipeId });

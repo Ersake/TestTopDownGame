@@ -107,6 +107,12 @@ export class CampfireState extends Schema {
     @type("uint8")   healProgress: number = 0;
 }
 
+export class CaltropState extends Schema {
+    @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 /** Two compact 16x16 map-editor tile layers encoded as base64 uint16 values. */
 export class MapChunkState extends Schema {
     @type("string") layer1: string = "";
@@ -122,6 +128,7 @@ export class GameRoomState extends Schema {
     @type({ map: LogState })          logs          = new MapSchema<LogState>();
     @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
     @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
+    @type({ map: CaltropState })      caltrops      = new MapSchema<CaltropState>();
     @type({ map: MapChunkState })     mapChunks     = new MapSchema<MapChunkState>();
 
     @type("int32")  worldWidth:  number = 4800;

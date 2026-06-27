@@ -9,6 +9,7 @@ import {
     LogState,
     WoodBlockState,
     CampfireState,
+    CaltropState,
     MapChunkState,
 } from "../schema/GameState";
 import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
@@ -43,6 +44,10 @@ const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
 const CAMPFIRE_CRAFT_WOOD_COST = 10;
+const CALTROPS_FRAME = 449;
+const CALTROPS_SLOW_RADIUS = 44;
+const CALTROPS_SPEED_MULTIPLIER = 0.75;
+const CALTROPS_CRAFT_WOOD_COST = 4;
 const TREE_COUNT = 25;
 const TREE_GRID_COLS = 5;
 const TREE_GRID_ROWS = 5;
@@ -157,6 +162,7 @@ const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
 const ITEM_HAMMER = "hammer";
 const ITEM_CAMPFIRE = "campfire";
+const ITEM_WOOD_CALTROPS = "wood_caltrops";
 const ITEM_WOOD = "wood";
 const HOTBAR_SLOT_COUNT = 9;
 const OUTFIT_COLOR_COUNT = 5;
@@ -620,6 +626,10 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.onMessage("placeCampfire", (client, data) => {
             this.tryPlaceCampfire(client.sessionId, data);
+        });
+
+        this.onMessage("placeCaltrops", (client, data) => {
+            this.tryPlaceCaltrops(client.sessionId, data);
         });
 
         this.onMessage("craftItem", (client, data) => {
@@ -1463,17 +1473,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.fillPendingCampfireItems(player);
     }
 
+    private grantHotbarItem(player: PlayerState, item: string): boolean {
+        this.normalizeHotbar(player);
+        const emptyIndex = player.hotbarItems.findIndex((slotItem) => !slotItem);
+        if (emptyIndex < 0) return false;
+        player.hotbarItems[emptyIndex] = item;
+        player.hotbarCounts[emptyIndex] = EMPTY_HOTBAR_COUNT;
+        if (player.activeSlot === emptyIndex + 1) {
+            player.activeItem = item;
+        }
+        return true;
+    }
+
     private fillPendingCampfireItems(player: PlayerState) {
         this.normalizeHotbar(player);
         while (player.pendingCampfireCharges > 0) {
-            const emptyIndex = player.hotbarItems.findIndex((item) => !item);
-            if (emptyIndex < 0) return;
-            player.hotbarItems[emptyIndex] = ITEM_CAMPFIRE;
-            player.hotbarCounts[emptyIndex] = EMPTY_HOTBAR_COUNT;
+            if (!this.grantHotbarItem(player, ITEM_CAMPFIRE)) return;
             player.pendingCampfireCharges--;
-            if (player.activeSlot === emptyIndex + 1) {
-                player.activeItem = ITEM_CAMPFIRE;
-            }
         }
     }
 
@@ -1484,7 +1500,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             return false;
         };
 
-        if (recipeId !== "campfire") return reject("That recipe is not available yet.");
+        const craft = recipeId === "campfire"
+            ? { item: ITEM_CAMPFIRE, woodCost: CAMPFIRE_CRAFT_WOOD_COST }
+            : recipeId === "wood_caltrops"
+                ? { item: ITEM_WOOD_CALTROPS, woodCost: CALTROPS_CRAFT_WOOD_COST }
+                : null;
+        if (!craft) return reject("That recipe is not available yet.");
 
         const sp = this.serverPlayers.get(client.sessionId);
         const player = this.state.players.get(client.sessionId);
@@ -1492,18 +1513,22 @@ export class ShmupRoom extends Room<GameRoomState> {
             return reject("You cannot craft right now.");
         }
         if (!this.isPlayerNearWorkbench(player)) return reject("Move closer to a workbench.");
-        if (this.getTotalHeldWood(player) < CAMPFIRE_CRAFT_WOOD_COST) return reject("Not enough wood.");
-        if (!this.hasRoomForCraftedCampfire(player, CAMPFIRE_CRAFT_WOOD_COST)) return reject("No empty hotbar slot.");
-        if (!this.consumeHeldWood(player, CAMPFIRE_CRAFT_WOOD_COST)) return reject("Not enough wood.");
+        if (this.getTotalHeldWood(player) < craft.woodCost) return reject("Not enough wood.");
+        if (!this.hasRoomForCraftedItem(player, craft.woodCost)) return reject("No empty hotbar slot.");
+        if (!this.consumeHeldWood(player, craft.woodCost)) return reject("Not enough wood.");
 
         player.wood = this.getTotalHeldWood(player);
-        this.grantCampfireItem(player);
+        if (craft.item === ITEM_CAMPFIRE) {
+            this.grantCampfireItem(player);
+        } else if (!this.grantHotbarItem(player, craft.item)) {
+            return reject("No empty hotbar slot.");
+        }
         client.send("craftResult", { accepted: true, recipeId });
         this.broadcast("itemCrafted", { recipeId, playerId: client.sessionId });
         return true;
     }
 
-    private hasRoomForCraftedCampfire(player: PlayerState, woodCost: number): boolean {
+    private hasRoomForCraftedItem(player: PlayerState, woodCost: number): boolean {
         this.normalizeHotbar(player);
         if (this.findFirstEmptyHotbarSlot(player) > 0) return true;
 
@@ -1752,6 +1777,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.logs.clear();
         this.state.woodBlocks.clear();
         this.state.campfires.clear();
+        this.state.caltrops.clear();
         this.generateTrees();
 
         this.state.players.forEach((player, sid) => {
@@ -2439,9 +2465,16 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (player.activeItem !== ITEM_HAMMER) return false;
         const campfireId = this.getCampfireIdForCell(cell);
-        if (!this.state.campfires.has(campfireId)) return false;
-        this.state.campfires.delete(campfireId);
-        this.grantCampfireItem(player);
+        if (this.state.campfires.has(campfireId)) {
+            this.state.campfires.delete(campfireId);
+            this.grantCampfireItem(player);
+            return true;
+        }
+
+        const caltropsId = this.getCaltropsIdForCell(cell);
+        if (!this.state.caltrops.has(caltropsId)) return false;
+        if (!this.grantHotbarItem(player, ITEM_WOOD_CALTROPS)) return false;
+        this.state.caltrops.delete(caltropsId);
         return true;
     }
 
@@ -2481,6 +2514,25 @@ export class ShmupRoom extends Room<GameRoomState> {
         return true;
     }
 
+    private tryPlaceCaltrops(sessionId: string, data: unknown): boolean {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
+        if (player.activeItem !== ITEM_WOOD_CALTROPS || this.getHotbarItem(player, player.activeSlot) !== ITEM_WOOD_CALTROPS) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+        if (this.isBuildCellOccupied(cell, cell.x, cell.y)) return false;
+
+        const caltrops = new CaltropState();
+        caltrops.id = this.getCaltropsIdForCell(cell);
+        caltrops.x = cell.x;
+        caltrops.y = cell.y;
+        this.state.caltrops.set(caltrops.id, caltrops);
+        this.setHotbarItem(player, player.activeSlot, EMPTY_HOTBAR_ITEM);
+        return true;
+    }
+
     private getBuildCellFromData(data: unknown): { id: string; col: number; row: number; x: number; y: number } | null {
         const maybePoint = data as { x?: unknown; y?: unknown } | null;
         if (!maybePoint || typeof maybePoint.x !== "number" || typeof maybePoint.y !== "number") return null;
@@ -2504,6 +2556,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         return `campfire-${cell.col}-${cell.row}`;
     }
 
+    private getCaltropsIdForCell(cell: { col: number; row: number }): string {
+        return `caltrops-${cell.col}-${cell.row}`;
+    }
+
     private isBuildCellInRange(player: PlayerState, blockX: number, blockY: number): boolean {
         const dx = player.x - blockX;
         const dy = (player.y + PLAYER_TREE_Y_OFFSET) - blockY;
@@ -2513,6 +2569,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private isBuildCellOccupied(cell: { col: number; row: number }, blockX: number, blockY: number): boolean {
         if (this.state.woodBlocks.has(this.getWoodBlockIdForCell(cell))) return true;
         if (this.state.campfires.has(this.getCampfireIdForCell(cell))) return true;
+        if (this.state.caltrops.has(this.getCaltropsIdForCell(cell))) return true;
 
         let occupied = false;
         this.state.players.forEach((player, playerId) => {
@@ -3257,7 +3314,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 return;
             }
 
-            const move = Math.min(ENEMY1_SPEED * dtSec, remainingDistance);
+            const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
             if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
                 se.path = [];
                 se.pathTargetCell = null;
@@ -3379,7 +3436,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (distance <= 0) return;
 
         const remainingDistance = hasLineOfSight ? Math.max(0, distance - CASTER_CAST_RANGE) : distance;
-        const move = Math.min(ENEMY1_SPEED * dtSec, remainingDistance);
+        const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
         if (move <= 0) {
             if (hasLineOfSight) {
                 enemy.action = "charge";
@@ -3490,7 +3547,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         se.modeMs = 0;
         if (distance <= 0) return;
 
-        const move = Math.min(DARK_KNIGHT_WALK_SPEED * dtSec, distance);
+        const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
         if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
             se.pathTargetCell = null;
@@ -3622,7 +3679,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             return true;
         }
 
-        const move = Math.min(DARK_KNIGHT_RUSH_SPEED * dtSec, distance);
+        const move = Math.min(DARK_KNIGHT_RUSH_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
         const prevX = enemy.x;
         const prevY = enemy.y;
         const resolved = this.moveEnemyWithWoodBlocks(
@@ -3743,6 +3800,45 @@ export class ShmupRoom extends Room<GameRoomState> {
     private setEnemyFacingFromMovement(enemy: EnemyState, previousX: number, previousY: number): void {
         const direction = directionFromInput(enemy.x - previousX, enemy.y - previousY);
         if (direction) enemy.facingDirection = direction;
+    }
+
+    private getEnemyCaltropsSpeedMultiplier(enemy: EnemyState): number {
+        return this.isEnemyTouchingCaltrops(enemy) ? CALTROPS_SPEED_MULTIPLIER : 1;
+    }
+
+    private isEnemyTouchingCaltrops(enemy: EnemyState): boolean {
+        const footX = enemy.x;
+        const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
+        const radius = CALTROPS_SLOW_RADIUS + ENEMY_FOOT_RADIUS;
+        const radiusSq = radius * radius;
+
+        let touching = false;
+        this.state.caltrops.forEach((caltrops) => {
+            if (touching) return;
+            const dx = footX - caltrops.x;
+            const dy = footY - caltrops.y;
+            touching = dx * dx + dy * dy <= radiusSq;
+        });
+        if (touching) return true;
+
+        const startCol = Math.floor((footX - radius) / MAP_TILE_SIZE);
+        const endCol = Math.floor((footX + radius) / MAP_TILE_SIZE);
+        const startRow = Math.floor((footY - radius) / MAP_TILE_SIZE);
+        const endRow = Math.floor((footY + radius) / MAP_TILE_SIZE);
+        for (let row = startRow; row <= endRow; row++) {
+            for (let col = startCol; col <= endCol; col++) {
+                for (const layer of [1, 2] as const) {
+                    if (this.getMapTileValue(col, row, layer) !== CALTROPS_FRAME + 1) continue;
+                    const tileX = col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+                    const tileY = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+                    const dx = footX - tileX;
+                    const dy = footY - tileY;
+                    if (dx * dx + dy * dy <= radiusSq) return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private followEnemyPath(enemy: EnemyState, se: ServerEnemy, moveDistance: number): boolean {
