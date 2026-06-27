@@ -199,6 +199,27 @@ const UPGRADE_IDS = new Set([
     "hammer_wood_gather",
     "hammer_campfire",
 ]);
+type UpgradeNodeConfig = {
+    id: string;
+    prerequisite?: string;
+};
+const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
+    [ITEM_WOOD_AXE]: [
+        { id: "axe_tree_damage" },
+        { id: "axe_enemy_damage", prerequisite: "axe_tree_damage" },
+        { id: "axe_swing_speed", prerequisite: "axe_enemy_damage" },
+    ],
+    [ITEM_WOOD_BOW]: [
+        { id: "bow_damage" },
+        { id: "bow_pierce", prerequisite: "bow_damage" },
+        { id: "bow_charge_time", prerequisite: "bow_pierce" },
+    ],
+    [ITEM_HAMMER]: [
+        { id: "hammer_wood_gather" },
+        { id: "hammer_barricade_hp", prerequisite: "hammer_wood_gather" },
+        { id: "hammer_campfire", prerequisite: "hammer_barricade_hp" },
+    ],
+};
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
 const DIRECTION_VECTORS: Record<string, { x: number; y: number }> = {
     E: { x: 1, y: 0 },
@@ -1570,10 +1591,20 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private selectUpgrade(sessionId: string, data: unknown) {
         const player = this.state.players.get(sessionId);
-        if (!player || this.state.gameOver) return;
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
 
         const upgradeId = String((data as { upgradeId?: unknown })?.upgradeId || "");
+        const item = String((data as { item?: unknown })?.item || "");
+        const slot = Number((data as { slot?: unknown })?.slot);
         if (!UPGRADE_IDS.has(upgradeId) || player.pendingUpgradeChoices <= 0) return;
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
+        if (!item || this.getHotbarItem(player, slot) !== item) return;
+        if (!this.isPlayerNearEnchantmentTable(player)) return;
+
+        const node = this.getUpgradeNodeForItem(item, upgradeId);
+        if (!node) return;
+        if (node.prerequisite && this.getPlayerUpgradeRank(player, node.prerequisite) <= 0) return;
 
         switch (upgradeId) {
             case "axe_swing_speed":
@@ -1609,6 +1640,35 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         player.pendingUpgradeChoices = Math.max(0, player.pendingUpgradeChoices - 1);
+    }
+
+    private getUpgradeNodeForItem(item: string, upgradeId: string): UpgradeNodeConfig | null {
+        return UPGRADE_TREES_BY_ITEM[item]?.find((node) => node.id === upgradeId) || null;
+    }
+
+    private getPlayerUpgradeRank(player: PlayerState, upgradeId: string): number {
+        switch (upgradeId) {
+            case "axe_swing_speed":
+                return Math.max(0, player.axeSwingSpeedUpgrades || 0);
+            case "axe_tree_damage":
+                return Math.max(0, player.axeTreeDamageUpgrades || 0);
+            case "axe_enemy_damage":
+                return Math.max(0, player.axeEnemyDamageUpgrades || 0);
+            case "bow_damage":
+                return Math.max(0, player.bowDamageUpgrades || 0);
+            case "bow_pierce":
+                return Math.max(0, player.bowPierceUpgrades || 0);
+            case "bow_charge_time":
+                return Math.max(0, player.bowChargeTimeUpgrades || 0);
+            case "hammer_barricade_hp":
+                return Math.max(0, player.barricadeHealthUpgrades || 0);
+            case "hammer_wood_gather":
+                return Math.max(0, player.woodGatherUpgrades || 0);
+            case "hammer_campfire":
+                return Math.max(0, player.campfireUpgrades || 0);
+            default:
+                return 0;
+        }
     }
 
     private initializeHotbar(player: PlayerState) {
@@ -1880,6 +1940,22 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (nearCraftingTable) return true;
 
         return false;
+    }
+
+    private isPlayerNearEnchantmentTable(player: PlayerState): boolean {
+        const footX = player.x;
+        const footY = player.y + PLAYER_TREE_Y_OFFSET;
+        const rangeSq = WORKBENCH_INTERACT_RANGE * WORKBENCH_INTERACT_RANGE;
+        let nearEnchantmentTable = false;
+
+        this.state.enchantmentTables.forEach((table) => {
+            if (nearEnchantmentTable) return;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            nearEnchantmentTable = dx * dx + dy * dy <= rangeSq;
+        });
+
+        return nearEnchantmentTable;
     }
 
     private isWorkbenchLeftCell(col: number, row: number, layer: 1 | 2): boolean {

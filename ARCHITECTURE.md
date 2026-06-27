@@ -104,7 +104,7 @@ Important server files:
 | `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"` | Building helpers | Requests server-authoritative wood block placement, removal, or repair. |
 | `"placeCampfire"`, `"placeCaltrops"` | Placement helpers | Requests server-authoritative deployable placement. |
 | `"craftItem"` | `RoomClient.sendCraftItem()` | Requests crafting by recipe ID. |
-| `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Applies one pending level-up upgrade choice. |
+| `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Requests an enchantment-table skill spend with `{ upgradeId, item, slot }`; the server validates skill points, table range, item tree, hotbar slot contents, and prerequisites. |
 | `"setOutfitColor"` | `RoomClient.sendSetOutfitColor()` | Requests player presentation color changes. |
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
@@ -125,7 +125,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"craftResult"` | Acceptance or rejection feedback for a crafting request. |
 | `"itemCrafted"` | One-shot presentation for successful crafting. |
 | `"levelReset"` | One-shot presentation/state reset after a room-level reset. |
-| `"playerLevelUp"` | One-shot level-up presentation and upgrade-choice prompt. |
+| `"playerLevelUp"` | One-shot level-up presentation; the synced pending upgrade count is displayed as available skill points. |
 | `"enemyWaveStarted"` | One-shot wave-start presentation. |
 | `"mapImported"` | Legacy map-import acceptance feedback. |
 | `"mapList"` | Saved map names returned to the map editor. |
@@ -166,7 +166,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, axe whirlwind active/cooldown progress, upgrade counters, outfit color, and hotbar inventory.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory.
 
 ### Enemy State
 
@@ -196,6 +196,7 @@ Current server-owned systems include:
 - World bounds and tree generation.
 - Player movement, facing direction, attack lockout, attack cooldown, and interaction input.
 - Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a 10-second server-owned cooldown rendered on the hotbar.
+- Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites.
 - Tree damage, tree removal, and log spawning.
 - Wood pickup.
 - Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal.

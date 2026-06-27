@@ -172,9 +172,9 @@ class RoomClient {
         this.room.send("craftItem", { recipeId });
     }
 
-    sendSelectUpgrade(upgradeId) {
+    sendSelectUpgrade(upgradeId, item = '', slot = 0) {
         if (!this.room) return;
-        this.room.send("selectUpgrade", { upgradeId });
+        this.room.send("selectUpgrade", { upgradeId, item, slot });
     }
 
     sendSetOutfitColor(outfitColor) {

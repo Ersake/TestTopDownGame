@@ -297,6 +297,41 @@ const PLAYER_BUFFS = [
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
     { field: 'campfireUpgrades', label: 'Campfire charge' },
 ];
+const ENCHANTMENT_SKILL_TREES = {
+    [ITEM_WOOD_AXE]: {
+        title: 'Axe Skills',
+        displayName: 'Axe',
+        nodes: [
+            { id: 'axe_tree_damage', label: '+1 wood damage', field: 'axeTreeDamageUpgrades' },
+            { id: 'axe_enemy_damage', label: '+1 enemy damage', field: 'axeEnemyDamageUpgrades', prerequisite: 'axe_tree_damage' },
+            { id: 'axe_swing_speed', label: '+25% swing speed', field: 'axeSwingSpeedUpgrades', prerequisite: 'axe_enemy_damage' },
+        ],
+    },
+    [ITEM_WOOD_BOW]: {
+        title: 'Bow Skills',
+        displayName: 'Bow',
+        nodes: [
+            { id: 'bow_damage', label: '+1 damage', field: 'bowDamageUpgrades' },
+            { id: 'bow_pierce', label: '+1 pierce', field: 'bowPierceUpgrades', prerequisite: 'bow_damage' },
+            { id: 'bow_charge_time', label: '-25% charge time', field: 'bowChargeTimeUpgrades', prerequisite: 'bow_pierce' },
+        ],
+    },
+    [ITEM_HAMMER]: {
+        title: 'Hammer Skills',
+        displayName: 'Hammer',
+        nodes: [
+            { id: 'hammer_wood_gather', label: '+50% wood gather', field: 'woodGatherUpgrades' },
+            { id: 'hammer_barricade_hp', label: '+5 barricade HP', field: 'barricadeHealthUpgrades', prerequisite: 'hammer_wood_gather' },
+            { id: 'hammer_campfire', label: '+1 campfire', field: 'campfireUpgrades', prerequisite: 'hammer_barricade_hp' },
+        ],
+    },
+};
+const ENCHANTMENT_NODE_BY_ID = Object.values(ENCHANTMENT_SKILL_TREES)
+    .flatMap(({ nodes }) => nodes)
+    .reduce((lookup, node) => {
+        lookup[node.id] = node;
+        return lookup;
+    }, {});
 const CRAFTING_RECIPES = [
     {
         id: CAMPFIRE_CRAFT_RECIPE_ID,
@@ -378,6 +413,7 @@ export class Game extends Phaser.Scene {
         this.updateCasterChargeEffects();
         this.updateCampfireHealBars();
         this.updateCraftingMenuProximity();
+        this.updateEnchantmentMenuProximity();
         this.updateHitboxOverlay();
     }
 
@@ -422,8 +458,11 @@ export class Game extends Phaser.Scene {
         this.hotbarDrag = null;
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
-        this.upgradeUiMode = 'root';
-        this.upgradeUiObjects = [];
+        this.skillPointText = null;
+        this.enchantmentUi = null;
+        this.enchantmentUiObjects = new Set();
+        this.enchantmentSelectedItem = '';
+        this.enchantmentSelectedSlot = 0;
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
         this.outfitColorButtons = [];
         this.outfitColorButtonObjects = new Set();
@@ -562,6 +601,7 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('mouseup', this.handleGlobalMouseUp, true);
             this.disableBuildMode();
             this.closeCraftingMenu();
+            this.closeEnchantmentMenu();
             this.cancelHotbarDrag();
             this.stopAxeWhirlwind();
             this.stopAllCasterChargeSounds();
@@ -610,6 +650,11 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 16, color: '#ffe27a',
             stroke: '#000000', strokeThickness: 5, align: 'right',
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.skillPointText = this.add.text(this.scale.width - 20, this.scale.height - 74, '(0 skill points available)', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5, align: 'right',
+        }).setOrigin(1, 1).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nRestarting in 10', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
@@ -663,12 +708,14 @@ export class Game extends Phaser.Scene {
         this.initHotbar();
         this.initOutfitColorPicker();
         this.initVolumeSlider();
+        this.updateSkillPointText();
         this.registerFixedUi(
             this.tutorialText,
             this.timerText,
             this.killsText,
             this.playerCountText,
             this.buffListText,
+            this.skillPointText,
             this.gameOverText,
             this.quitButton,
             this.roomCodeText,
@@ -776,6 +823,12 @@ export class Game extends Phaser.Scene {
             .map(({ label, stacks }) => `${label} x${stacks}`);
 
         this.buffListText.setText(buffs.length > 0 ? `BUFFS\n${buffs.join('\n')}` : '');
+    }
+
+    updateSkillPointText() {
+        if (!this.skillPointText) return;
+        const points = Math.max(0, this.localPendingUpgradeChoices || 0);
+        this.skillPointText.setText(`(${points} skill points available)`);
     }
 
     initOutfitColorPicker() {
@@ -984,6 +1037,10 @@ export class Game extends Phaser.Scene {
         if (!drag || drag.pointerId !== pointer.id) return false;
 
         if (drag.hasDragged) {
+            if (this.tryDropHotbarItemIntoEnchantmentSlot(drag.fromSlot, pointer)) {
+                this.cancelHotbarDrag();
+                return true;
+            }
             const targetSlot = this.getHotbarSlotAt(pointer.x, pointer.y);
             if (targetSlot && targetSlot !== drag.fromSlot) {
                 RoomClient.sendSwapHotbarSlots(drag.fromSlot, targetSlot);
@@ -1095,6 +1152,280 @@ export class Game extends Phaser.Scene {
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
         this.updateHotbarAxeOverlays();
+        this.validateEnchantmentSelection();
+    }
+
+    createInventoryItemIcon(item, x, y, size, depth = UI_DEPTH + 36) {
+        const iconKey = this.getHotbarIconKey(item);
+        if (!iconKey) return null;
+        const icon = this.add.image(x, y, iconKey)
+            .setOrigin(0.5)
+            .setDisplaySize(size, size)
+            .setDepth(depth)
+            .setScrollFactor(0);
+        if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+        if (item === ITEM_WOOD_CALTROPS) icon.setFrame(CALTROPS_FRAME);
+        return icon;
+    }
+
+    getInventoryItemDisplayName(item) {
+        return ENCHANTMENT_SKILL_TREES[item]?.displayName || {
+            [ITEM_CAMPFIRE]: 'Campfire',
+            [ITEM_WOOD_CALTROPS]: 'Wood Caltrops',
+            [ITEM_WOOD]: 'Wood',
+        }[item] || 'Item';
+    }
+
+    addEnchantmentUiObject(object) {
+        if (!object) return object;
+        this.enchantmentUiObjects.add(object);
+        this.registerFixedUi(object);
+        return object;
+    }
+
+    addEnchantmentDynamicObject(object) {
+        if (!object) return object;
+        this.enchantmentUi?.dynamicObjects?.add(object);
+        return this.addEnchantmentUiObject(object);
+    }
+
+    clearEnchantmentDynamicObjects() {
+        this.enchantmentUi?.dynamicObjects?.forEach((object) => {
+            object?.destroy?.();
+            this.enchantmentUiObjects.delete(object);
+        });
+        if (this.enchantmentUi) this.enchantmentUi.dynamicObjects = new Set();
+    }
+
+    openEnchantmentMenu() {
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyEnchantmentTable()) return;
+        if (this.enchantmentUi) {
+            this.renderEnchantmentUi();
+            return;
+        }
+
+        this.stopHeldAttack();
+        this.cancelBowCharge();
+        this.stopAxeWhirlwind();
+
+        const panelWidth = Math.min(CRAFTING_PANEL_WIDTH, Math.max(320, this.scale.width - 48));
+        const panelHeight = Math.min(CRAFTING_PANEL_HEIGHT, Math.max(280, this.scale.height - 48));
+        const panelX = this.centreX - panelWidth * 0.5;
+        const panelY = this.centreY - panelHeight * 0.5;
+        const slotSize = 84;
+        const slotX = this.centreX;
+        const slotY = panelY + panelHeight - 58;
+        const slotRect = new Phaser.Geom.Rectangle(slotX - slotSize * 0.5, slotY - slotSize * 0.5, slotSize, slotSize);
+        const objects = [];
+
+        const addObject = (object) => {
+            objects.push(object);
+            this.addEnchantmentUiObject(object);
+            return object;
+        };
+
+        const panel = addObject(this.add.graphics().setDepth(UI_DEPTH + 30).setScrollFactor(0));
+        panel.fillStyle(0x4a4a4a, 0.78);
+        panel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.lineStyle(2, 0xbcbcbc, 0.78);
+        panel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.setInteractive(new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight), Phaser.Geom.Rectangle.Contains);
+
+        addObject(this.add.text(panelX + CRAFTING_PANEL_PADDING, panelY + 22, 'Enchantment', {
+            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const closeButton = addObject(this.add.text(panelX + panelWidth - 28, panelY + 20, 'X', {
+            fontFamily: 'Arial Black', fontSize: 24, color: '#ff3333',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0).setInteractive({ useHandCursor: true }));
+        closeButton.on('pointerdown', (_pointer, _x, _y, event) => {
+            event?.stopPropagation();
+            this.closeEnchantmentMenu();
+        });
+
+        const slotBackground = addObject(this.add.rectangle(slotX, slotY, slotSize, slotSize, 0x181818, 0.86)
+            .setOrigin(0.5)
+            .setDepth(UI_DEPTH + 34)
+            .setScrollFactor(0)
+            .setStrokeStyle(3, 0xffffff, 0.64)
+            .setInteractive({ useHandCursor: true }));
+        addObject(this.add.text(slotX, slotY + slotSize * 0.5 + 12, 'Drag item here', {
+            fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 3,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        this.enchantmentUi = {
+            objects,
+            dynamicObjects: new Set(),
+            panel: new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight),
+            slotRect,
+            slotX,
+            slotY,
+            slotSize,
+            treeTopY: panelY + 94,
+            treeBottomY: slotY - 96,
+        };
+        this.renderEnchantmentUi();
+    }
+
+    closeEnchantmentMenu() {
+        if (!this.enchantmentUi && this.enchantmentUiObjects.size <= 0) return;
+        this.enchantmentSelectedItem = '';
+        this.enchantmentSelectedSlot = 0;
+        this.clearEnchantmentDynamicObjects();
+        this.enchantmentUi?.objects?.forEach((object) => object?.destroy?.());
+        this.enchantmentUiObjects.clear();
+        this.enchantmentUi = null;
+    }
+
+    renderEnchantmentUi() {
+        const ui = this.enchantmentUi;
+        if (!ui) return;
+        this.clearEnchantmentDynamicObjects();
+
+        const points = Math.max(0, this.localPendingUpgradeChoices || 0);
+        const item = this.enchantmentSelectedItem;
+        const slotX = ui.slotX;
+        const slotY = ui.slotY;
+        const tree = ENCHANTMENT_SKILL_TREES[item];
+
+        if (item) {
+            const icon = this.createInventoryItemIcon(item, slotX, slotY, 54, UI_DEPTH + 36);
+            this.addEnchantmentDynamicObject(icon);
+            this.addEnchantmentDynamicObject(this.add.text(slotX, slotY + 34, this.getInventoryItemDisplayName(item), {
+                fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 3,
+            }).setOrigin(0.5, 0.5).setDepth(UI_DEPTH + 37).setScrollFactor(0));
+        }
+
+        this.addEnchantmentDynamicObject(this.add.text(ui.panel.x + ui.panel.width - CRAFTING_PANEL_PADDING, ui.panel.y + 56, `${points} skill points`, {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(1, 0).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        if (!item) {
+            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'Drag an item from your hotbar into the slot.', {
+                fontFamily: 'Arial Black', fontSize: 20, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+            return;
+        }
+
+        if (!tree) {
+            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'No skills for this item', {
+                fontFamily: 'Arial Black', fontSize: 22, color: '#cccccc',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+            return;
+        }
+
+        this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + 66, tree.title, {
+            fontFamily: 'Arial Black', fontSize: 21, color: '#ffd37a',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const nodeWidth = Math.min(330, ui.panel.width - CRAFTING_PANEL_PADDING * 4);
+        const nodeHeight = 56;
+        const nodeGap = tree.nodes.length > 1
+            ? Math.min(92, (ui.treeBottomY - ui.treeTopY) / (tree.nodes.length - 1))
+            : 0;
+        const positions = tree.nodes.map((_node, index) => ({
+            x: this.centreX,
+            y: ui.treeBottomY - index * nodeGap,
+        }));
+
+        const connector = this.add.graphics().setDepth(UI_DEPTH + 32).setScrollFactor(0);
+        connector.lineStyle(4, 0xffffff, 0.35);
+        for (let i = 1; i < positions.length; i++) {
+            connector.beginPath();
+            connector.moveTo(positions[i - 1].x, positions[i - 1].y - nodeHeight * 0.5);
+            connector.lineTo(positions[i].x, positions[i].y + nodeHeight * 0.5);
+            connector.strokePath();
+        }
+        this.addEnchantmentDynamicObject(connector);
+
+        tree.nodes.forEach((node, index) => {
+            const position = positions[index];
+            const rank = this.getUpgradeRankForNode(node);
+            const unlocked = this.isEnchantmentNodeUnlocked(node);
+            const canSpend = unlocked && points > 0;
+            const fillColor = unlocked ? 0xf2f2f2 : 0x505050;
+            const fillAlpha = unlocked ? 0.92 : 0.52;
+            const strokeColor = canSpend ? 0xffd37a : 0xffffff;
+            const textColor = unlocked ? '#111111' : '#999999';
+
+            const oval = this.add.ellipse(position.x, position.y, nodeWidth, nodeHeight, fillColor, fillAlpha)
+                .setOrigin(0.5)
+                .setDepth(UI_DEPTH + 34)
+                .setScrollFactor(0)
+                .setStrokeStyle(canSpend ? 4 : 2, strokeColor, canSpend ? 0.95 : 0.38);
+            this.addEnchantmentDynamicObject(oval);
+
+            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y - 7, node.label, {
+                fontFamily: 'Arial Black', fontSize: 16, color: textColor,
+                align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
+            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y + 15, `Rank: ${rank}`, {
+                fontFamily: 'Arial Black', fontSize: 12, color: textColor,
+                align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
+
+            if (canSpend) {
+                const zone = this.add.zone(position.x, position.y, nodeWidth, nodeHeight)
+                    .setOrigin(0.5)
+                    .setDepth(UI_DEPTH + 36)
+                    .setScrollFactor(0)
+                    .setInteractive({ useHandCursor: true });
+                zone.on('pointerdown', (_pointer, _x, _y, event) => {
+                    event?.stopPropagation?.();
+                    this.selectEnchantmentUpgrade(node);
+                });
+                this.addEnchantmentDynamicObject(zone);
+            }
+        });
+    }
+
+    getUpgradeRankForNode(node) {
+        const player = this.localPlayerState || RoomClient.room?.state?.players?.get(this.localSessionId);
+        if (!player || !node?.field) return 0;
+        return Math.max(0, player[node.field] || 0);
+    }
+
+    getUpgradeRankById(upgradeId) {
+        const node = ENCHANTMENT_NODE_BY_ID[upgradeId];
+        return node ? this.getUpgradeRankForNode(node) : 0;
+    }
+
+    isEnchantmentNodeUnlocked(node) {
+        if (!node?.prerequisite) return true;
+        return this.getUpgradeRankById(node.prerequisite) > 0;
+    }
+
+    selectEnchantmentUpgrade(node) {
+        if (!node || !this.enchantmentSelectedItem || !this.enchantmentSelectedSlot) return;
+        if (!this.isEnchantmentNodeUnlocked(node)) return;
+        RoomClient.sendSelectUpgrade(node.id, this.enchantmentSelectedItem, this.enchantmentSelectedSlot);
+    }
+
+    tryDropHotbarItemIntoEnchantmentSlot(slot, pointer) {
+        const ui = this.enchantmentUi;
+        if (!ui || !pointer || !ui.slotRect.contains(pointer.x, pointer.y)) return false;
+        const item = this.getItemForHotbarSlot(slot);
+        if (!item) return false;
+        this.enchantmentSelectedItem = item;
+        this.enchantmentSelectedSlot = slot;
+        this.renderEnchantmentUi();
+        return true;
+    }
+
+    validateEnchantmentSelection() {
+        if (!this.enchantmentSelectedSlot || !this.enchantmentSelectedItem) return;
+        if (this.getItemForHotbarSlot(this.enchantmentSelectedSlot) === this.enchantmentSelectedItem) return;
+        this.enchantmentSelectedItem = '';
+        this.enchantmentSelectedSlot = 0;
+        this.renderEnchantmentUi();
     }
 
     addCraftingUiObject(object) {
@@ -1267,7 +1598,12 @@ export class Game extends Phaser.Scene {
     }
 
     handleInteractPressed(event) {
-        if (this.craftingUi) return;
+        if (this.craftingUi || this.enchantmentUi) return;
+        if (this.getNearbyEnchantmentTable()) {
+            event?.preventDefault?.();
+            this.openEnchantmentMenu();
+            return;
+        }
         if (!this.getNearbyWorkbench()) return;
         event?.preventDefault?.();
         this.openCraftingMenu();
@@ -1280,167 +1616,11 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    updateUpgradeUi() {
-        this.clearUpgradeUi();
-        if (this.localPendingUpgradeChoices <= 0) return;
-
-        const root = this.upgradeUiMode === 'root';
-        const width = this.scale.width;
-        const height = this.scale.height;
-        const baseX = width - 156;
-        const baseY = height - 98;
-        const topY = baseY - 118;
-        const leftX = baseX - 72;
-        const rightX = baseX + 72;
-
-        this.createUpgradeText(baseX, topY - 58, 'UPGRADE AVAILABLE', 24);
-
-        if (root) {
-            this.createUpgradeHex(baseX, topY, 44, { iconKey: ASSETS.image.woodAxeIcon.key, onClick: () => this.openUpgradeCategory('axe') });
-            this.createUpgradeHex(leftX, baseY, 44, { iconKey: ASSETS.image.woodBowIcon.key, onClick: () => this.openUpgradeCategory('bow') });
-            this.createUpgradeHex(rightX, baseY, 44, { iconKey: ASSETS.image.hammerIcon.key, onClick: () => this.openUpgradeCategory('hammer') });
-            return;
+    updateEnchantmentMenuProximity() {
+        if (!this.enchantmentUi) return;
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyEnchantmentTable()) {
+            this.closeEnchantmentMenu();
         }
-
-        const options = this.getUpgradeOptions(this.upgradeUiMode);
-        this.createUpgradeHex(baseX, topY, 58, options[0]);
-        this.createUpgradeHex(leftX, baseY, 58, options[1]);
-        this.createUpgradeHex(rightX, baseY, 58, options[2]);
-        this.createUpgradeCategoryIcon(baseX, baseY - 40, this.upgradeUiMode);
-        this.createUpgradeBackButton(rightX + 34, topY + 8);
-    }
-
-    getUpgradeOptions(category) {
-        if (category === 'axe') {
-            return [
-                { text: '+25% swing\nspeed', upgradeId: 'axe_swing_speed' },
-                { text: '+1 dmg\nto wood', upgradeId: 'axe_tree_damage' },
-                { text: '+1 dmg\nto enemies', upgradeId: 'axe_enemy_damage' },
-            ];
-        }
-        if (category === 'bow') {
-            return [
-                { text: '+1 damage', upgradeId: 'bow_damage' },
-                { text: '+1 pierce', upgradeId: 'bow_pierce' },
-                { text: '-25% charge\ntime', upgradeId: 'bow_charge_time' },
-            ];
-        }
-        return [
-            { text: '+5 barricade\nHP', upgradeId: 'hammer_barricade_hp' },
-            { text: '+50% wood\ngather', upgradeId: 'hammer_wood_gather' },
-            { text: '+1 campfire', upgradeId: 'hammer_campfire' },
-        ];
-    }
-
-    openUpgradeCategory(category) {
-        this.upgradeUiMode = category;
-        this.updateUpgradeUi();
-    }
-
-    createUpgradeCategoryIcon(x, y, category) {
-        const iconKey = {
-            axe: ASSETS.image.woodAxeIcon.key,
-            bow: ASSETS.image.woodBowIcon.key,
-            hammer: ASSETS.image.hammerIcon.key,
-        }[category];
-        if (!iconKey) return;
-
-        const icon = this.add.image(x, y, iconKey)
-            .setOrigin(0.5)
-            .setDisplaySize(40, 40)
-            .setDepth(UI_DEPTH + 21)
-            .setScrollFactor(0);
-        this.upgradeUiObjects.push(icon);
-        this.registerFixedUi(icon);
-    }
-
-    selectUpgrade(upgradeId) {
-        RoomClient.sendSelectUpgrade(upgradeId);
-        this.upgradeUiMode = 'root';
-    }
-
-    createUpgradeText(x, y, text, size = 22) {
-        const label = this.add.text(x, y, text, {
-            fontFamily: 'Arial',
-            fontSize: size,
-            color: '#ffffff',
-            align: 'center',
-        }).setOrigin(0.5).setDepth(UI_DEPTH + 20).setScrollFactor(0);
-        this.upgradeUiObjects.push(label);
-        this.registerFixedUi(label);
-        return label;
-    }
-
-    createUpgradeHex(x, y, radius, config) {
-        const points = [];
-        for (let i = 0; i < 6; i++) {
-            const angle = Phaser.Math.DegToRad(30 + i * 60);
-            points.push(new Phaser.Geom.Point(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius));
-        }
-
-        const graphics = this.add.graphics().setDepth(UI_DEPTH + 18).setScrollFactor(0);
-        graphics.fillStyle(0x000000, 0.35);
-        graphics.fillPoints(points, true);
-        graphics.lineStyle(4, 0x000000, 1);
-        graphics.strokePoints(points, true);
-        this.upgradeUiObjects.push(graphics);
-        this.registerFixedUi(graphics);
-
-        if (config.iconKey) {
-            const icon = this.add.image(x, y, config.iconKey)
-                .setOrigin(0.5)
-                .setDisplaySize(radius * 1.08, radius * 1.08)
-                .setDepth(UI_DEPTH + 21)
-                .setScrollFactor(0);
-            this.upgradeUiObjects.push(icon);
-            this.registerFixedUi(icon);
-        }
-
-        if (config.text) {
-            this.createUpgradeText(x, y, config.text, 18);
-        }
-
-        const zone = this.add.zone(x, y, radius * 1.75, radius * 1.75)
-            .setOrigin(0.5)
-            .setDepth(UI_DEPTH + 22)
-            .setScrollFactor(0)
-            .setInteractive({ useHandCursor: true });
-        zone.on('pointerdown', (pointer, _localX, _localY, event) => {
-            event?.stopPropagation?.();
-            if (config.upgradeId) this.selectUpgrade(config.upgradeId);
-            else config.onClick?.();
-        });
-        this.upgradeUiObjects.push(zone);
-        this.registerFixedUi(zone);
-    }
-
-    createUpgradeBackButton(x, y) {
-        const background = this.add.circle(x, y, 25, 0x000000, 1)
-            .setDepth(UI_DEPTH + 24)
-            .setScrollFactor(0);
-        const label = this.add.text(x, y, 'BACK', {
-            fontFamily: 'Arial Black',
-            fontSize: 11,
-            color: '#ffffff',
-            align: 'center',
-        }).setOrigin(0.5).setDepth(UI_DEPTH + 25).setScrollFactor(0);
-        const button = this.add.zone(x, y, 50, 50)
-            .setOrigin(0.5)
-            .setDepth(UI_DEPTH + 26)
-            .setScrollFactor(0)
-            .setInteractive({ useHandCursor: true });
-        button.on('pointerdown', (pointer, _localX, _localY, event) => {
-            event?.stopPropagation?.();
-            this.upgradeUiMode = 'root';
-            this.updateUpgradeUi();
-        });
-        this.upgradeUiObjects.push(background, label, button);
-        this.registerFixedUi(background, label, button);
-    }
-
-    clearUpgradeUi() {
-        this.upgradeUiObjects.forEach((object) => object?.destroy());
-        this.upgradeUiObjects = [];
     }
 
     updateHotbarSelection() {
@@ -2115,6 +2295,27 @@ export class Game extends Phaser.Scene {
         return null;
     }
 
+    getNearbyEnchantmentTable() {
+        if (this.isMapEditor || !this.localSessionId) return null;
+        const player = this.localPlayerState || RoomClient.room?.state?.players?.get(this.localSessionId);
+        if (!player || player.isDead) return null;
+
+        const footX = player.x;
+        const footY = player.y + PLAYER_FOOT_Y_OFFSET;
+        const rangeSq = WORKBENCH_INTERACT_RANGE * WORKBENCH_INTERACT_RANGE;
+
+        for (const [id, entry] of this.enchantmentTableSprites) {
+            const table = entry.table;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            if (dx * dx + dy * dy <= rangeSq) {
+                return { id, col: table.col, row: table.row, layer: 3, x: table.x, y: table.y };
+            }
+        }
+
+        return null;
+    }
+
     renderMapEditorChunk(key, data, layer) {
         const position = this.getMapChunkPosition(key);
         const values = this.decodeMapChunk(data);
@@ -2247,8 +2448,8 @@ export class Game extends Phaser.Scene {
                 || gameObjects.includes(this.quitButton)
                 || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 || gameObjects.some(gameObject => this.craftingUiObjects.has(gameObject))
+                || gameObjects.some(gameObject => this.enchantmentUiObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
-                || gameObjects.some(gameObject => this.upgradeUiObjects.includes(gameObject))
             ) {
                 return;
             }
@@ -2579,6 +2780,7 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
+            this.closeEnchantmentMenu();
             this.createGrassNoiseLayer();
         });
 
@@ -2950,11 +3152,15 @@ export class Game extends Phaser.Scene {
                 this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
-                this.updateUpgradeUi();
+                this.updateSkillPointText();
+                this.renderEnchantmentUi();
                 this.updateBuffList(player);
 
                 PLAYER_BUFFS.forEach(({ field }) => {
-                    player.listen(field, () => this.updateBuffList(player));
+                    player.listen(field, () => {
+                        this.updateBuffList(player);
+                        this.renderEnchantmentUi();
+                    });
                 });
 
                 if (player.hotbarItems) {
@@ -2982,8 +3188,8 @@ export class Game extends Phaser.Scene {
 
                 player.listen('pendingUpgradeChoices', (choices) => {
                     this.localPendingUpgradeChoices = choices || 0;
-                    if (this.localPendingUpgradeChoices <= 0) this.upgradeUiMode = 'root';
-                    this.updateUpgradeUi();
+                    this.updateSkillPointText();
+                    this.renderEnchantmentUi();
                 });
             }
 
@@ -3027,8 +3233,9 @@ export class Game extends Phaser.Scene {
                 this.localPlayerState = null;
                 this.localExperienceState = null;
                 this.localPendingUpgradeChoices = 0;
+                this.updateSkillPointText();
+                this.closeEnchantmentMenu();
                 this.buffListText?.setText('');
-                this.clearUpgradeUi();
                 this.updateExperienceBar(0, 5, 1);
                 this.updateHudHealthBar(PLAYER_MAX_HEALTH);
             }
@@ -3572,6 +3779,7 @@ export class Game extends Phaser.Scene {
                 this.stopHeldAttack();
                 this.cancelBowCharge();
                 this.closeCraftingMenu();
+                this.closeEnchantmentMenu();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
                 this.quitButton
@@ -5867,6 +6075,7 @@ export class Game extends Phaser.Scene {
         }
         this.setDebugRoundControlsVisible(false);
         this.closeCraftingMenu();
+        this.closeEnchantmentMenu();
         this.isBuildModeActive = false;
         this.resetBuildDragState();
         this.stopHeldAttack();
@@ -5885,7 +6094,7 @@ export class Game extends Phaser.Scene {
         this.offscreenPlayerIndicators.clear();
         this.localExperienceState = null;
         this.localPendingUpgradeChoices = 0;
-        this.clearUpgradeUi();
+        this.updateSkillPointText();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.casterChargeEffects.clear();
