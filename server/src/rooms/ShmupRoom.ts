@@ -354,6 +354,10 @@ interface ServerPlayer {
     bowChargeY: number;
     bowAimX: number;
     bowAimY: number;
+    bowChargeMoveLeft: boolean;
+    bowChargeMoveRight: boolean;
+    bowChargeMoveUp: boolean;
+    bowChargeMoveDown: boolean;
     axeWhirlwind: boolean;
     axeWhirlwindTickMs: number;
     axeWhirlwindRestartCooldownMs: number;
@@ -1567,6 +1571,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.bowChargeY = player.y;
         sp.bowAimX = vector.x;
         sp.bowAimY = vector.y;
+        sp.bowChargeMoveLeft = sp.input.left;
+        sp.bowChargeMoveRight = sp.input.right;
+        sp.bowChargeMoveUp = sp.input.up;
+        sp.bowChargeMoveDown = sp.input.down;
         sp.vx = 0;
         sp.vy = 0;
         sp.attackLockMs = 0;
@@ -1614,8 +1622,24 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.bowChargeMs = 0;
         sp.bowChargeX = player.x;
         sp.bowChargeY = player.y;
+        sp.bowChargeMoveLeft = false;
+        sp.bowChargeMoveRight = false;
+        sp.bowChargeMoveUp = false;
+        sp.bowChargeMoveDown = false;
         player.bowCharging = false;
         player.bowChargeProgress = 0;
+    }
+
+    private didPressMovementAfterBowCharge(sp: ServerPlayer, left: boolean, right: boolean, up: boolean, down: boolean): boolean {
+        const pressed = (left && !sp.bowChargeMoveLeft)
+            || (right && !sp.bowChargeMoveRight)
+            || (up && !sp.bowChargeMoveUp)
+            || (down && !sp.bowChargeMoveDown);
+        sp.bowChargeMoveLeft = left;
+        sp.bowChargeMoveRight = right;
+        sp.bowChargeMoveUp = up;
+        sp.bowChargeMoveDown = down;
+        return pressed;
     }
 
     private setAxeWhirlwind(sessionId: string, active: boolean) {
@@ -1693,6 +1717,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             bowChargeY: ps.y,
             bowAimX: 0,
             bowAimY: -1,
+            bowChargeMoveLeft: false,
+            bowChargeMoveRight: false,
+            bowChargeMoveUp: false,
+            bowChargeMoveDown: false,
             axeWhirlwind: false,
             axeWhirlwindTickMs: 0,
             axeWhirlwindRestartCooldownMs: 0,
@@ -1775,6 +1803,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeY = player.y;
             sp.bowAimX = 0;
             sp.bowAimY = -1;
+            sp.bowChargeMoveLeft = false;
+            sp.bowChargeMoveRight = false;
+            sp.bowChargeMoveUp = false;
+            sp.bowChargeMoveDown = false;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindRestartCooldownMs = 0;
@@ -2709,6 +2741,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.bowChargeY = target.y;
         targetSp.bowAimX = 0;
         targetSp.bowAimY = -1;
+        targetSp.bowChargeMoveLeft = false;
+        targetSp.bowChargeMoveRight = false;
+        targetSp.bowChargeMoveUp = false;
+        targetSp.bowChargeMoveDown = false;
         targetSp.axeWhirlwind = false;
         targetSp.axeWhirlwindTickMs = 0;
         targetSp.axeWhirlwindRestartCooldownMs = 0;
@@ -2739,7 +2775,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const inputLength = Math.hypot(inputX, inputY);
 
             if (sp.bowCharging) {
-                if (player.activeItem !== ITEM_WOOD_BOW) {
+                if (player.activeItem !== ITEM_WOOD_BOW || this.didPressMovementAfterBowCharge(sp, left, right, up, down)) {
                     this.clearBowCharge(player, sp);
                 } else {
                     const chargeMs = this.getPlayerBowChargeMs(player);
@@ -4335,6 +4371,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.vy = 0;
             sp.bowCharging = false;
             sp.bowChargeMs = 0;
+            sp.bowChargeMoveLeft = false;
+            sp.bowChargeMoveRight = false;
+            sp.bowChargeMoveUp = false;
+            sp.bowChargeMoveDown = false;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindRestartCooldownMs = 0;

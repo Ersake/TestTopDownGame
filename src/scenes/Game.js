@@ -333,6 +333,7 @@ export class Game extends Phaser.Scene {
             this.updatePlayerNameLabels();
             return;
         }
+        this.cancelBowChargeForMovement();
         this.updateBowChargeAim();
         this.updateHeldAttack();
         this.updateAxeWhirlwind();
@@ -454,6 +455,7 @@ export class Game extends Phaser.Scene {
         this.axeWhirlwindPointer = null;
         this.bowChargePointerId = null;
         this.bowChargePointer = null;
+        this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
         this.nextHeldAttackAt = 0;
         this.nextAxeWhirlwindAt = 0;
@@ -4032,6 +4034,7 @@ export class Game extends Phaser.Scene {
         animationState.attackTargetY = worldPoint?.y ?? null;
         this.bowChargePointerId = pointer.id;
         this.bowChargePointer = pointer;
+        this.bowChargeMoveState = this.getMovementKeyState();
         this.nextBowAimSendAt = this.time.now + BOW_AIM_SEND_INTERVAL_MS;
         RoomClient.sendBowChargeStart(worldPoint?.x, worldPoint?.y);
         this.playPlayerAttackAnimation(sessionId, direction, { playAudio: false, allowWhileCharging: true });
@@ -4064,12 +4067,37 @@ export class Game extends Phaser.Scene {
         this.nextBowAimSendAt = this.time.now + BOW_AIM_SEND_INTERVAL_MS;
     }
 
+    cancelBowChargeForMovement() {
+        const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        if (!animationState?.bowCharging) return;
+        const movement = this.getMovementKeyState();
+        const previous = this.bowChargeMoveState || movement;
+        const pressed = (movement.left && !previous.left)
+            || (movement.right && !previous.right)
+            || (movement.up && !previous.up)
+            || (movement.down && !previous.down);
+        this.bowChargeMoveState = movement;
+        if (!pressed) return;
+        this.cancelBowCharge();
+        this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
+    }
+
+    getMovementKeyState() {
+        return {
+            left: !!this.keys.left.isDown,
+            right: !!this.keys.right.isDown,
+            up: !!this.keys.up.isDown,
+            down: !!this.keys.down.isDown,
+        };
+    }
+
     cancelBowCharge() {
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
         if (!this.bowChargePointer && this.bowChargePointerId === null && !animationState?.bowCharging) return;
         RoomClient.sendBowCancel();
         this.bowChargePointerId = null;
         this.bowChargePointer = null;
+        this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
     }
 
