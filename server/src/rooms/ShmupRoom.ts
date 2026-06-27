@@ -159,6 +159,9 @@ const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
 const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
 const ENEMY_PATH_REFRESH_MS = 1500;
+const ENEMY_PATH_INITIAL_REFRESH_JITTER_MS = 600;
+const ENEMY_PATH_REFRESH_DEFER_MS = 200;
+const ENEMY_PATH_MAX_REFRESHES_PER_TICK = 1;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_TARGET_REFRESH_CELLS = 2;
 const ENEMY_PATH_MAX_VISITED_CELLS = 2000;
@@ -526,6 +529,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private mapTileCount = 0;
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
+    private enemyPathRefreshesThisTick = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -2732,6 +2736,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.measureTickPhase(tickMetrics, "playerBullets", () => this.tickPlayerBullets(dtSec));
         this.measureTickPhase(tickMetrics, "waves", () => this.tickEnemyWaves(tickMetrics));
         this.activeTickMetrics = tickMetrics;
+        this.enemyPathRefreshesThisTick = 0;
         try {
             this.measureTickPhase(tickMetrics, "enemyAI", () => this.tickEnemies(dtSec, dt));
         } finally {
@@ -3325,7 +3330,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             darkKnightTargetKind: null,
             darkKnightMarkX: e.x,
             darkKnightMarkY: e.y,
-            pathRefreshMs: 0,
+            pathRefreshMs: rndInt(0, ENEMY_PATH_INITIAL_REFRESH_JITTER_MS),
             pathTargetCell: null,
             path: [],
         });
@@ -3936,13 +3941,21 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private shouldRefreshEnemyPath(se: ServerEnemy, target: PlayerState): boolean {
-        if (!se.pathTargetCell || se.pathRefreshMs === 0) return true;
+        if (!se.pathTargetCell) return se.pathRefreshMs === 0;
+        if (se.pathRefreshMs === 0) return true;
 
         const targetCell = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
         return this.gridDistance(se.pathTargetCell, targetCell) >= ENEMY_PATH_TARGET_REFRESH_CELLS;
     }
 
     private refreshEnemyWoodBlockPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
+        if (this.enemyPathRefreshesThisTick >= ENEMY_PATH_MAX_REFRESHES_PER_TICK) {
+            this.incrementEnemyCounter("pathRefreshDeferred");
+            se.pathRefreshMs = ENEMY_PATH_REFRESH_DEFER_MS + rndInt(0, ENEMY_PATH_REFRESH_DEFER_MS);
+            return false;
+        }
+
+        this.enemyPathRefreshesThisTick++;
         return this.measureEnemySubphase("pathRefresh", () => {
             this.incrementEnemyCounter("pathRefreshes");
             const targetCell = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
