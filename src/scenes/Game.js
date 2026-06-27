@@ -1004,6 +1004,7 @@ export class Game extends Phaser.Scene {
         if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT || !pointer?.leftButtonDown?.()) return;
         if (!this.getItemForHotbarSlot(slot)) {
             this.equipHotbarSlot(slot);
+            this.selectEnchantmentHotbarSlot(slot);
             return;
         }
         this.hotbarDrag = {
@@ -1048,6 +1049,7 @@ export class Game extends Phaser.Scene {
             }
         } else {
             this.equipHotbarSlot(drag.fromSlot);
+            this.selectEnchantmentHotbarSlot(drag.fromSlot);
         }
         this.cancelHotbarDrag();
         return true;
@@ -1156,6 +1158,23 @@ export class Game extends Phaser.Scene {
         this.validateEnchantmentSelection();
     }
 
+    selectEnchantmentHotbarSlot(slot) {
+        if (!this.enchantmentUi) return;
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
+
+        const item = this.getItemForHotbarSlot(slot);
+        this.enchantmentSelectedItem = item || '';
+        this.enchantmentSelectedSlot = item ? slot : 0;
+        this.renderEnchantmentUi();
+    }
+
+    selectEquippedItemForEnchantment() {
+        const slot = this.localActiveSlot || 1;
+        const item = this.getItemForHotbarSlot(slot);
+        this.enchantmentSelectedItem = item || '';
+        this.enchantmentSelectedSlot = item ? slot : 0;
+    }
+
     createInventoryItemIcon(item, x, y, size, depth = UI_DEPTH + 36) {
         const iconKey = this.getHotbarIconKey(item);
         if (!iconKey) return null;
@@ -1201,6 +1220,7 @@ export class Game extends Phaser.Scene {
     openEnchantmentMenu() {
         if (this.isMapEditor || !this.gameStarted || !this.getNearbyEnchantmentTable()) return;
         if (this.enchantmentUi) {
+            this.selectEquippedItemForEnchantment();
             this.renderEnchantmentUi();
             return;
         }
@@ -1246,16 +1266,12 @@ export class Game extends Phaser.Scene {
             this.closeEnchantmentMenu();
         });
 
-        const slotBackground = addObject(this.add.rectangle(slotX, slotY, slotSize, slotSize, 0x181818, 0.86)
+        addObject(this.add.rectangle(slotX, slotY, slotSize, slotSize, 0x181818, 0.86)
             .setOrigin(0.5)
             .setDepth(UI_DEPTH + 34)
             .setScrollFactor(0)
             .setStrokeStyle(3, 0xffffff, 0.64)
             .setInteractive({ useHandCursor: true }));
-        addObject(this.add.text(slotX, slotY + slotSize * 0.5 + 12, 'Drag item here', {
-            fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 3,
-        }).setOrigin(0.5, 0).setDepth(UI_DEPTH + 34).setScrollFactor(0));
 
         this.enchantmentUi = {
             objects,
@@ -1268,6 +1284,7 @@ export class Game extends Phaser.Scene {
             treeTopY: panelY + 94,
             treeBottomY: slotY - 96,
         };
+        this.selectEquippedItemForEnchantment();
         this.renderEnchantmentUi();
     }
 
@@ -1307,7 +1324,7 @@ export class Game extends Phaser.Scene {
         }).setOrigin(1, 0).setDepth(UI_DEPTH + 34).setScrollFactor(0));
 
         if (!item) {
-            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'Drag an item from your hotbar into the slot.', {
+            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'No equipped item selected', {
                 fontFamily: 'Arial Black', fontSize: 20, color: '#ffffff',
                 stroke: '#000000', strokeThickness: 4, align: 'center',
             }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
@@ -1454,17 +1471,19 @@ export class Game extends Phaser.Scene {
         if (!ui || !pointer || !ui.slotRect.contains(pointer.x, pointer.y)) return false;
         const item = this.getItemForHotbarSlot(slot);
         if (!item) return false;
-        this.enchantmentSelectedItem = item;
-        this.enchantmentSelectedSlot = slot;
-        this.renderEnchantmentUi();
+        this.selectEnchantmentHotbarSlot(slot);
         return true;
     }
 
     validateEnchantmentSelection() {
-        if (!this.enchantmentSelectedSlot || !this.enchantmentSelectedItem) return;
+        if (!this.enchantmentUi) return;
+        if (!this.enchantmentSelectedSlot || !this.enchantmentSelectedItem) {
+            this.selectEquippedItemForEnchantment();
+            this.renderEnchantmentUi();
+            return;
+        }
         if (this.getItemForHotbarSlot(this.enchantmentSelectedSlot) === this.enchantmentSelectedItem) return;
-        this.enchantmentSelectedItem = '';
-        this.enchantmentSelectedSlot = 0;
+        this.selectEquippedItemForEnchantment();
         this.renderEnchantmentUi();
     }
 
@@ -2600,6 +2619,7 @@ export class Game extends Phaser.Scene {
         if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
         this.localActiveSlot = slot;
         this.updateHotbarSelection();
+        this.selectEnchantmentHotbarSlot(slot);
         RoomClient.sendEquipSlot(slot);
 
         const sessionId = this.localSessionId;
@@ -2992,6 +3012,8 @@ export class Game extends Phaser.Scene {
                 if (isLocal) {
                     this.localActiveSlot = slot || 1;
                     this.updateHotbarSelection();
+                    if (this.enchantmentUi) this.selectEquippedItemForEnchantment();
+                    this.renderEnchantmentUi();
                 }
             });
 
@@ -3008,7 +3030,13 @@ export class Game extends Phaser.Scene {
                     if (isLocal) this.stopAxeWhirlwind();
                     this.clearAxeWhirlwindPresentationState(playerSessionId, { updateAnimation: false });
                 }
-                if (isLocal) this.syncBuildModeForActiveItem(animationState.activeItem);
+                if (isLocal) {
+                    this.syncBuildModeForActiveItem(animationState.activeItem);
+                    if (this.enchantmentUi) {
+                        this.selectEquippedItemForEnchantment();
+                        this.renderEnchantmentUi();
+                    }
+                }
                 if (!animationState.attacking && !animationState.dead) {
                     this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
                 }
