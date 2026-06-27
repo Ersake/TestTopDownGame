@@ -103,6 +103,11 @@ class RoomClient {
         this.room.send("attack", { direction, targetX, targetY });
     }
 
+    sendDash() {
+        if (!this.room) return;
+        this.room.send("dash", {});
+    }
+
     setPlayerName(name) {
         this.playerName = name;
     }

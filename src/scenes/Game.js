@@ -2024,6 +2024,7 @@ export class Game extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
             interact: Phaser.Input.Keyboard.KeyCodes.F,
+            dash: Phaser.Input.Keyboard.KeyCodes.SHIFT,
             escape: Phaser.Input.Keyboard.KeyCodes.ESC,
             slot1: Phaser.Input.Keyboard.KeyCodes.ONE,
             slot2: Phaser.Input.Keyboard.KeyCodes.TWO,
@@ -2042,6 +2043,10 @@ export class Game extends Phaser.Scene {
         });
         this.keys.interact.on('down', (_key, event) => {
             this.handleInteractPressed(event);
+        });
+        this.keys.dash.on('down', (_key, event) => {
+            event?.preventDefault?.();
+            RoomClient.sendDash();
         });
         for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot++) {
             this.keys[`slot${slot}`].on('down', () => this.equipHotbarSlot(slot));
@@ -5729,4 +5734,3 @@ export class Game extends Phaser.Scene {
         this.enemyBulletSprites.clear();
     }
 }
-
