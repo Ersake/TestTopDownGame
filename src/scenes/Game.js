@@ -287,24 +287,26 @@ const PLAYER_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const ENEMY_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const FRAMES_PER_DIRECTION = 15;
 const PLAYER_BUFFS = [
-    { field: 'axeSwingSpeedUpgrades', label: 'Axe swing speed' },
-    { field: 'axeTreeDamageUpgrades', label: 'Axe wood damage' },
-    { field: 'axeEnemyDamageUpgrades', label: 'Axe enemy damage' },
+    { field: 'axeWoodGainUpgrades', label: 'Axe wood gain' },
+    { field: 'axeCampfireMaxUpgrades', label: 'Axe max campfires' },
+    { field: 'axeWhirlwindCooldownUpgrades', label: 'Whirlwind cooldown' },
+    { field: 'axeWhirlwindAoeUpgrades', label: 'Whirlwind AOE' },
     { field: 'bowDamageUpgrades', label: 'Bow damage' },
     { field: 'bowPierceUpgrades', label: 'Bow pierce' },
     { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
     { field: 'barricadeHealthUpgrades', label: 'Barricade health' },
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
-    { field: 'campfireUpgrades', label: 'Campfire charge' },
 ];
+const ENCHANTMENT_MAX_RANK = 3;
 const ENCHANTMENT_SKILL_TREES = {
     [ITEM_WOOD_AXE]: {
         title: 'Axe Skills',
         displayName: 'Axe',
         nodes: [
-            { id: 'axe_tree_damage', label: '+1 wood damage', field: 'axeTreeDamageUpgrades' },
-            { id: 'axe_enemy_damage', label: '+1 enemy damage', field: 'axeEnemyDamageUpgrades', prerequisite: 'axe_tree_damage' },
-            { id: 'axe_swing_speed', label: '+25% swing speed', field: 'axeSwingSpeedUpgrades', prerequisite: 'axe_enemy_damage' },
+            { id: 'axe_wood_gain', label: '+25% wood gain', field: 'axeWoodGainUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
+            { id: 'axe_campfire_max', label: '+1 max campfires', field: 'axeCampfireMaxUpgrades', prerequisite: 'axe_wood_gain', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 1 },
+            { id: 'axe_whirlwind_cooldown', label: '-1 second whirlwind cooldown', field: 'axeWhirlwindCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
+            { id: 'axe_whirlwind_aoe', label: '+25% AOE size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 1 },
         ],
     },
     [ITEM_WOOD_BOW]: {
@@ -322,7 +324,6 @@ const ENCHANTMENT_SKILL_TREES = {
         nodes: [
             { id: 'hammer_wood_gather', label: '+50% wood gather', field: 'woodGatherUpgrades' },
             { id: 'hammer_barricade_hp', label: '+5 barricade HP', field: 'barricadeHealthUpgrades', prerequisite: 'hammer_wood_gather' },
-            { id: 'hammer_campfire', label: '+1 campfire', field: 'campfireUpgrades', prerequisite: 'hammer_barricade_hp' },
         ],
     },
 };
@@ -1326,31 +1327,62 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 4,
         }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
 
-        const nodeWidth = Math.min(330, ui.panel.width - CRAFTING_PANEL_PADDING * 4);
-        const nodeHeight = 56;
-        const nodeGap = tree.nodes.length > 1
-            ? Math.min(92, (ui.treeBottomY - ui.treeTopY) / (tree.nodes.length - 1))
+        const hasColumns = tree.nodes.some((node) => Number.isInteger(node.column));
+        const nodeColumns = hasColumns
+            ? [...new Set(tree.nodes.map((node) => Number.isInteger(node.column) ? node.column : 0))].sort((a, b) => a - b)
+            : [0];
+        const rowCount = hasColumns
+            ? Math.max(1, Math.max(...tree.nodes.map((node) => Number.isInteger(node.row) ? node.row : 0)) + 1)
+            : tree.nodes.length;
+        const columnGap = hasColumns ? 36 : 0;
+        const nodeWidth = hasColumns
+            ? Math.min(270, (ui.panel.width - CRAFTING_PANEL_PADDING * 4 - columnGap * (nodeColumns.length - 1)) / nodeColumns.length)
+            : Math.min(330, ui.panel.width - CRAFTING_PANEL_PADDING * 4);
+        const nodeHeight = hasColumns ? 68 : 56;
+        const nodeGap = rowCount > 1
+            ? Math.min(108, (ui.treeBottomY - ui.treeTopY) / (rowCount - 1))
             : 0;
-        const positions = tree.nodes.map((_node, index) => ({
-            x: this.centreX,
-            y: ui.treeBottomY - index * nodeGap,
-        }));
+        const totalNodeWidth = nodeColumns.length * nodeWidth + Math.max(0, nodeColumns.length - 1) * columnGap;
+        const startX = this.centreX - totalNodeWidth * 0.5 + nodeWidth * 0.5;
+        const columnIndexByValue = nodeColumns.reduce((lookup, column, index) => {
+            lookup[column] = index;
+            return lookup;
+        }, {});
+        const positions = tree.nodes.map((node, index) => {
+            const column = hasColumns && Number.isInteger(node.column) ? node.column : 0;
+            const row = hasColumns && Number.isInteger(node.row) ? node.row : index;
+            const columnIndex = columnIndexByValue[column] ?? 0;
+            return {
+                x: hasColumns ? startX + columnIndex * (nodeWidth + columnGap) : this.centreX,
+                y: ui.treeBottomY - row * nodeGap,
+            };
+        });
+        const positionById = tree.nodes.reduce((lookup, node, index) => {
+            lookup[node.id] = positions[index];
+            return lookup;
+        }, {});
 
         const connector = this.add.graphics().setDepth(UI_DEPTH + 32).setScrollFactor(0);
         connector.lineStyle(4, 0xffffff, 0.35);
-        for (let i = 1; i < positions.length; i++) {
+        tree.nodes.forEach((node, index) => {
+            if (!node.prerequisite) return;
+            const from = positionById[node.prerequisite];
+            const to = positions[index];
+            if (!from || !to) return;
             connector.beginPath();
-            connector.moveTo(positions[i - 1].x, positions[i - 1].y - nodeHeight * 0.5);
-            connector.lineTo(positions[i].x, positions[i].y + nodeHeight * 0.5);
+            connector.moveTo(from.x, from.y - nodeHeight * 0.5);
+            connector.lineTo(to.x, to.y + nodeHeight * 0.5);
             connector.strokePath();
-        }
+        });
         this.addEnchantmentDynamicObject(connector);
 
         tree.nodes.forEach((node, index) => {
             const position = positions[index];
             const rank = this.getUpgradeRankForNode(node);
+            const maxRank = this.getUpgradeMaxRankForNode(node);
             const unlocked = this.isEnchantmentNodeUnlocked(node);
-            const canSpend = unlocked && points > 0;
+            const capped = maxRank !== null && rank >= maxRank;
+            const canSpend = unlocked && points > 0 && !capped;
             const fillColor = unlocked ? 0xf2f2f2 : 0x505050;
             const fillAlpha = unlocked ? 0.92 : 0.52;
             const strokeColor = canSpend ? 0xffd37a : 0xffffff;
@@ -1364,10 +1396,12 @@ export class Game extends Phaser.Scene {
             this.addEnchantmentDynamicObject(oval);
 
             this.addEnchantmentDynamicObject(this.add.text(position.x, position.y - 7, node.label, {
-                fontFamily: 'Arial Black', fontSize: 16, color: textColor,
+                fontFamily: 'Arial Black', fontSize: hasColumns ? 13 : 16, color: textColor,
                 align: 'center',
+                wordWrap: { width: nodeWidth - 18, useAdvancedWrap: true },
             }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
-            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y + 15, `Rank: ${rank}`, {
+            const rankLabel = maxRank !== null ? `Rank: ${rank}/${maxRank}` : `Rank: ${rank}`;
+            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y + (hasColumns ? 22 : 15), rankLabel, {
                 fontFamily: 'Arial Black', fontSize: 12, color: textColor,
                 align: 'center',
             }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
@@ -1393,6 +1427,10 @@ export class Game extends Phaser.Scene {
         return Math.max(0, player[node.field] || 0);
     }
 
+    getUpgradeMaxRankForNode(node) {
+        return Number.isFinite(node?.maxRank) ? Math.max(0, Math.floor(node.maxRank)) : null;
+    }
+
     getUpgradeRankById(upgradeId) {
         const node = ENCHANTMENT_NODE_BY_ID[upgradeId];
         return node ? this.getUpgradeRankForNode(node) : 0;
@@ -1406,6 +1444,8 @@ export class Game extends Phaser.Scene {
     selectEnchantmentUpgrade(node) {
         if (!node || !this.enchantmentSelectedItem || !this.enchantmentSelectedSlot) return;
         if (!this.isEnchantmentNodeUnlocked(node)) return;
+        const maxRank = this.getUpgradeMaxRankForNode(node);
+        if (maxRank !== null && this.getUpgradeRankForNode(node) >= maxRank) return;
         RoomClient.sendSelectUpgrade(node.id, this.enchantmentSelectedItem, this.enchantmentSelectedSlot);
     }
 
@@ -2863,6 +2903,7 @@ export class Game extends Phaser.Scene {
                 axeWhirlwindCooldownProgress: player.axeWhirlwindCooldownProgress || 0,
                 lastAxeWhirlwindHitSeq: player.axeWhirlwindHitSeq || 0,
                 axeWhirlwindHitboxUntil: 0,
+                axeWhirlwindAoeUpgrades: player.axeWhirlwindAoeUpgrades || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
@@ -3134,6 +3175,10 @@ export class Game extends Phaser.Scene {
             player.listen('axeSwingSpeedUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeSwingSpeedUpgrades = stacks || 0;
+            });
+            player.listen('axeWhirlwindAoeUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindAoeUpgrades = stacks || 0;
             });
 
             if (player.isDead) {
@@ -4319,7 +4364,7 @@ export class Game extends Phaser.Scene {
                 this.drawPlayerAttackHitbox(graphics, x, y, animationState);
             }
             if ((animationState?.axeWhirlwindHitboxUntil || 0) > this.time.now) {
-                this.drawPlayerAxeWhirlwindHitbox(graphics, x, y);
+                this.drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState);
             }
         });
     }
@@ -4414,9 +4459,11 @@ export class Game extends Phaser.Scene {
         graphics.lineBetween(startX, startY, endX, endY);
     }
 
-    drawPlayerAxeWhirlwindHitbox(graphics, x, y) {
+    drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState) {
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
+        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + 0.25 * rank);
         graphics.lineStyle(2, 0x66ffff, 0.95);
-        graphics.strokeCircle(x, y, PLAYER_AXE_WHIRLWIND_HIT_RADIUS);
+        graphics.strokeCircle(x, y, radius);
     }
 
     drawPlayerBulletHitboxes(graphics) {

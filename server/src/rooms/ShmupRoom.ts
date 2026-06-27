@@ -104,7 +104,10 @@ const AXE_WHIRLWIND_RADIUS = 56;
 const AXE_WHIRLWIND_TICK_MS = 500;
 const AXE_WHIRLWIND_MAX_DURATION_MS = 4000;
 const AXE_WHIRLWIND_COOLDOWN_MS = 10000;
+const AXE_WHIRLWIND_COOLDOWN_MIN_MS = 1000;
 const AXE_WHIRLWIND_DAMAGE = 1;
+const UPGRADE_MAX_RANK = 3;
+const BASE_ACTIVE_CAMPFIRE_LIMIT = 1;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
@@ -189,25 +192,27 @@ const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
 const CAMPFIRE_HEAL_AMOUNT = 1;
 const UPGRADE_IDS = new Set([
-    "axe_swing_speed",
-    "axe_tree_damage",
-    "axe_enemy_damage",
+    "axe_wood_gain",
+    "axe_campfire_max",
+    "axe_whirlwind_cooldown",
+    "axe_whirlwind_aoe",
     "bow_damage",
     "bow_pierce",
     "bow_charge_time",
     "hammer_barricade_hp",
     "hammer_wood_gather",
-    "hammer_campfire",
 ]);
 type UpgradeNodeConfig = {
     id: string;
     prerequisite?: string;
+    maxRank?: number;
 };
 const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
     [ITEM_WOOD_AXE]: [
-        { id: "axe_tree_damage" },
-        { id: "axe_enemy_damage", prerequisite: "axe_tree_damage" },
-        { id: "axe_swing_speed", prerequisite: "axe_enemy_damage" },
+        { id: "axe_wood_gain", maxRank: UPGRADE_MAX_RANK },
+        { id: "axe_campfire_max", prerequisite: "axe_wood_gain", maxRank: UPGRADE_MAX_RANK },
+        { id: "axe_whirlwind_cooldown", maxRank: UPGRADE_MAX_RANK },
+        { id: "axe_whirlwind_aoe", prerequisite: "axe_whirlwind_cooldown", maxRank: UPGRADE_MAX_RANK },
     ],
     [ITEM_WOOD_BOW]: [
         { id: "bow_damage" },
@@ -217,7 +222,6 @@ const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
     [ITEM_HAMMER]: [
         { id: "hammer_wood_gather" },
         { id: "hammer_barricade_hp", prerequisite: "hammer_wood_gather" },
-        { id: "hammer_campfire", prerequisite: "hammer_barricade_hp" },
     ],
 };
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
@@ -547,6 +551,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private serverPlayerBullets = new Map<string, ServerBullet>();
     private serverEnemyBullets  = new Map<string, ServerEnemyBullet>();
     private serverTreeHealth    = new Map<string, number>();
+    private campfireOwners      = new Map<string, string>();
     private activeAxeAttacks: ActiveAxeAttack[] = [];
     private elapsedMs           = 0;
     private currentWaveIndex = -1;
@@ -1605,16 +1610,21 @@ export class ShmupRoom extends Room<GameRoomState> {
         const node = this.getUpgradeNodeForItem(item, upgradeId);
         if (!node) return;
         if (node.prerequisite && this.getPlayerUpgradeRank(player, node.prerequisite) <= 0) return;
+        const maxRank = node.maxRank ?? Number.MAX_SAFE_INTEGER;
+        if (this.getPlayerUpgradeRank(player, upgradeId) >= maxRank) return;
 
         switch (upgradeId) {
-            case "axe_swing_speed":
-                player.axeSwingSpeedUpgrades++;
+            case "axe_wood_gain":
+                player.axeWoodGainUpgrades++;
                 break;
-            case "axe_tree_damage":
-                player.axeTreeDamageUpgrades++;
+            case "axe_campfire_max":
+                player.axeCampfireMaxUpgrades++;
                 break;
-            case "axe_enemy_damage":
-                player.axeEnemyDamageUpgrades++;
+            case "axe_whirlwind_cooldown":
+                player.axeWhirlwindCooldownUpgrades++;
+                break;
+            case "axe_whirlwind_aoe":
+                player.axeWhirlwindAoeUpgrades++;
                 break;
             case "bow_damage":
                 player.bowDamageUpgrades++;
@@ -1631,10 +1641,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             case "hammer_wood_gather":
                 player.woodGatherUpgrades++;
                 break;
-            case "hammer_campfire":
-                player.campfireUpgrades++;
-                this.grantCampfireItem(player);
-                break;
             default:
                 return;
         }
@@ -1648,12 +1654,14 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private getPlayerUpgradeRank(player: PlayerState, upgradeId: string): number {
         switch (upgradeId) {
-            case "axe_swing_speed":
-                return Math.max(0, player.axeSwingSpeedUpgrades || 0);
-            case "axe_tree_damage":
-                return Math.max(0, player.axeTreeDamageUpgrades || 0);
-            case "axe_enemy_damage":
-                return Math.max(0, player.axeEnemyDamageUpgrades || 0);
+            case "axe_wood_gain":
+                return Math.max(0, player.axeWoodGainUpgrades || 0);
+            case "axe_campfire_max":
+                return Math.max(0, player.axeCampfireMaxUpgrades || 0);
+            case "axe_whirlwind_cooldown":
+                return Math.max(0, player.axeWhirlwindCooldownUpgrades || 0);
+            case "axe_whirlwind_aoe":
+                return Math.max(0, player.axeWhirlwindAoeUpgrades || 0);
             case "bow_damage":
                 return Math.max(0, player.bowDamageUpgrades || 0);
             case "bow_pierce":
@@ -1664,8 +1672,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                 return Math.max(0, player.barricadeHealthUpgrades || 0);
             case "hammer_wood_gather":
                 return Math.max(0, player.woodGatherUpgrades || 0);
-            case "hammer_campfire":
-                return Math.max(0, player.campfireUpgrades || 0);
             default:
                 return 0;
         }
@@ -1858,6 +1864,26 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
+    private getPlayerActiveCampfireLimit(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.axeCampfireMaxUpgrades || 0), 0, UPGRADE_MAX_RANK);
+        return BASE_ACTIVE_CAMPFIRE_LIMIT + rank;
+    }
+
+    private getPlayerActiveCampfireCount(sessionId: string): number {
+        let count = 0;
+        this.campfireOwners.forEach((ownerId, campfireId) => {
+            if (ownerId === sessionId && this.state.campfires.has(campfireId)) count++;
+        });
+        return count;
+    }
+
+    private removeCampfire(campfireId: string): boolean {
+        if (!this.state.campfires.has(campfireId)) return false;
+        this.state.campfires.delete(campfireId);
+        this.campfireOwners.delete(campfireId);
+        return true;
+    }
+
     private tryCraftItem(client: Client, data: unknown): boolean {
         const recipeId = String((data as { recipeId?: unknown })?.recipeId || "");
         const reject = (reason: string) => {
@@ -1965,6 +1991,16 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private getPlayerAxeCooldownMs(player: PlayerState): number {
         return ATTACK_COOLDOWN_MS / (1 + 0.25 * Math.max(0, player.axeSwingSpeedUpgrades || 0));
+    }
+
+    private getPlayerAxeWhirlwindCooldownMs(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.axeWhirlwindCooldownUpgrades || 0), 0, UPGRADE_MAX_RANK);
+        return Math.max(AXE_WHIRLWIND_COOLDOWN_MIN_MS, AXE_WHIRLWIND_COOLDOWN_MS - 1000 * rank);
+    }
+
+    private getPlayerAxeWhirlwindRadius(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.axeWhirlwindAoeUpgrades || 0), 0, UPGRADE_MAX_RANK);
+        return AXE_WHIRLWIND_RADIUS * (1 + 0.25 * rank);
     }
 
     private getPlayerBowChargeMs(player: PlayerState): number {
@@ -2107,7 +2143,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.axeWhirlwindProgress = 0;
         if (!wasActive) return;
 
-        sp.axeWhirlwindCooldownMs = startCooldown ? AXE_WHIRLWIND_COOLDOWN_MS : 0;
+        sp.axeWhirlwindCooldownMs = startCooldown ? this.getPlayerAxeWhirlwindCooldownMs(player) : 0;
         player.axeWhirlwindCooldownProgress = startCooldown ? 1 : 0;
     }
 
@@ -2128,7 +2164,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         sp.axeWhirlwindCooldownMs = Math.max(0, sp.axeWhirlwindCooldownMs - dtMs);
-        player.axeWhirlwindCooldownProgress = clamp(sp.axeWhirlwindCooldownMs / AXE_WHIRLWIND_COOLDOWN_MS, 0, 1);
+        player.axeWhirlwindCooldownProgress = clamp(sp.axeWhirlwindCooldownMs / this.getPlayerAxeWhirlwindCooldownMs(player), 0, 1);
     }
 
     private getBowAimVector(player: PlayerState, data: unknown): AttackVector {
@@ -2223,6 +2259,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.logs.clear();
         this.state.woodBlocks.clear();
         this.state.campfires.clear();
+        this.campfireOwners.clear();
         this.state.caltrops.clear();
         this.generateTrees();
 
@@ -2254,6 +2291,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.axeSwingSpeedUpgrades = 0;
             player.axeTreeDamageUpgrades = 0;
             player.axeEnemyDamageUpgrades = 0;
+            player.axeWoodGainUpgrades = 0;
+            player.axeCampfireMaxUpgrades = 0;
+            player.axeWhirlwindCooldownUpgrades = 0;
+            player.axeWhirlwindAoeUpgrades = 0;
             player.bowDamageUpgrades = 0;
             player.bowPierceUpgrades = 0;
             player.bowChargeTimeUpgrades = 0;
@@ -2508,12 +2549,14 @@ export class ShmupRoom extends Room<GameRoomState> {
     private damageTreesFromAxeWhirlwind(x: number, y: number, attackerId: string): TreeHitPayload[] {
         const hitPayloads: TreeHitPayload[] = [];
         const hitTreeIds: string[] = [];
+        const attacker = this.state.players.get(attackerId);
+        const whirlwindRadius = attacker ? this.getPlayerAxeWhirlwindRadius(attacker) : AXE_WHIRLWIND_RADIUS;
 
         this.state.trees.forEach((tree, id) => {
             const hitbox = this.getTreeHitbox(tree);
             const dx = x - hitbox.x;
             const dy = y - hitbox.y;
-            const radius = AXE_WHIRLWIND_RADIUS + hitbox.radius;
+            const radius = whirlwindRadius + hitbox.radius;
             if (dx * dx + dy * dy <= radius * radius) hitTreeIds.push(id);
         });
 
@@ -2550,13 +2593,15 @@ export class ShmupRoom extends Room<GameRoomState> {
     private damageEnemiesFromAxeWhirlwind(x: number, y: number, attackerId: string): EnemyHitPayload[] {
         const hitPayloads: EnemyHitPayload[] = [];
         const hitEnemyIds: string[] = [];
+        const attacker = this.state.players.get(attackerId);
+        const whirlwindRadius = attacker ? this.getPlayerAxeWhirlwindRadius(attacker) : AXE_WHIRLWIND_RADIUS;
 
         this.state.enemies.forEach((enemy, id) => {
             if (enemy.isDead) return;
             if (!circleOverlapsAabb(
                 x,
                 y,
-                AXE_WHIRLWIND_RADIUS,
+                whirlwindRadius,
                 enemy.x,
                 enemy.y,
                 ENEMY_MELEE_HIT_HW,
@@ -2866,7 +2911,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         const log = this.state.logs.get(closestLogId);
         if (!log) return 0;
 
-        const amount = Math.ceil((log.amount || WOOD_PILE_AMOUNT) * (1 + 0.5 * Math.max(0, player.woodGatherUpgrades || 0)));
+        const hammerBonus = 0.5 * Math.max(0, player.woodGatherUpgrades || 0);
+        const axeBonus = 0.25 * Math.max(0, player.axeWoodGainUpgrades || 0);
+        const amount = Math.ceil((log.amount || WOOD_PILE_AMOUNT) * (1 + hammerBonus + axeBonus));
         if (!this.addWoodToHotbar(player, amount)) return 0;
         player.wood = this.getTotalHeldWood(player);
         this.state.logs.delete(closestLogId);
@@ -2915,8 +2962,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (player.activeItem !== ITEM_HAMMER) return false;
         const campfireId = this.getCampfireIdForCell(cell);
-        if (this.state.campfires.has(campfireId)) {
-            this.state.campfires.delete(campfireId);
+        if (this.removeCampfire(campfireId)) {
             this.grantCampfireItem(player);
             return true;
         }
@@ -2952,6 +2998,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const cell = this.getBuildCellFromData(data);
         if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
         if (this.isBuildCellOccupied(cell, cell.x, cell.y)) return false;
+        if (this.getPlayerActiveCampfireCount(sessionId) >= this.getPlayerActiveCampfireLimit(player)) return false;
 
         const campfire = new CampfireState();
         campfire.id = this.getCampfireIdForCell(cell);
@@ -2959,6 +3006,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         campfire.y = cell.y;
         campfire.healProgress = Math.floor((this.campfireHealElapsedMs / CAMPFIRE_HEAL_INTERVAL_MS) * 100);
         this.state.campfires.set(campfire.id, campfire);
+        this.campfireOwners.set(campfire.id, sessionId);
         this.setHotbarItem(player, player.activeSlot, EMPTY_HOTBAR_ITEM);
         this.fillPendingCampfireItems(player);
         return true;

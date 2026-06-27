@@ -33,6 +33,10 @@ export class PlayerState extends Schema {
     @type("int16")   axeSwingSpeedUpgrades: number = 0;
     @type("int16")   axeTreeDamageUpgrades: number = 0;
     @type("int16")   axeEnemyDamageUpgrades: number = 0;
+    @type("int16")   axeWoodGainUpgrades: number = 0;
+    @type("int16")   axeCampfireMaxUpgrades: number = 0;
+    @type("int16")   axeWhirlwindCooldownUpgrades: number = 0;
+    @type("int16")   axeWhirlwindAoeUpgrades: number = 0;
     @type("int16")   bowDamageUpgrades: number = 0;
     @type("int16")   bowPierceUpgrades: number = 0;
     @type("int16")   bowChargeTimeUpgrades: number = 0;
