@@ -632,7 +632,7 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8, align: 'center',
         }).setOrigin(0.5).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.timerText = this.add.text(20, 20, '00:00', {
+        this.waveText = this.add.text(20, 20, 'Wave: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
@@ -712,7 +712,7 @@ export class Game extends Phaser.Scene {
         this.updateSkillPointText();
         this.registerFixedUi(
             this.tutorialText,
-            this.timerText,
+            this.waveText,
             this.killsText,
             this.playerCountText,
             this.buffListText,
@@ -783,7 +783,7 @@ export class Game extends Phaser.Scene {
 
     submitDebugRound(rawRound) {
         const round = Number(rawRound);
-        const currentRound = Math.floor((RoomClient.room?.state?.elapsedSeconds || 0) / 60) + 1;
+        const currentRound = Math.max(0, RoomClient.room?.state?.waveNumber || 0);
         if (!Number.isInteger(round) || round < 2 || round > DEBUG_MAX_ROUND) {
             this.setDebugRoundStatus(`Enter a whole round from 2 to ${DEBUG_MAX_ROUND}.`);
             return;
@@ -3799,9 +3799,9 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Root state listeners ─────────────────────────────────────────────
-        this.timerText.setText(this.formatElapsedTime(state.elapsedSeconds || 0));
-        state.listen('elapsedSeconds', (elapsedSeconds) => {
-            this.timerText.setText(this.formatElapsedTime(elapsedSeconds || 0));
+        this.updateWaveText(state.waveNumber || 0);
+        state.listen('waveNumber', (waveNumber) => {
+            this.updateWaveText(waveNumber || 0);
         });
 
         state.listen('gameOverCountdown', (countdown) => {
@@ -3863,11 +3863,10 @@ export class Game extends Phaser.Scene {
         });
     }
 
-    formatElapsedTime(elapsedSeconds) {
-        const safeSeconds = Math.max(0, Math.floor(elapsedSeconds || 0));
-        const minutes = Math.floor(safeSeconds / 60);
-        const seconds = safeSeconds % 60;
-        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    updateWaveText(waveNumber) {
+        if (!this.waveText) return;
+        const safeWaveNumber = Math.max(0, Math.floor(waveNumber || 0));
+        this.waveText.setText(`Wave: ${safeWaveNumber}`);
     }
 
     updateGameOverCountdown(countdown) {

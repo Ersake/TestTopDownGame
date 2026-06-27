@@ -58,7 +58,7 @@ The Colyseus server is responsible for:
 
 - Creating and disposing game rooms.
 - Assigning process-local 4-letter room codes.
-- Owning player, enemy, bullet, tree, log, score, timer, revive, and game-over state.
+- Owning player, enemy, bullet, tree, log, score, timer, wave counter, revive, and game-over state.
 - Validating and applying player input.
 - Applying movement, attacks, enemy behavior, collision, resource pickup, revives, and cleanup.
 - Broadcasting synced schema patches and one-shot event messages.
@@ -109,7 +109,7 @@ Important server files:
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
-| `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later round (2–99) for the room. Round 1 is the initial wave; round N begins at elapsed minute N-1. |
+| `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -157,6 +157,7 @@ Durable game facts should usually be schema state, not transient messages.
 | `mapChunks` | `MapSchema<MapChunkState>` | Sparse server-owned map tile chunks rendered by editor and saved-map game rooms. |
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
+| `waveNumber` | `int32` | Current 1-based enemy wave displayed by the client HUD. |
 | `teamScore` | `int32` | Shared score. |
 | `gameStarted` | `boolean` | Whether simulation has started. |
 | `gameOver` | `boolean` | Whether the room is in game-over state. |
@@ -200,7 +201,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1 plus axe max-campfire upgrade ranks.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.

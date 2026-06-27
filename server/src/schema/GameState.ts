@@ -161,6 +161,7 @@ export class GameRoomState extends Schema {
     @type("string") activeMapName: string = "";
 
     @type("int32")   elapsedSeconds: number = 0;
+    @type("int32")   waveNumber: number = 0;
     @type("int32")   teamScore:   number  = 0;
     @type("boolean") gameStarted: boolean = false;
     @type("boolean") gameOver:    boolean = false;

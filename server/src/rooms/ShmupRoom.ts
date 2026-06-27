@@ -115,6 +115,7 @@ const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY_WAVE_SPAWN_INTERVAL_MS = 1500;
 const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 1;
+const ENEMY_NEXT_WAVE_DELAY_MS = 3000;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
@@ -557,6 +558,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private currentWaveIndex = -1;
     private pendingEnemySpawns: PendingEnemySpawn[] = [];
     private nextEnemySpawnAllowedAtMs = 0;
+    private nextEnemyWaveStartMs: number | null = null;
     private nextEnemyDiagnosticAtMs = 0;
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
@@ -803,6 +805,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.pendingEnemySpawns = [];
         this.currentWaveIndex = targetWaveIndex - 1;
         this.nextEnemySpawnAllowedAtMs = this.elapsedMs;
+        this.nextEnemyWaveStartMs = null;
         this.nextEnemyDiagnosticAtMs = 0;
         this.scheduleEnemyWave(targetWaveIndex);
         client.send("debugRoundResult", { accepted: true, round });
@@ -2241,6 +2244,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.elapsedMs = 0;
             this.campfireHealElapsedMs = 0;
             this.state.elapsedSeconds = 0;
+            this.state.waveNumber = 0;
             this.state.gameOverCountdown = 0;
             if (!this.isMapEditor()) this.startEnemyWaveSchedule();
         }
@@ -2256,6 +2260,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enemyBullets.clear();
         this.serverEnemyBullets.clear();
         this.activeAxeAttacks = [];
+        this.nextEnemyWaveStartMs = null;
         this.state.logs.clear();
         this.state.woodBlocks.clear();
         this.state.campfires.clear();
@@ -2336,6 +2341,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.elapsedMs = 0;
         this.campfireHealElapsedMs = 0;
         this.state.elapsedSeconds = 0;
+        this.state.waveNumber = 0;
         this.state.gameOver = false;
         this.state.gameOverCountdown = 0;
         this.gameOverRestartMs = 0;
@@ -3664,7 +3670,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverEnemies.clear();
         this.pendingEnemySpawns = [];
         this.currentWaveIndex = -1;
+        this.nextEnemyWaveStartMs = null;
         this.nextEnemyDiagnosticAtMs = 0;
+        this.state.waveNumber = 0;
         this.scheduleEnemyWave(0);
     }
 
@@ -3688,6 +3696,11 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (this.pendingEnemySpawns.length > 0) return;
         if (this.hasLivingEnemies()) return;
+        if (this.nextEnemyWaveStartMs === null) {
+            this.nextEnemyWaveStartMs = this.elapsedMs + ENEMY_NEXT_WAVE_DELAY_MS;
+            return;
+        }
+        if (this.elapsedMs < this.nextEnemyWaveStartMs) return;
         this.scheduleEnemyWave(this.currentWaveIndex + 1, metrics);
     }
 
@@ -3707,7 +3720,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             ? waveIndex / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
             : 0;
 
-        this.broadcast("enemyWaveStarted", { minute: waveIndex, startedAtUnixMs: Date.now() });
+        const waveNumber = waveIndex + 1;
+        this.state.waveNumber = waveNumber;
+        this.broadcast("enemyWaveStarted", { minute: waveIndex, waveIndex, waveNumber, startedAtUnixMs: Date.now() });
 
         let spawnIndex = 0;
         for (let i = 0; i < meleeCount; i++) {
@@ -3722,6 +3737,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.pendingEnemySpawns.sort((a, b) => a.spawnAtMs - b.spawnAtMs);
         this.currentWaveIndex = waveIndex;
+        this.nextEnemyWaveStartMs = null;
         this.nextEnemySpawnAllowedAtMs = waveStartMs;
         const scheduledEnemyCount = spawnIndex;
         if (metrics) {
