@@ -30,6 +30,28 @@ If a change affects shared gameplay truth, put it in `server/src/rooms/ShmupRoom
 
 ---
 
+## Agent Workflow
+
+Before editing:
+
+1. Read this file.
+2. Read the relevant section of `ARCHITECTURE.md`.
+3. Inspect the existing implementation pattern before adding a new one.
+
+While editing:
+
+- Preserve server authority for gameplay and map truth.
+- Keep changes scoped to the requested behavior.
+- Update `ARCHITECTURE.md` when changing room flow, schema fields, room messages, deployment, map storage, or major gameplay systems.
+- Prefer extending existing helpers and message paths over adding parallel systems.
+
+When finishing:
+
+- Run the verification commands that match the files touched.
+- Report any manual multiplayer or map-editor checks that could not be run.
+
+---
+
 ## Current Flow
 
 1. `src/main.js` launches Phaser.
@@ -69,6 +91,8 @@ Do not reintroduce automatic `joinOrCreate` on load unless the lobby flow is int
 |   |   |   +-- GameState.ts   Synced Colyseus schema definitions
 |   |   +-- rooms/
 |   |       +-- ShmupRoom.ts   Authoritative game simulation
+|   |   +-- maps/
+|   |       +-- MapStorage.ts  Saved-map persistence helpers
 |   +-- package.json
 |   +-- tsconfig.json
 +-- assets/                    Sprites, images, and audio
@@ -76,6 +100,7 @@ Do not reintroduce automatic `joinOrCreate` on load unless the lobby flow is int
 +-- phaser.js                  Phaser global script loaded by index.html
 +-- vite.config.js             Vite config; builds client to docs/
 +-- ARCHITECTURE.md            Current architecture reference
++-- README.md                  Human-facing project entry point
 +-- package.json               Client deps + convenience npm scripts
 +-- AGENTS.md                  This file
 ```
@@ -155,10 +180,25 @@ Use room messages for discrete events that are not naturally represented as dura
 
 Examples already in use:
 
-- Client to server: `"input"`, `"attack"`.
-- Server to client: `"treeHit"`, `"enemyHit"`, `"woodPickup"`, `"reviveStarted"`, `"playerHurt"`.
+- Client to server gameplay: `"input"`, `"attack"`, `"bowChargeStart"`, `"bowAim"`, `"bowCancel"`, `"axeWhirlwind"`, `"equipSlot"`.
+- Client to server building/crafting: `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"`, `"placeCampfire"`, `"placeCaltrops"`, `"craftItem"`, `"selectUpgrade"`, `"setOutfitColor"`.
+- Map editor client to server: `"placeMapTile"`, `"removeMapTile"`, `"saveMap"`, `"loadMap"`, `"listMaps"`.
+- Development client to server: `"debugSetRound"`.
+- Server to client gameplay: `"treeHit"`, `"enemyHit"`, `"woodPickup"`, `"reviveStarted"`, `"playerHurt"`, `"craftResult"`, `"itemCrafted"`, `"levelReset"`, `"playerLevelUp"`, `"enemyWaveStarted"`.
+- Server to client map editor: `"mapImported"`, `"mapList"`, `"mapStorageError"`, `"mapSaveConflict"`, `"mapSaved"`, `"mapLoaded"`.
+- Development server to client: `"debugRoundResult"`.
 
 Validate and clamp client-provided data on the server. Treat all client messages as untrusted.
+
+### Changing Map Editor or Saved Maps
+
+Development builds expose a map editor through `Lobby` using `mode: "map-editor"`. Production room creation deliberately falls back to normal game rooms.
+
+- Keep map tile authority on the server. Clients may request tile placement/removal, but `ShmupRoom.ts` validates coordinates, frame values, layer values, and size limits.
+- `mapChunks` is synced render state. Saved map persistence belongs to server-owned storage through `server/src/maps/MapStorage.ts`.
+- Saved-map regular games use `mapName` room options, sync `activeMapName`, and keep normal gameplay enabled.
+- `server/maps/` is the default local map storage path. Production hosting must provide persistent storage through `MAP_STORAGE_DIR` if saved maps must survive deploys.
+- When changing map behavior, check both editor rooms and normal rooms that load a saved map.
 
 ### Adding Assets
 
@@ -172,20 +212,48 @@ The Preloader automatically loads everything registered in `src/assets.js`.
 
 ## Verification
 
-Run server type checking before committing server changes:
+Run the checks that match your change:
+
+### Server Changes
+
+Run server type checking:
 
 ```bash
 cd server
 npx tsc --noEmit
 ```
 
-For client build/deployment checks:
+### Client Changes
+
+Run the client build:
 
 ```bash
 npm run client:build
 ```
 
-When changing gameplay behavior, test locally with at least two browser tabs so create/join, remote rendering, and shared state changes are covered.
+### Gameplay or Networking Changes
+
+Run both processes and test at least two browser tabs:
+
+```bash
+npm run server:dev
+```
+
+```bash
+npm run client:dev
+```
+
+Create a room in one tab, join with the displayed room code in a second tab, and verify remote rendering plus shared state changes.
+
+### Map Editor Changes
+
+In development, verify the map-editor path:
+
+1. Create a map from the lobby.
+2. Place and remove at least one tile.
+3. Save, list, and load a map draft.
+4. Start a normal game with a saved map selected.
+5. Confirm players, enemies, wood drops, and player projectiles respect authored solid tiles.
 
 ---
 

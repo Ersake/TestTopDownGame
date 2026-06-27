@@ -96,6 +96,17 @@ Important server files:
 |---|---|---|
 | `"input"` | `RoomClient.sendInput()` | Movement, fire, and interact booleans. Sent only when changed. |
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
+| `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
+| `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state. |
+| `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
+| `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"` | Building helpers | Requests server-authoritative wood block placement, removal, or repair. |
+| `"placeCampfire"`, `"placeCaltrops"` | Placement helpers | Requests server-authoritative deployable placement. |
+| `"craftItem"` | `RoomClient.sendCraftItem()` | Requests crafting by recipe ID. |
+| `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Applies one pending level-up upgrade choice. |
+| `"setOutfitColor"` | `RoomClient.sendSetOutfitColor()` | Requests player presentation color changes. |
+| `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
+| `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
+| `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
 | `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later round (2–99) for the room. Round 1 is the initial wave; round N begins at elapsed minute N-1. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
@@ -109,6 +120,17 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"woodPickup"` | One-shot pickup sound/UI presentation. |
 | `"reviveStarted"` | One-shot revive-start presentation. |
 | `"playerHurt"` | One-shot player hurt presentation. |
+| `"craftResult"` | Acceptance or rejection feedback for a crafting request. |
+| `"itemCrafted"` | One-shot presentation for successful crafting. |
+| `"levelReset"` | One-shot presentation/state reset after a room-level reset. |
+| `"playerLevelUp"` | One-shot level-up presentation and upgrade-choice prompt. |
+| `"enemyWaveStarted"` | One-shot wave-start presentation. |
+| `"mapImported"` | Legacy map-import acceptance feedback. |
+| `"mapList"` | Saved map names returned to the map editor. |
+| `"mapStorageError"` | Map storage validation or persistence failure message. |
+| `"mapSaveConflict"` | Save rejected because the map name already exists. |
+| `"mapSaved"` | Save success confirmation. |
+| `"mapLoaded"` | Load success confirmation, including whether data was trimmed. |
 | `"debugRoundResult"` | Development-only acceptance or validation feedback for a `"debugSetRound"` request. |
 
 Durable game facts should usually be schema state, not transient messages.
@@ -127,19 +149,34 @@ Durable game facts should usually be schema state, not transient messages.
 | `enemyBullets` | `MapSchema<EnemyBulletState>` | Server-owned enemy bullet positions. |
 | `trees` | `MapSchema<TreeState>` | Active harvestable trees. |
 | `logs` | `MapSchema<LogState>` | Dropped wood pickups. |
+| `woodBlocks` | `MapSchema<WoodBlockState>` | Player-built barricades with server-owned health. |
+| `campfires` | `MapSchema<CampfireState>` | Player-placed healing deployables. |
+| `caltrops` | `MapSchema<CaltropState>` | Player-placed slowing/damage deployables. |
+| `mapChunks` | `MapSchema<MapChunkState>` | Sparse server-owned map tile chunks rendered by editor and saved-map game rooms. |
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
 | `teamScore` | `int32` | Shared score. |
 | `gameStarted` | `boolean` | Whether simulation has started. |
 | `gameOver` | `boolean` | Whether the room is in game-over state. |
+| `gameOverCountdown` | `int8` | Countdown value displayed during game-over flow. |
+| `mode` | `string` | Room mode, usually `"game"` or development-only `"map-editor"`. |
+| `activeMapName` | `string` | Saved map loaded into a normal game room, or empty when none is active. |
 
 ### Player State
 
-`PlayerState` includes position, health, kills, wood, death/revive state, facing direction, attack direction, and attack sequence.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, upgrade counters, outfit color, and hotbar inventory.
 
 ### Enemy State
 
 `EnemyState` includes position, enemy type, power, health, max health, facing direction, action, attack sequence, damage sequence, death state, and death sequence.
+
+### Map Chunk State
+
+`MapChunkState` stores compact 16x16 tile chunks as base64-encoded uint16 frame values. The server owns chunk creation, mutation, persistence, and validation; clients render chunks and send bounded edit requests in map-editor rooms.
+
+### Deployable State
+
+`WoodBlockState`, `CampfireState`, and `CaltropState` sync renderable deployables created by server-authoritative building and crafting systems.
 
 ### Private Server State
 
