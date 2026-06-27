@@ -60,6 +60,14 @@ export default {
             key: 'enemy-wave-horn',
             args: ['assets/horngame.mp3']
         },
+        anvilHit1: {
+            key: 'anvil-hit-1',
+            args: ['assets/anvilhit1.mp3']
+        },
+        anvilHit2: {
+            key: 'anvil-hit-2',
+            args: ['assets/anvilhit2.mp3']
+        },
     },
     'image': {
         treeBottom: {

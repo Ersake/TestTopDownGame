@@ -93,6 +93,17 @@ const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil((MAP_CHUNK_CELL_COUNT * 2) / 3) * 4;
 const MAP_FRAME_COUNT = 32 * 32;
 const MAP_MAX_FILLED_CELLS = 50000;
+const WORKBENCH_LEFT_FRAME = 294;
+const WORKBENCH_RIGHT_FRAME = 295;
+const WORKBENCH_INTERACT_RANGE = 80;
+const CRAFTING_PANEL_WIDTH = 760;
+const CRAFTING_PANEL_HEIGHT = 430;
+const CRAFTING_PANEL_PADDING = 28;
+const CRAFTING_ROW_HEIGHT = 116;
+const CRAFTING_ROW_GAP = 16;
+const CRAFTING_ICON_SIZE = 72;
+const CRAFTING_SCROLL_STEP = 46;
+const CAMPFIRE_CRAFT_RECIPE_ID = 'campfire';
 const MAP_PALETTE_MARGIN_X = 10;
 const MAP_PALETTE_Y = 54;
 const MAP_PALETTE_COLUMNS = 32;
@@ -168,6 +179,7 @@ const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
 const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
 const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.495;
+const ANVIL_HIT_SOUND_VOLUME = 0.5;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_ATTACK_REPEAT_BUFFER_MS = 60;
@@ -266,6 +278,32 @@ const PLAYER_BUFFS = [
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
     { field: 'campfireUpgrades', label: 'Campfire charge' },
 ];
+const CRAFTING_RECIPES = [
+    {
+        id: CAMPFIRE_CRAFT_RECIPE_ID,
+        name: 'Campfire',
+        description: 'Heals 1 HP every 10 seconds.',
+        cost: 'Cost: 10 wood',
+        enabled: true,
+        icon: 'campfire',
+    },
+    {
+        id: 'sword_shield',
+        name: 'Sword and Shield',
+        description: 'Pretty good.',
+        cost: 'Cost: 10 wood, 10 bones',
+        enabled: false,
+        icon: 'placeholder',
+    },
+    {
+        id: 'bone_bow',
+        name: 'Bone Bow',
+        description: 'Deals 2 damage.',
+        cost: 'Cost: 15 bones',
+        enabled: false,
+        icon: 'placeholder',
+    },
+];
 
 export class Game extends Phaser.Scene {
     constructor() {
@@ -311,6 +349,7 @@ export class Game extends Phaser.Scene {
         this.updateEnemyHealthBars();
         this.updateCasterChargeEffects();
         this.updateCampfireHealBars();
+        this.updateCraftingMenuProximity();
         this.updateHitboxOverlay();
     }
 
@@ -375,6 +414,7 @@ export class Game extends Phaser.Scene {
         this.mapEditorTilemap = null;
         this.mapEditorLayer = null;
         this.mapEditorChunks = new Map();
+        this.mapTileCache = new Map();
         this.mapEditorTileSprites = new Map();
         this.mapEditorUiObjects = new Set();
         this.mapLayerButtons = [];
@@ -425,6 +465,9 @@ export class Game extends Phaser.Scene {
         this.debugRoundInput = null;
         this.debugRoundStatusText = null;
         this.debugRoundInputHandlers = null;
+        this.craftingUi = null;
+        this.craftingUiObjects = new Set();
+        this.craftingStatusText = null;
         this.masterVolume = this.loadMasterVolume();
         this.sfxGroupLastPlayedAt = new Map();
         this.activeSfxStacks = new Map();
@@ -478,6 +521,7 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('keydown', this.handleEscapeKey, true);
             window.removeEventListener('mouseup', this.handleGlobalMouseUp, true);
             this.disableBuildMode();
+            this.closeCraftingMenu();
             this.stopAxeWhirlwind();
             this.stopAllCasterChargeSounds();
             this.destroyDebugRoundControls();
@@ -867,6 +911,186 @@ export class Game extends Phaser.Scene {
         this.initHotbar();
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
+    }
+
+    addCraftingUiObject(object) {
+        if (!object) return object;
+        this.craftingUiObjects.add(object);
+        this.registerFixedUi(object);
+        return object;
+    }
+
+    openCraftingMenu() {
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyWorkbench()) return;
+        if (this.craftingUi) {
+            this.setCraftingStatus('');
+            return;
+        }
+
+        this.stopHeldAttack();
+        this.cancelBowCharge();
+        this.stopAxeWhirlwind();
+
+        const panelWidth = Math.min(CRAFTING_PANEL_WIDTH, Math.max(320, this.scale.width - 48));
+        const panelHeight = Math.min(CRAFTING_PANEL_HEIGHT, Math.max(280, this.scale.height - 48));
+        const panelX = this.centreX - panelWidth * 0.5;
+        const panelY = this.centreY - panelHeight * 0.5;
+        const viewport = {
+            x: panelX + CRAFTING_PANEL_PADDING,
+            y: panelY + 76,
+            width: panelWidth - CRAFTING_PANEL_PADDING * 2,
+            height: panelHeight - 132,
+        };
+        const objects = [];
+        const rowContainers = [];
+
+        const addObject = (object) => {
+            objects.push(object);
+            this.addCraftingUiObject(object);
+            return object;
+        };
+
+        const panel = addObject(this.add.graphics().setDepth(UI_DEPTH + 30).setScrollFactor(0));
+        panel.fillStyle(0x4a4a4a, 0.78);
+        panel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.lineStyle(2, 0xbcbcbc, 0.78);
+        panel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.setInteractive(new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight), Phaser.Geom.Rectangle.Contains);
+
+        addObject(this.add.text(panelX + CRAFTING_PANEL_PADDING, panelY + 22, 'Crafting', {
+            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const closeButton = addObject(this.add.text(panelX + panelWidth - 28, panelY + 20, 'X', {
+            fontFamily: 'Arial Black', fontSize: 24, color: '#ff3333',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0).setInteractive({ useHandCursor: true }));
+        closeButton.on('pointerdown', (_pointer, _x, _y, event) => {
+            event?.stopPropagation();
+            this.closeCraftingMenu();
+        });
+
+        const maskGraphics = addObject(this.add.graphics().setDepth(UI_DEPTH + 31).setScrollFactor(0));
+        maskGraphics.fillStyle(0xffffff, 1);
+        maskGraphics.fillRect(viewport.x, viewport.y, viewport.width, viewport.height);
+        maskGraphics.setVisible(false);
+        const mask = maskGraphics.createGeometryMask();
+
+        CRAFTING_RECIPES.forEach((recipe, index) => {
+            const rowY = viewport.y + index * (CRAFTING_ROW_HEIGHT + CRAFTING_ROW_GAP);
+            const row = addObject(this.add.container(viewport.x, rowY).setDepth(UI_DEPTH + 32).setScrollFactor(0));
+            row.setMask(mask);
+
+            const rowBackground = this.add.rectangle(0, 0, viewport.width, CRAFTING_ROW_HEIGHT, 0x262626, recipe.enabled ? 0.66 : 0.38)
+                .setOrigin(0)
+                .setStrokeStyle(1, 0xffffff, recipe.enabled ? 0.18 : 0.1);
+            row.add(rowBackground);
+
+            let icon;
+            if (recipe.icon === 'campfire') {
+                icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.spritesheet.campfire.key, CAMPFIRE_ICON_FRAME)
+                    .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
+            } else {
+                icon = this.add.rectangle(48, CRAFTING_ROW_HEIGHT * 0.5, CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE, 0x1d1d1d, 0.85)
+                    .setStrokeStyle(3, 0x050505, 0.9);
+                const label = this.add.text(48, CRAFTING_ROW_HEIGHT * 0.5, '?', {
+                    fontFamily: 'Arial Black', fontSize: 28, color: '#777777',
+                }).setOrigin(0.5);
+                row.add(label);
+            }
+            row.add(icon);
+            if (recipe.enabled) {
+                icon.setInteractive({ useHandCursor: true });
+                this.craftingUiObjects.add(icon);
+                icon.on('pointerdown', (_pointer, _x, _y, event) => {
+                    event?.stopPropagation();
+                    this.setCraftingStatus('Crafting...');
+                    RoomClient.sendCraftItem(recipe.id);
+                });
+            } else {
+                icon.setAlpha(0.55);
+            }
+
+            const name = this.add.text(104, 22, recipe.name, {
+                fontFamily: 'Arial Black', fontSize: 20, color: recipe.enabled ? '#ffffff' : '#aaaaaa',
+                stroke: '#000000', strokeThickness: 4,
+            });
+            const description = this.add.text(104, 52, recipe.description, {
+                fontFamily: 'Arial', fontSize: 17, color: recipe.enabled ? '#eeeeee' : '#999999',
+            });
+            const cost = this.add.text(104, 78, recipe.cost, {
+                fontFamily: 'Arial Black', fontSize: 16, color: recipe.enabled ? '#ffd37a' : '#888888',
+                stroke: '#000000', strokeThickness: 3,
+            });
+            row.add([name, description, cost]);
+            rowContainers.push(row);
+        });
+
+        this.craftingStatusText = addObject(this.add.text(this.centreX, panelY + panelHeight - 28, '', {
+            fontFamily: 'Arial Black', fontSize: 15, color: '#ffd37a',
+            stroke: '#000000', strokeThickness: 3,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const contentHeight = CRAFTING_RECIPES.length * CRAFTING_ROW_HEIGHT + Math.max(0, CRAFTING_RECIPES.length - 1) * CRAFTING_ROW_GAP;
+        this.craftingUi = {
+            objects,
+            rowContainers,
+            mask,
+            viewport,
+            scrollY: 0,
+            maxScroll: Math.max(0, contentHeight - viewport.height),
+            panel: new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight),
+        };
+        this.updateCraftingMenuScroll(0);
+    }
+
+    closeCraftingMenu() {
+        if (!this.craftingUi && this.craftingUiObjects.size <= 0) return;
+        this.craftingUi?.mask?.destroy?.();
+        this.craftingUi?.objects?.forEach(object => object?.destroy?.());
+        this.craftingUiObjects.clear();
+        this.craftingUi = null;
+        this.craftingStatusText = null;
+    }
+
+    setCraftingStatus(message, color = '#ffd37a') {
+        if (!this.craftingStatusText) return;
+        this.craftingStatusText.setText(message || '').setColor(color);
+    }
+
+    updateCraftingMenuScroll(deltaY) {
+        if (!this.craftingUi) return;
+        const ui = this.craftingUi;
+        ui.scrollY = Phaser.Math.Clamp(ui.scrollY + deltaY, 0, ui.maxScroll);
+        ui.rowContainers.forEach((row, index) => {
+            const y = ui.viewport.y + index * (CRAFTING_ROW_HEIGHT + CRAFTING_ROW_GAP) - ui.scrollY;
+            row.setY(y);
+            row.setVisible(y + CRAFTING_ROW_HEIGHT > ui.viewport.y && y < ui.viewport.y + ui.viewport.height);
+        });
+    }
+
+    handleCraftingWheel(pointer, deltaY) {
+        if (!this.craftingUi) return false;
+        if (this.craftingUi.panel.contains(pointer.x, pointer.y)) {
+            this.updateCraftingMenuScroll(Math.sign(deltaY) * CRAFTING_SCROLL_STEP);
+            return true;
+        }
+        return false;
+    }
+
+    handleInteractPressed(event) {
+        if (this.craftingUi) return;
+        if (!this.getNearbyWorkbench()) return;
+        event?.preventDefault?.();
+        this.openCraftingMenu();
+    }
+
+    updateCraftingMenuProximity() {
+        if (!this.craftingUi) return;
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyWorkbench()) {
+            this.closeCraftingMenu();
+        }
     }
 
     updateUpgradeUi() {
@@ -1549,6 +1773,64 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    cacheMapChunk(key, layer1Data, layer2Data) {
+        const position = this.getMapChunkPosition(key);
+        const layer1 = this.decodeMapChunk(layer1Data);
+        const layer2 = this.decodeMapChunk(layer2Data);
+        if (!position || !layer1 || !layer2) {
+            this.mapTileCache.delete(key);
+            return;
+        }
+        this.mapTileCache.set(key, { ...position, layer1, layer2 });
+    }
+
+    getMapTileValue(col, row, layer = 1) {
+        if (col < 0 || row < 0 || col >= this.worldWidth / MAP_TILE_SIZE || row >= this.worldHeight / MAP_TILE_SIZE) return 0;
+        const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
+        const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
+        const chunk = this.mapTileCache.get(chunkCol + ':' + chunkRow);
+        if (!chunk) return 0;
+        const localCol = col % MAP_CHUNK_SIZE;
+        const localRow = row % MAP_CHUNK_SIZE;
+        const values = layer === 2 ? chunk.layer2 : chunk.layer1;
+        return values[localRow * MAP_CHUNK_SIZE + localCol] || 0;
+    }
+
+    isWorkbenchLeftCell(col, row, layer = 1) {
+        return this.getMapTileValue(col, row, layer) === WORKBENCH_LEFT_FRAME + 1
+            && this.getMapTileValue(col + 1, row, layer) === WORKBENCH_RIGHT_FRAME + 1;
+    }
+
+    getNearbyWorkbench() {
+        if (this.isMapEditor || !this.localSessionId) return null;
+        const player = this.localPlayerState || RoomClient.room?.state?.players?.get(this.localSessionId);
+        if (!player || player.isDead) return null;
+
+        const footX = player.x;
+        const footY = player.y + PLAYER_FOOT_Y_OFFSET;
+        const searchRadius = WORKBENCH_INTERACT_RANGE + MAP_TILE_SIZE;
+        const startCol = Math.floor((footX - searchRadius) / MAP_TILE_SIZE);
+        const endCol = Math.floor((footX + searchRadius) / MAP_TILE_SIZE);
+        const startRow = Math.floor((footY - searchRadius) / MAP_TILE_SIZE);
+        const endRow = Math.floor((footY + searchRadius) / MAP_TILE_SIZE);
+        const rangeSq = WORKBENCH_INTERACT_RANGE * WORKBENCH_INTERACT_RANGE;
+
+        for (let row = startRow; row <= endRow; row++) {
+            for (let col = startCol; col <= endCol; col++) {
+                for (const layer of [1, 2]) {
+                    if (!this.isWorkbenchLeftCell(col, row, layer)) continue;
+                    const centerX = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+                    const centerY = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+                    const dx = footX - centerX;
+                    const dy = footY - centerY;
+                    if (dx * dx + dy * dy <= rangeSq) return { col, row, layer, x: centerX, y: centerY };
+                }
+            }
+        }
+
+        return null;
+    }
+
     renderMapEditorChunk(key, data, layer) {
         const position = this.getMapChunkPosition(key);
         const values = this.decodeMapChunk(data);
@@ -1625,6 +1907,9 @@ export class Game extends Phaser.Scene {
         this.keys.escape.on('down', (key, event) => {
             this.handleEscapeQuit(event);
         });
+        this.keys.interact.on('down', (_key, event) => {
+            this.handleInteractPressed(event);
+        });
         for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot++) {
             this.keys[`slot${slot}`].on('down', () => this.equipHotbarSlot(slot));
         }
@@ -1670,6 +1955,7 @@ export class Game extends Phaser.Scene {
             if (
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
+                || gameObjects.some(gameObject => this.craftingUiObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.upgradeUiObjects.includes(gameObject))
             ) {
@@ -1770,6 +2056,7 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('wheel', (_pointer, _gameObjects, _deltaX, deltaY) => {
+            if (this.handleCraftingWheel(_pointer, deltaY)) return;
             this.handleCameraWheel(deltaY);
         });
     }
@@ -1848,6 +2135,7 @@ export class Game extends Phaser.Scene {
             const render = () => {
                 if (typeof chunk.layer1 !== 'string' || typeof chunk.layer2 !== 'string') return;
                 this.mapEditorChunks.set(key, { layer1: chunk.layer1, layer2: chunk.layer2 });
+                this.cacheMapChunk(key, chunk.layer1, chunk.layer2);
                 this.renderMapEditorChunk(key, chunk.layer1, 1);
                 this.renderMapEditorChunk(key, chunk.layer2, 2);
             };
@@ -1859,6 +2147,7 @@ export class Game extends Phaser.Scene {
         state.mapChunks.onRemove((_chunk, key) => {
             if (!key) return;
             this.mapEditorChunks.delete(key);
+            this.mapTileCache.delete(key);
             this.clearMapEditorChunk(key);
         });
 
@@ -1931,6 +2220,20 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('woodPickup', () => {
             this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
+        });
+
+        room.onMessage('craftResult', (result) => {
+            if (!this.craftingUi) return;
+            if (result?.accepted) {
+                this.closeCraftingMenu();
+            } else {
+                this.setCraftingStatus(result?.reason || 'Crafting failed.', '#ff9d9d');
+            }
+        });
+
+        room.onMessage('itemCrafted', () => {
+            const anvilHit = Math.random() < 0.5 ? ASSETS.audio.anvilHit1 : ASSETS.audio.anvilHit2;
+            this.playSfx(anvilHit.key, ANVIL_HIT_SOUND_VOLUME, { serverEvent: true });
         });
 
         room.onMessage('reviveStarted', () => {
@@ -2876,6 +3179,7 @@ export class Game extends Phaser.Scene {
                 this.disableBuildMode();
                 this.stopHeldAttack();
                 this.cancelBowCharge();
+                this.closeCraftingMenu();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
                 this.quitButton
@@ -5110,6 +5414,7 @@ export class Game extends Phaser.Scene {
             this.hitboxToggleButton.setVisible(false);
         }
         this.setDebugRoundControlsVisible(false);
+        this.closeCraftingMenu();
         this.isBuildModeActive = false;
         this.resetBuildDragState();
         this.stopHeldAttack();

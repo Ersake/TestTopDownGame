@@ -39,6 +39,10 @@ const MAP_EDITOR_MODE = "map-editor";
 const MAP_CHUNK_ENCODED_BYTES = MAP_CHUNK_CELL_COUNT * 2;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil(MAP_CHUNK_ENCODED_BYTES / 3) * 4;
 const MAP_SAVE_VERSION = 1;
+const WORKBENCH_LEFT_FRAME = 294;
+const WORKBENCH_RIGHT_FRAME = 295;
+const WORKBENCH_INTERACT_RANGE = 80;
+const CAMPFIRE_CRAFT_WOOD_COST = 10;
 const TREE_COUNT = 25;
 const TREE_GRID_COLS = 5;
 const TREE_GRID_ROWS = 5;
@@ -199,6 +203,8 @@ for (const region of SOLID_TILE_REGIONS) {
         }
     }
 }
+SOLID_MAP_FRAMES.add(WORKBENCH_LEFT_FRAME);
+SOLID_MAP_FRAMES.add(WORKBENCH_RIGHT_FRAME);
 const TREE_SPAWN_GROUND_FRAMES = new Set<number>([
     40, // yellow grass/base ground
 ]);
@@ -610,6 +616,10 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.onMessage("placeCampfire", (client, data) => {
             this.tryPlaceCampfire(client.sessionId, data);
+        });
+
+        this.onMessage("craftItem", (client, data) => {
+            this.tryCraftItem(client, data);
         });
 
         this.onMessage("selectUpgrade", (client, data) => {
@@ -1415,6 +1425,28 @@ export class ShmupRoom extends Room<GameRoomState> {
         return true;
     }
 
+    private consumeHeldWood(player: PlayerState, count: number): boolean {
+        this.normalizeHotbar(player);
+        let remaining = Math.max(0, Math.floor(count));
+        if (remaining <= 0) return false;
+        if (this.getTotalHeldWood(player) < remaining) return false;
+
+        for (let i = 0; i < HOTBAR_SLOT_COUNT && remaining > 0; i++) {
+            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
+            const current = Math.max(0, Math.floor(player.hotbarCounts[i] || 0));
+            const consumed = Math.min(current, remaining);
+            const next = current - consumed;
+            if (next <= 0) {
+                this.setHotbarSlot(player, i + 1, EMPTY_HOTBAR_ITEM, EMPTY_HOTBAR_COUNT);
+            } else {
+                player.hotbarCounts[i] = next;
+            }
+            remaining -= consumed;
+        }
+
+        return remaining <= 0;
+    }
+
     private getTotalHeldWood(player: PlayerState): number {
         this.normalizeHotbar(player);
         return player.hotbarItems.reduce((total, item, index) => {
@@ -1439,6 +1471,77 @@ export class ShmupRoom extends Room<GameRoomState> {
                 player.activeItem = ITEM_CAMPFIRE;
             }
         }
+    }
+
+    private tryCraftItem(client: Client, data: unknown): boolean {
+        const recipeId = String((data as { recipeId?: unknown })?.recipeId || "");
+        const reject = (reason: string) => {
+            client.send("craftResult", { accepted: false, recipeId, reason });
+            return false;
+        };
+
+        if (recipeId !== "campfire") return reject("That recipe is not available yet.");
+
+        const sp = this.serverPlayers.get(client.sessionId);
+        const player = this.state.players.get(client.sessionId);
+        if (!sp || !sp.alive || !player || player.isDead || this.state.gameOver || !this.state.gameStarted) {
+            return reject("You cannot craft right now.");
+        }
+        if (!this.isPlayerNearWorkbench(player)) return reject("Move closer to a workbench.");
+        if (this.getTotalHeldWood(player) < CAMPFIRE_CRAFT_WOOD_COST) return reject("Not enough wood.");
+        if (!this.hasRoomForCraftedCampfire(player, CAMPFIRE_CRAFT_WOOD_COST)) return reject("No empty hotbar slot.");
+        if (!this.consumeHeldWood(player, CAMPFIRE_CRAFT_WOOD_COST)) return reject("Not enough wood.");
+
+        player.wood = this.getTotalHeldWood(player);
+        this.grantCampfireItem(player);
+        client.send("craftResult", { accepted: true, recipeId });
+        this.broadcast("itemCrafted", { recipeId, playerId: client.sessionId });
+        return true;
+    }
+
+    private hasRoomForCraftedCampfire(player: PlayerState, woodCost: number): boolean {
+        this.normalizeHotbar(player);
+        if (this.findFirstEmptyHotbarSlot(player) > 0) return true;
+
+        let remainingCost = Math.max(0, Math.floor(woodCost));
+        for (let i = 0; i < HOTBAR_SLOT_COUNT && remainingCost > 0; i++) {
+            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
+            const current = Math.max(0, Math.floor(player.hotbarCounts[i] || 0));
+            if (current <= remainingCost) return true;
+            remainingCost -= current;
+        }
+        return false;
+    }
+
+    private isPlayerNearWorkbench(player: PlayerState): boolean {
+        const footX = player.x;
+        const footY = player.y + PLAYER_TREE_Y_OFFSET;
+        const searchRadius = WORKBENCH_INTERACT_RANGE + MAP_TILE_SIZE;
+        const startCol = Math.floor((footX - searchRadius) / MAP_TILE_SIZE);
+        const endCol = Math.floor((footX + searchRadius) / MAP_TILE_SIZE);
+        const startRow = Math.floor((footY - searchRadius) / MAP_TILE_SIZE);
+        const endRow = Math.floor((footY + searchRadius) / MAP_TILE_SIZE);
+        const rangeSq = WORKBENCH_INTERACT_RANGE * WORKBENCH_INTERACT_RANGE;
+
+        for (let row = startRow; row <= endRow; row++) {
+            for (let col = startCol; col <= endCol; col++) {
+                for (const layer of [1, 2] as const) {
+                    if (!this.isWorkbenchLeftCell(col, row, layer)) continue;
+                    const centerX = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+                    const centerY = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+                    const dx = footX - centerX;
+                    const dy = footY - centerY;
+                    if (dx * dx + dy * dy <= rangeSq) return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private isWorkbenchLeftCell(col: number, row: number, layer: 1 | 2): boolean {
+        return this.getMapTileValue(col, row, layer) === WORKBENCH_LEFT_FRAME + 1
+            && this.getMapTileValue(col + 1, row, layer) === WORKBENCH_RIGHT_FRAME + 1;
     }
 
     private getPlayerAxeCooldownMs(player: PlayerState): number {
