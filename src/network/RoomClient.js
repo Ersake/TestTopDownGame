@@ -182,9 +182,29 @@ class RoomClient {
         this.room.send("removeMapTile", { col, row, layer });
     }
 
-    sendReplaceMap(chunks) {
+    sendPlaceEnchantmentTable(col, row) {
+        if (!this.room) return;
+        this.room.send("placeEnchantmentTable", { col, row });
+    }
+
+    sendRemoveEnchantmentTable(col, row) {
+        if (!this.room) return;
+        this.room.send("removeEnchantmentTable", { col, row });
+    }
+
+    sendPlaceCraftingTable(col, row) {
+        if (!this.room) return;
+        this.room.send("placeCraftingTable", { col, row });
+    }
+
+    sendRemoveCraftingTable(col, row) {
+        if (!this.room) return;
+        this.room.send("removeCraftingTable", { col, row });
+    }
+
+    sendReplaceMap(chunks, enchantmentTables = [], craftingTables = []) {
         if (!this.room) return false;
-        const payload = { chunks };
+        const payload = { chunks, enchantmentTables, craftingTables };
         const payloadSize = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
         if (payloadSize > MAX_MAP_REPLACE_PAYLOAD_BYTES) {
             console.error('[RoomClient] refusing oversized replaceMap payload:', payloadSize);

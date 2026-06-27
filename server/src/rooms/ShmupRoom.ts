@@ -10,6 +10,8 @@ import {
     WoodBlockState,
     CampfireState,
     CaltropState,
+    EnchantmentTableState,
+    CraftingTableState,
     MapChunkState,
 } from "../schema/GameState";
 import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
@@ -44,6 +46,8 @@ const PRODUCTION_GAME_MAP_NAME = "lvlone";
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
+const LAYER3_ROW_OBJECT_HALF_WIDTH = MAP_TILE_SIZE;
+const LAYER3_ROW_OBJECT_HALF_HEIGHT = MAP_TILE_SIZE * 0.5;
 const CAMPFIRE_CRAFT_WOOD_COST = 10;
 const CALTROPS_FRAME = 449;
 const CALTROPS_SLOW_RADIUS = 44;
@@ -669,6 +673,26 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.removeMapTile(data);
         });
 
+        this.onMessage("placeEnchantmentTable", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.placeEnchantmentTable(data);
+        });
+
+        this.onMessage("removeEnchantmentTable", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.removeEnchantmentTable(data);
+        });
+
+        this.onMessage("placeCraftingTable", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.placeCraftingTable(data);
+        });
+
+        this.onMessage("removeCraftingTable", (client, data) => {
+            if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
+            this.removeCraftingTable(data);
+        });
+
         this.onMessage("replaceMap", (client, data) => {
             if (!this.isMapEditor() || !this.state.players.has(client.sessionId)) return;
             const accepted = this.replaceMap(data);
@@ -923,11 +947,145 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
+    private placeEnchantmentTable(data: unknown): void {
+        const cell = this.getMapObjectCellFromData(data);
+        if (!cell || !this.isLayer3RowObjectCellInside(cell.col, cell.row)) return;
+        if (this.layer3RowObjectOverlapsPlayer(cell.col, cell.row)) return;
+        if (this.layer3RowObjectOverlapsAnyTable(cell.col, cell.row, this.getEnchantmentTableIdForCell(cell.col, cell.row))) return;
+
+        const table = this.createEnchantmentTableState(cell.col, cell.row);
+        this.state.enchantmentTables.set(table.id, table);
+    }
+
+    private removeEnchantmentTable(data: unknown): void {
+        const cell = this.getMapObjectCellFromData(data);
+        if (!cell) return;
+
+        const directId = this.getEnchantmentTableIdForCell(cell.col, cell.row);
+        if (this.state.enchantmentTables.delete(directId)) return;
+
+        this.state.enchantmentTables.forEach((table, id) => {
+            const insideX = cell.col >= table.col && cell.col <= table.col + 1;
+            const insideY = cell.row === table.row;
+            if (insideX && insideY) this.state.enchantmentTables.delete(id);
+        });
+    }
+
+    private placeCraftingTable(data: unknown): void {
+        const cell = this.getMapObjectCellFromData(data);
+        if (!cell || !this.isLayer3RowObjectCellInside(cell.col, cell.row)) return;
+        if (this.layer3RowObjectOverlapsPlayer(cell.col, cell.row)) return;
+        if (this.layer3RowObjectOverlapsAnyTable(cell.col, cell.row, this.getCraftingTableIdForCell(cell.col, cell.row))) return;
+
+        const table = this.createCraftingTableState(cell.col, cell.row);
+        this.state.craftingTables.set(table.id, table);
+    }
+
+    private removeCraftingTable(data: unknown): void {
+        const cell = this.getMapObjectCellFromData(data);
+        if (!cell) return;
+
+        const directId = this.getCraftingTableIdForCell(cell.col, cell.row);
+        if (this.state.craftingTables.delete(directId)) return;
+
+        this.state.craftingTables.forEach((table, id) => {
+            const insideX = cell.col >= table.col && cell.col <= table.col + 1;
+            const insideY = cell.row === table.row;
+            if (insideX && insideY) this.state.craftingTables.delete(id);
+        });
+    }
+
+    private getMapObjectCellFromData(data: unknown): { col: number; row: number } | null {
+        const col = Number((data as { col?: unknown })?.col);
+        const row = Number((data as { row?: unknown })?.row);
+        if (!Number.isInteger(col) || !Number.isInteger(row)) return null;
+        return { col, row };
+    }
+
+    private isLayer3RowObjectCellInside(col: number, row: number): boolean {
+        return this.isMapCellInside(col, row) && this.isMapCellInside(col + 1, row);
+    }
+
+    private getEnchantmentTableIdForCell(col: number, row: number): string {
+        return `enchantment-table-${col}-${row}`;
+    }
+
+    private getCraftingTableIdForCell(col: number, row: number): string {
+        return `crafting-table-${col}-${row}`;
+    }
+
+    private createEnchantmentTableState(col: number, row: number): EnchantmentTableState {
+        const table = new EnchantmentTableState();
+        table.id = this.getEnchantmentTableIdForCell(col, row);
+        table.col = col;
+        table.row = row;
+        table.x = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+        table.y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        return table;
+    }
+
+    private createCraftingTableState(col: number, row: number): CraftingTableState {
+        const table = new CraftingTableState();
+        table.id = this.getCraftingTableIdForCell(col, row);
+        table.col = col;
+        table.row = row;
+        table.x = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+        table.y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        return table;
+    }
+
+    private layer3RowObjectOverlapsPlayer(col: number, row: number): boolean {
+        const x = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+        const y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        let overlapsPlayer = false;
+        this.state.players.forEach((player) => {
+            if (overlapsPlayer) return;
+            overlapsPlayer = circleOverlapsAabb(
+                player.x,
+                player.y + PLAYER_TREE_Y_OFFSET,
+                PLAYER_TREE_FOOT_RADIUS,
+                x,
+                y,
+                LAYER3_ROW_OBJECT_HALF_WIDTH,
+                LAYER3_ROW_OBJECT_HALF_HEIGHT,
+            );
+        });
+        return overlapsPlayer;
+    }
+
+    private layer3RowObjectOverlapsAnyTable(col: number, row: number, movingId = ""): boolean {
+        const x = col * MAP_TILE_SIZE + MAP_TILE_SIZE;
+        const y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+        let overlapsTable = false;
+        const testTable = (table: EnchantmentTableState | CraftingTableState, tableId: string) => {
+            if (overlapsTable || tableId === movingId) return;
+            overlapsTable = Math.abs(table.x - x) < LAYER3_ROW_OBJECT_HALF_WIDTH * 2
+                && Math.abs(table.y - y) < LAYER3_ROW_OBJECT_HALF_HEIGHT * 2;
+        };
+        this.state.enchantmentTables.forEach(testTable);
+        this.state.craftingTables.forEach(testTable);
+        return overlapsTable;
+    }
+
     private exportMapChunks(): Array<{ key: string; layer1: string; layer2: string }> {
         return [...this.mapTiles.entries()].map(([key, chunk]) => ({
             key,
             layer1: this.encodeMapChunk(chunk.layer1),
             layer2: this.encodeMapChunk(chunk.layer2),
+        }));
+    }
+
+    private exportEnchantmentTables(): Array<{ col: number; row: number }> {
+        return [...this.state.enchantmentTables.values()].map((table) => ({
+            col: table.col,
+            row: table.row,
+        }));
+    }
+
+    private exportCraftingTables(): Array<{ col: number; row: number }> {
+        return [...this.state.craftingTables.values()].map((table) => ({
+            col: table.col,
+            row: table.row,
         }));
     }
 
@@ -991,9 +1149,53 @@ export class ShmupRoom extends Room<GameRoomState> {
         return { accepted: true, trimmed };
     }
 
+    private applyEnchantmentTables(objects: unknown[] = []): boolean {
+        const nextTables = new Map<string, EnchantmentTableState>();
+        for (const object of objects) {
+            const col = Number((object as { col?: unknown })?.col);
+            const row = Number((object as { row?: unknown })?.row);
+            if (!Number.isInteger(col) || !Number.isInteger(row)) return false;
+            if (!this.isLayer3RowObjectCellInside(col, row)) return false;
+
+            const table = this.createEnchantmentTableState(col, row);
+            if (nextTables.has(table.id)) return false;
+            nextTables.set(table.id, table);
+        }
+
+        this.state.enchantmentTables.clear();
+        nextTables.forEach((table, id) => this.state.enchantmentTables.set(id, table));
+        this.relocatePlayersFromSolidMapTiles();
+        return true;
+    }
+
+    private applyCraftingTables(objects: unknown[] = []): boolean {
+        const nextTables = new Map<string, CraftingTableState>();
+        for (const object of objects) {
+            const col = Number((object as { col?: unknown })?.col);
+            const row = Number((object as { row?: unknown })?.row);
+            if (!Number.isInteger(col) || !Number.isInteger(row)) return false;
+            if (!this.isLayer3RowObjectCellInside(col, row)) return false;
+
+            const table = this.createCraftingTableState(col, row);
+            if (nextTables.has(table.id)) return false;
+            nextTables.set(table.id, table);
+        }
+
+        this.state.craftingTables.clear();
+        nextTables.forEach((table, id) => this.state.craftingTables.set(id, table));
+        this.relocatePlayersFromSolidMapTiles();
+        return true;
+    }
+
     private replaceMap(data: unknown): boolean {
         const chunks = (data as { chunks?: unknown })?.chunks;
-        return Array.isArray(chunks) && this.applyMapChunks(chunks).accepted;
+        const enchantmentTables = (data as { enchantmentTables?: unknown })?.enchantmentTables;
+        const craftingTables = (data as { craftingTables?: unknown })?.craftingTables;
+        if (!Array.isArray(chunks)) return false;
+        const result = this.applyMapChunks(chunks);
+        if (!result.accepted) return false;
+        return this.applyEnchantmentTables(Array.isArray(enchantmentTables) ? enchantmentTables : [])
+            && this.applyCraftingTables(Array.isArray(craftingTables) ? craftingTables : []);
     }
 
     private isStoredMapDocument(value: Partial<StoredMapDocument>, name: string): value is StoredMapDocument {
@@ -1033,6 +1235,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                     height: document.height,
                     tileSize: this.getSavedMapTileSize(document),
                 }).accepted
+                || !this.applyEnchantmentTables(Array.isArray(document.enchantmentTables) ? document.enchantmentTables : [])
+                || !this.applyCraftingTables(Array.isArray(document.craftingTables) ? document.craftingTables : [])
             ) {
                 throw new Error(`Saved map '${name}' is invalid or incompatible.`);
             }
@@ -1070,6 +1274,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                 width: this.state.worldWidth,
                 height: this.state.worldHeight,
                 chunks: this.exportMapChunks(),
+                enchantmentTables: this.exportEnchantmentTables(),
+                craftingTables: this.exportCraftingTables(),
             };
             await this.mapStorage.save(document);
             client.send("mapSaved", { name });
@@ -1090,11 +1296,18 @@ export class ShmupRoom extends Room<GameRoomState> {
             const document = await this.mapStorage.load(name) as Partial<StoredMapDocument>;
             const result = this.isStoredMapDocument(document, name)
                 && this.canLoadDocumentIntoCurrentRoom(document)
-                ? this.applyMapChunks(document.chunks, true, {
-                    width: document.width,
-                    height: document.height,
-                    tileSize: this.getSavedMapTileSize(document),
-                })
+                ? (() => {
+                    const chunks = this.applyMapChunks(document.chunks, true, {
+                        width: document.width,
+                        height: document.height,
+                        tileSize: this.getSavedMapTileSize(document),
+                    });
+                    if (!chunks.accepted) return chunks;
+                    return this.applyEnchantmentTables(Array.isArray(document.enchantmentTables) ? document.enchantmentTables : [])
+                        && this.applyCraftingTables(Array.isArray(document.craftingTables) ? document.craftingTables : [])
+                        ? chunks
+                        : { accepted: false, trimmed: false };
+                })()
                 : { accepted: false, trimmed: false };
             if (!result.accepted) {
                 client.send("mapStorageError", { message: "That saved map is invalid or incompatible." });
@@ -1225,7 +1438,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private relocatePlayersFromSolidMapTiles(): void {
         this.state.players.forEach((player) => {
-            if (!this.collidesWithMapTiles(player.x, player.y)) return;
+            if (!this.collidesWithPlayerWorldColliders(player.x, player.y)) return;
             const position = this.findNearestOpenPlayerPosition(player.x, player.y);
             player.x = position.x;
             player.y = position.y;
@@ -1235,7 +1448,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private findNearestOpenPlayerPosition(originX: number, originY: number): { x: number; y: number } {
         const clampedOriginX = clamp(originX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
         const clampedOriginY = clamp(originY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
-        if (!this.collidesWithMapTiles(clampedOriginX, clampedOriginY)) return { x: clampedOriginX, y: clampedOriginY };
+        if (!this.collidesWithPlayerWorldColliders(clampedOriginX, clampedOriginY)) return { x: clampedOriginX, y: clampedOriginY };
 
         const originCol = Math.floor(clampedOriginX / MAP_TILE_SIZE);
         const originRow = Math.floor((clampedOriginY + PLAYER_TREE_Y_OFFSET) / MAP_TILE_SIZE);
@@ -1245,7 +1458,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                     if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
                     const x = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
                     const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
-                    if (!this.collidesWithMapTiles(x, y)) return { x, y };
+                    if (!this.collidesWithPlayerWorldColliders(x, y)) return { x, y };
                 }
             }
         }
@@ -1579,6 +1792,15 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
             }
         }
+
+        let nearCraftingTable = false;
+        this.state.craftingTables.forEach((table) => {
+            if (nearCraftingTable) return;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            nearCraftingTable = dx * dx + dy * dy <= rangeSq;
+        });
+        if (nearCraftingTable) return true;
 
         return false;
     }
@@ -2585,6 +2807,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (this.state.woodBlocks.has(this.getWoodBlockIdForCell(cell))) return true;
         if (this.state.campfires.has(this.getCampfireIdForCell(cell))) return true;
         if (this.state.caltrops.has(this.getCaltropsIdForCell(cell))) return true;
+        if (this.collidesWithLayer3TableFoot(blockX, blockY, BUILD_BLOCK_HALF_SIZE)) return true;
 
         let occupied = false;
         this.state.players.forEach((player, playerId) => {
@@ -2957,8 +3180,29 @@ export class ShmupRoom extends Room<GameRoomState> {
         return collides;
     }
 
+    private collidesWithLayer3TableFoot(x: number, y: number, radius: number): boolean {
+        let collides = false;
+        const testTable = (table: EnchantmentTableState | CraftingTableState) => {
+            if (collides) return;
+            collides = circleOverlapsAabb(
+                x,
+                y,
+                radius,
+                table.x,
+                table.y,
+                LAYER3_ROW_OBJECT_HALF_WIDTH,
+                LAYER3_ROW_OBJECT_HALF_HEIGHT,
+            );
+        };
+        this.state.enchantmentTables.forEach(testTable);
+        this.state.craftingTables.forEach(testTable);
+
+        return collides;
+    }
+
     private collidesWithEnemyWorldFoot(x: number, y: number, radius: number): boolean {
         return this.collidesWithWoodBlockFoot(x, y, radius)
+            || this.collidesWithLayer3TableFoot(x, y, radius)
             || this.mapSolidOverlapsAabb(x, y, radius, radius);
     }
 
@@ -2967,6 +3211,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
         return this.collidesWithTestTreeTrunk(playerX, playerY)
             || this.collidesWithWoodBlockFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS)
+            || this.collidesWithLayer3TableFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS)
             || this.collidesWithMapTiles(playerX, playerY);
     }
 
@@ -3815,6 +4060,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
 
         if (!clear) return false;
+        const testTable = (table: EnchantmentTableState | CraftingTableState) => {
+            if (!clear) return;
+            clear = !capsuleOverlapsAabb(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                ENEMY_FOOT_RADIUS,
+                table.x,
+                table.y,
+                LAYER3_ROW_OBJECT_HALF_WIDTH,
+                LAYER3_ROW_OBJECT_HALF_HEIGHT,
+            );
+        };
+        this.state.enchantmentTables.forEach(testTable);
+        this.state.craftingTables.forEach(testTable);
+        if (!clear) return false;
         clear = !this.segmentOverlapsSolidMapTile(fromX, fromY, toX, toY, ENEMY_FOOT_RADIUS);
         return clear;
     }
@@ -4258,6 +4520,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private isBuildPathCellBlocked(col: number, row: number): boolean {
         if (this.state.woodBlocks.has(`wood-${col}-${row}`)) return true;
         const center = this.buildCellCenter({ col, row });
+        if (this.collidesWithLayer3TableFoot(center.x, center.y, ENEMY_FOOT_RADIUS)) return true;
         return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);
     }
 

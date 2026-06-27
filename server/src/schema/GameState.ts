@@ -113,6 +113,22 @@ export class CaltropState extends Schema {
     @type("float32") y: number = 0;
 }
 
+export class EnchantmentTableState extends Schema {
+    @type("string") id: string = "";
+    @type("int16")  col: number = 0;
+    @type("int16")  row: number = 0;
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
+export class CraftingTableState extends Schema {
+    @type("string") id: string = "";
+    @type("int16")  col: number = 0;
+    @type("int16")  row: number = 0;
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
 /** Two compact 16x16 map-editor tile layers encoded as base64 uint16 values. */
 export class MapChunkState extends Schema {
     @type("string") layer1: string = "";
@@ -129,6 +145,8 @@ export class GameRoomState extends Schema {
     @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
     @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
     @type({ map: CaltropState })      caltrops      = new MapSchema<CaltropState>();
+    @type({ map: EnchantmentTableState }) enchantmentTables = new MapSchema<EnchantmentTableState>();
+    @type({ map: CraftingTableState }) craftingTables = new MapSchema<CraftingTableState>();
     @type({ map: MapChunkState })     mapChunks     = new MapSchema<MapChunkState>();
 
     @type("int32")  worldWidth:  number = 4800;

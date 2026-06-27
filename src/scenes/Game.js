@@ -96,6 +96,16 @@ const MAP_MAX_FILLED_CELLS = 50000;
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
+const ENCHANTMENT_TABLE_FRAME = 0;
+const ENCHANTMENT_TABLE_DISPLAY_SIZE = MAP_TILE_SIZE * 2;
+const ENCHANTMENT_TABLE_VISUAL_Y_OFFSET = -MAP_TILE_SIZE * 0.5;
+const ENCHANTMENT_TABLE_DEPTH = 87;
+const ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY = 'enchantment-table-idle';
+const ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY = 'enchantment-table-effect';
+const CRAFTING_TABLE_FRAME = 0;
+const CRAFTING_TABLE_DISPLAY_SIZE = MAP_TILE_SIZE * 2;
+const CRAFTING_TABLE_VISUAL_Y_OFFSET = -MAP_TILE_SIZE * 0.5;
+const CRAFTING_TABLE_DEPTH = 87;
 const CALTROPS_FRAME = 449;
 const CALTROPS_DISPLAY_SIZE = 40;
 const CALTROPS_DEPTH = 85;
@@ -421,6 +431,8 @@ export class Game extends Phaser.Scene {
         this.woodBlockSprites    = new Map();
         this.campfireSprites     = new Map();
         this.caltropSprites      = new Map();
+        this.enchantmentTableSprites = new Map();
+        this.craftingTableSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -442,6 +454,9 @@ export class Game extends Phaser.Scene {
         this.mapDraftNameInput = null;
         this.serverMapNames = new Set();
         this.mapDirty = false;
+        this.activeMapTool = 'tiles';
+        this.activeLayer3Tool = 'enchantment';
+        this.mapToolButtons = [];
         this.editorGridGraphics = null;
         this.editorBoundaryGraphics = null;
         this.editorGridRenderKey = '';
@@ -1388,6 +1403,26 @@ export class Game extends Phaser.Scene {
                 repeat: -1,
             });
         }
+        if (!this.anims.exists(ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY)) {
+            this.anims.create({
+                key: ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY,
+                frames: this.anims.generateFrameNumbers(ASSETS.spritesheet.enchantIdle.key, {
+                    frames: [0, 1, 2, 3, 4, 5],
+                }),
+                frameRate: 8,
+                repeat: -1,
+            });
+        }
+        if (!this.anims.exists(ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY)) {
+            this.anims.create({
+                key: ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY,
+                frames: this.anims.generateFrameNumbers(ASSETS.spritesheet.enchantEffect.key, {
+                    frames: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                }),
+                frameRate: 12,
+                repeat: 0,
+            });
+        }
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -1425,6 +1460,18 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
             backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 5, bottom: 5 },
         }).setInteractive({ useHandCursor: true }), 378, 12);
+        const layer3Button = addPaletteUi(this.add.text(0, 38, 'LAYER 3', {
+            fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 5, bottom: 5 },
+        }).setInteractive({ useHandCursor: true }), 100, 38);
+        const enchantToolButton = addPaletteUi(this.add.text(0, 38, 'ENCHANT', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 4, bottom: 4 },
+        }).setInteractive({ useHandCursor: true }), 198, 38);
+        const craftingToolButton = addPaletteUi(this.add.text(0, 38, 'CRAFT', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 4, bottom: 4 },
+        }).setInteractive({ useHandCursor: true }), 292, 38);
         this.mapPaletteSideButton = addPaletteUi(this.add.text(0, 38, 'MOVE →', {
             fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
             backgroundColor: '#5d5d5d', padding: { left: 8, right: 8, top: 4, bottom: 4 },
@@ -1432,9 +1479,17 @@ export class Game extends Phaser.Scene {
         this.mapLayerButtons = [
             { layer: 1, button: layer1Button },
             { layer: 2, button: layer2Button },
+            { layer: 3, button: layer3Button },
         ];
         layer1Button.on('pointerdown', () => this.setActiveMapLayer(1));
         layer2Button.on('pointerdown', () => this.setActiveMapLayer(2));
+        layer3Button.on('pointerdown', () => this.setActiveMapLayer(3));
+        this.mapToolButtons = [
+            { tool: 'enchantment', button: enchantToolButton },
+            { tool: 'crafting', button: craftingToolButton },
+        ];
+        enchantToolButton.on('pointerdown', () => this.setActiveMapTool('enchantment'));
+        craftingToolButton.on('pointerdown', () => this.setActiveMapTool('crafting'));
         this.mapPaletteSideButton.on('pointerdown', () => this.toggleMapPaletteSide());
         addPaletteUi(this.add.image(0, MAP_PALETTE_Y, ASSETS.image.topdownTilesetPalette.key).setOrigin(0), MAP_PALETTE_MARGIN_X, MAP_PALETTE_Y);
 
@@ -1492,6 +1547,7 @@ export class Game extends Phaser.Scene {
         this.updateMapPaletteLayout();
         this.selectMapFrame(0);
         this.setActiveMapLayer(1);
+        this.setActiveMapTool('tiles');
     }
 
     getMapPalettePanelX() {
@@ -1560,14 +1616,44 @@ export class Game extends Phaser.Scene {
     }
 
     setActiveMapLayer(layer) {
-        this.activeMapLayer = layer === 2 ? 2 : 1;
+        this.activeMapLayer = layer === 3 ? 3 : layer === 2 ? 2 : 1;
+        this.activeMapTool = this.activeMapLayer === 3 ? this.activeLayer3Tool : 'tiles';
         this.mapLayerButtons.forEach(({ layer: buttonLayer, button }) => {
             button.setBackgroundColor(buttonLayer === this.activeMapLayer ? '#2468a8' : '#4b4b4b');
+        });
+        this.mapToolButtons.forEach(({ tool: buttonTool, button }) => {
+            button.setBackgroundColor(buttonTool === this.activeMapTool ? '#2468a8' : '#4b4b4b');
+        });
+        this.updateMapEditorStatus();
+    }
+
+    setActiveMapTool(tool) {
+        this.activeMapTool = tool === 'crafting' ? 'crafting' : tool === 'enchantment' ? 'enchantment' : 'tiles';
+        if (this.activeMapTool === 'crafting' || this.activeMapTool === 'enchantment') {
+            this.activeLayer3Tool = this.activeMapTool;
+            this.activeMapLayer = 3;
+        } else {
+            this.activeMapLayer = Math.min(this.activeMapLayer || 1, 2);
+        }
+        this.mapLayerButtons.forEach(({ layer: buttonLayer, button }) => {
+            button.setBackgroundColor(buttonLayer === this.activeMapLayer ? '#2468a8' : '#4b4b4b');
+        });
+        this.mapToolButtons.forEach(({ tool: buttonTool, button }) => {
+            button.setBackgroundColor(buttonTool === this.activeMapTool ? '#2468a8' : '#4b4b4b');
         });
         this.updateMapEditorStatus();
     }
 
     updateMapEditorStatus() {
+        if (this.activeMapTool === 'enchantment') {
+            this.setMapEditorStatus('Layer 3 · Enchantment table tool. Left-click places a 1x2 row object; right-click removes one.');
+            return;
+        }
+        if (this.activeMapTool === 'crafting') {
+            this.setMapEditorStatus('Layer 3 · Crafting table tool. Left-click places a 1x2 row workbench; right-click removes one.');
+            return;
+        }
+
         const { width, height } = this.selectedMapPattern;
         this.setMapEditorStatus(
             'Layer ' + this.activeMapLayer + ' · ' + width + '×' + height
@@ -1609,6 +1695,17 @@ export class Game extends Phaser.Scene {
 
     stampMapPattern(col, row) {
         this.markMapDirty();
+        if (this.activeMapTool === 'enchantment') {
+            if (!this.isMapCellInsideEditorBoundary(col + 1, row)) return;
+            RoomClient.sendPlaceEnchantmentTable(col, row);
+            return;
+        }
+        if (this.activeMapTool === 'crafting') {
+            if (!this.isMapCellInsideEditorBoundary(col + 1, row)) return;
+            RoomClient.sendPlaceCraftingTable(col, row);
+            return;
+        }
+
         const { frames, width, height } = this.selectedMapPattern;
         for (let patternRow = 0; patternRow < height; patternRow++) {
             for (let patternCol = 0; patternCol < width; patternCol++) {
@@ -1621,6 +1718,12 @@ export class Game extends Phaser.Scene {
 
     eraseMapTile(col, row) {
         this.markMapDirty();
+        if (this.activeMapTool === 'enchantment' || this.activeMapTool === 'crafting') {
+            RoomClient.sendRemoveEnchantmentTable(col, row);
+            RoomClient.sendRemoveCraftingTable(col, row);
+            return;
+        }
+
         RoomClient.sendRemoveMapTile(col, row, this.activeMapLayer);
     }
 
@@ -1846,6 +1949,15 @@ export class Game extends Phaser.Scene {
                     const dy = footY - centerY;
                     if (dx * dx + dy * dy <= rangeSq) return { col, row, layer, x: centerX, y: centerY };
                 }
+            }
+        }
+
+        for (const [id, entry] of this.craftingTableSprites) {
+            const table = entry.table;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            if (dx * dx + dy * dy <= rangeSq) {
+                return { id, col: table.col, row: table.row, layer: 3, x: table.x, y: table.y };
             }
         }
 
@@ -2972,6 +3084,63 @@ export class Game extends Phaser.Scene {
             if (!entry) return;
             entry.sprite.destroy();
             this.caltropSprites.delete(id);
+        });
+
+        const addEnchantmentTable = (table, id) => {
+            const tableId = id || table.id;
+            if (!tableId || this.enchantmentTableSprites.has(tableId)) return;
+
+            const sprite = this.add.sprite(table.x, table.y + ENCHANTMENT_TABLE_VISUAL_Y_OFFSET, ASSETS.spritesheet.enchantIdle.key, ENCHANTMENT_TABLE_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(ENCHANTMENT_TABLE_DISPLAY_SIZE, ENCHANTMENT_TABLE_DISPLAY_SIZE)
+                .setDepth(ENCHANTMENT_TABLE_DEPTH);
+            sprite.play(ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY);
+            this.registerWorldObject(sprite);
+            this.enchantmentTableSprites.set(tableId, { sprite, table });
+
+            table.onChange(() => {
+                const entry = this.enchantmentTableSprites.get(tableId);
+                if (!entry) return;
+                entry.sprite.setPosition(table.x, table.y + ENCHANTMENT_TABLE_VISUAL_Y_OFFSET);
+            });
+        };
+
+        state.enchantmentTables?.onAdd(addEnchantmentTable);
+        state.enchantmentTables?.forEach(addEnchantmentTable);
+
+        state.enchantmentTables?.onRemove((_table, id) => {
+            const entry = this.enchantmentTableSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            this.enchantmentTableSprites.delete(id);
+        });
+
+        const addCraftingTable = (table, id) => {
+            const tableId = id || table.id;
+            if (!tableId || this.craftingTableSprites.has(tableId)) return;
+
+            const sprite = this.add.sprite(table.x, table.y + CRAFTING_TABLE_VISUAL_Y_OFFSET, ASSETS.spritesheet.craftingTable.key, CRAFTING_TABLE_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CRAFTING_TABLE_DISPLAY_SIZE, CRAFTING_TABLE_DISPLAY_SIZE)
+                .setDepth(CRAFTING_TABLE_DEPTH);
+            this.registerWorldObject(sprite);
+            this.craftingTableSprites.set(tableId, { sprite, table });
+
+            table.onChange(() => {
+                const entry = this.craftingTableSprites.get(tableId);
+                if (!entry) return;
+                entry.sprite.setPosition(table.x, table.y + CRAFTING_TABLE_VISUAL_Y_OFFSET);
+            });
+        };
+
+        state.craftingTables?.onAdd(addCraftingTable);
+        state.craftingTables?.forEach(addCraftingTable);
+
+        state.craftingTables?.onRemove((_table, id) => {
+            const entry = this.craftingTableSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            this.craftingTableSprites.delete(id);
         });
 
         const addEnemy = (enemy, id) => {
@@ -5475,6 +5644,8 @@ export class Game extends Phaser.Scene {
             healBar?.destroy();
         });
         this.caltropSprites.forEach(({ sprite }) => sprite.destroy());
+        this.enchantmentTableSprites.forEach(({ sprite }) => sprite.destroy());
+        this.craftingTableSprites.forEach(({ sprite }) => sprite.destroy());
         this.playerBulletSprites.forEach(({ sprite }) => sprite.destroy());
         this.enemyBulletSprites.forEach(({ sprite }) => sprite.destroy());
         if (this.grassNoiseLayer) {
@@ -5552,6 +5723,8 @@ export class Game extends Phaser.Scene {
         this.woodBlockSprites.clear();
         this.campfireSprites.clear();
         this.caltropSprites.clear();
+        this.enchantmentTableSprites.clear();
+        this.craftingTableSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }
