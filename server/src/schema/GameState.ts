@@ -22,6 +22,8 @@ export class PlayerState extends Schema {
     @type("string")  attackItem: string = "wood_axe";
     @type("int32")   attackSeq: number = 0;
     @type("boolean") axeAttackHitboxActive: boolean = false;
+    @type("boolean") dashing: boolean = false;
+    @type("float32") dashCooldownProgress: number = 0;
     @type("boolean") axeWhirlwind: boolean = false;
     @type("float32") axeWhirlwindProgress: number = 0;
     @type("float32") axeWhirlwindCooldownProgress: number = 0;

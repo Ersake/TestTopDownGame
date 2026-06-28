@@ -20,6 +20,7 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const PLAYER_VISUAL_Y_OFFSET = 6;
 const PLAYER_VISUAL_MOVE_SPEED = 255;
+const PLAYER_DASH_VISUAL_MOVE_SPEED = 900;
 const PLAYER_VISUAL_SNAP_DISTANCE = 96;
 const PLAYER_BODY_DEPTH = 100;
 const PLAYER_WEAPON_DEPTH = 101;
@@ -208,6 +209,10 @@ const PLAYER_BOW_CHARGE_BAR_Y_OFFSET = PLAYER_HEALTH_BAR_Y_OFFSET + PLAYER_HEALT
 const PLAYER_BOW_CHARGE_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 1;
 const PLAYER_BOW_CHARGE_BAR_COLOR = 0xffffff;
 const PLAYER_BOW_CHARGE_BAR_ALPHA = 0.55;
+const PLAYER_DASH_COOLDOWN_BAR_Y_OFFSET = 36;
+const PLAYER_DASH_COOLDOWN_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 1;
+const PLAYER_DASH_COOLDOWN_BAR_COLOR = 0xffffff;
+const PLAYER_DASH_COOLDOWN_BAR_ALPHA = 0.38;
 const PLAYER_REVIVE_BAR_WIDTH = 58;
 const PLAYER_REVIVE_BAR_HEIGHT = 7;
 const PLAYER_REVIVE_BAR_Y_OFFSET = -38;
@@ -395,6 +400,7 @@ export class Game extends Phaser.Scene {
             this.updateLocalPlayerAnimation();
             this.updateRemotePlayerAnimations();
             this.updatePlayerHealthBars();
+            this.updatePlayerDashCooldownBars();
             this.updatePlayerNameLabels();
             return;
         }
@@ -408,6 +414,7 @@ export class Game extends Phaser.Scene {
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
         this.updatePlayerBowChargeBars();
+        this.updatePlayerDashCooldownBars();
         this.updatePlayerReviveBars();
         this.updatePlayerNameLabels();
         this.updatePlayerLevelLabels();
@@ -448,6 +455,7 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
         this.playerBowChargeBars = new Map();
+        this.playerDashCooldownBars = new Map();
         this.playerReviveBars = new Map();
         this.playerNameLabels = new Map();
         this.playerLevelLabels = new Map();
@@ -2911,6 +2919,14 @@ export class Game extends Phaser.Scene {
                 player,
             });
             this.registerWorldObject(playerBowChargeFill);
+            const playerDashCooldownFill = this.add.graphics()
+                .setDepth(PLAYER_DASH_COOLDOWN_BAR_DEPTH)
+                .setVisible(false);
+            this.playerDashCooldownBars.set(playerSessionId, {
+                fill: playerDashCooldownFill,
+                player,
+            });
+            this.registerWorldObject(playerDashCooldownFill);
             const playerReviveBackground = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH);
             const playerReviveFill = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1);
             this.playerReviveBars.set(playerSessionId, {
@@ -2945,6 +2961,8 @@ export class Game extends Phaser.Scene {
                 attackItem: player.attackItem || ITEM_WOOD_AXE,
                 lastAttackSeq: player.attackSeq || 0,
                 axeAttackHitboxActive: !!player.axeAttackHitboxActive,
+                dashing: !!player.dashing,
+                dashCooldownProgress: player.dashCooldownProgress || 0,
                 axeWhirlwind: !!player.axeWhirlwind,
                 axeWhirlwindProgress: player.axeWhirlwindProgress || 0,
                 axeWhirlwindCooldownProgress: player.axeWhirlwindCooldownProgress || 0,
@@ -3077,6 +3095,17 @@ export class Game extends Phaser.Scene {
             player.listen('axeAttackHitboxActive', (active) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeAttackHitboxActive = !!active;
+            });
+
+            player.listen('dashing', (dashing) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.dashing = !!dashing;
+            });
+
+            player.listen('dashCooldownProgress', (progress) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.dashCooldownProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                this.updatePlayerDashCooldownBar(playerSessionId);
             });
 
             player.listen('axeWhirlwind', (active) => {
@@ -3316,6 +3345,8 @@ export class Game extends Phaser.Scene {
             }
             const bowChargeBar = this.playerBowChargeBars.get(sessionId);
             if (bowChargeBar) bowChargeBar.fill.destroy();
+            const dashCooldownBar = this.playerDashCooldownBars.get(sessionId);
+            if (dashCooldownBar) dashCooldownBar.fill.destroy();
             const reviveBar = this.playerReviveBars.get(sessionId);
             if (reviveBar) {
                 reviveBar.background.destroy();
@@ -3345,6 +3376,7 @@ export class Game extends Phaser.Scene {
             this.axeWhirlwindSoundNextAt.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
             this.playerBowChargeBars.delete(sessionId);
+            this.playerDashCooldownBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
             this.playerNameLabels.delete(sessionId);
             this.playerLevelLabels.delete(sessionId);
@@ -4639,12 +4671,13 @@ export class Game extends Phaser.Scene {
 
     updatePlayerVisualPositions(deltaMs = 0) {
         const dtSec = Math.max(0, deltaMs) / 1000;
-        const maxStep = PLAYER_VISUAL_MOVE_SPEED * dtSec;
 
         this.playerSprites.forEach((sprite, sessionId) => {
             const animationState = this.playerAnimationState.get(sessionId);
             const weapon = this.playerWeaponSprites.get(sessionId);
             if (!animationState) return;
+            const visualMoveSpeed = animationState.dashing ? PLAYER_DASH_VISUAL_MOVE_SPEED : PLAYER_VISUAL_MOVE_SPEED;
+            const maxStep = visualMoveSpeed * dtSec;
 
             const targetX = Number.isFinite(animationState.visualTargetX) ? animationState.visualTargetX : sprite.x;
             const targetY = Number.isFinite(animationState.visualTargetY) ? animationState.visualTargetY : sprite.y;
@@ -5812,6 +5845,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerDashCooldownBars() {
+        this.playerDashCooldownBars.forEach((_dashBar, sessionId) => {
+            this.updatePlayerDashCooldownBar(sessionId);
+        });
+    }
+
     updatePlayerReviveBars() {
         this.playerReviveBars.forEach((_reviveBar, sessionId) => {
             this.updatePlayerReviveBar(sessionId);
@@ -6006,6 +6045,23 @@ export class Game extends Phaser.Scene {
         chargeBar.fill.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH * progress, PLAYER_HEALTH_BAR_HEIGHT);
     }
 
+    updatePlayerDashCooldownBar(sessionId) {
+        const dashBar = this.playerDashCooldownBars.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!dashBar || !sprite || !animationState) return;
+
+        const progress = Phaser.Math.Clamp(animationState.dashCooldownProgress || 0, 0, 1);
+        dashBar.fill.clear();
+        dashBar.fill.setVisible(progress > 0 && !animationState.dead);
+        if (!dashBar.fill.visible) return;
+
+        const x = sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprite.y + PLAYER_DASH_COOLDOWN_BAR_Y_OFFSET;
+        dashBar.fill.fillStyle(PLAYER_DASH_COOLDOWN_BAR_COLOR, PLAYER_DASH_COOLDOWN_BAR_ALPHA);
+        dashBar.fill.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH * progress, PLAYER_HEALTH_BAR_HEIGHT);
+    }
+
     updatePlayerReviveBar(sessionId) {
         const reviveBar = this.playerReviveBars.get(sessionId);
         const sprite = this.playerSprites.get(sessionId);
@@ -6107,6 +6163,9 @@ export class Game extends Phaser.Scene {
             fill.destroy();
         });
         this.playerBowChargeBars.forEach(({ fill }) => {
+            fill.destroy();
+        });
+        this.playerDashCooldownBars.forEach(({ fill }) => {
             fill.destroy();
         });
         this.playerReviveBars.forEach(({ background, fill }) => {
@@ -6217,6 +6276,7 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
         this.playerBowChargeBars.clear();
+        this.playerDashCooldownBars.clear();
         this.playerReviveBars.clear();
         this.playerNameLabels.clear();
         this.playerLevelLabels.clear();

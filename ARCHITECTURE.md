@@ -167,7 +167,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include wood gain, max campfires, whirlwind cooldown, and whirlwind AOE size.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include wood gain, max campfires, whirlwind cooldown, and whirlwind AOE size.
 
 ### Enemy State
 
@@ -195,7 +195,7 @@ Current server-owned systems include:
 
 - Player join/leave and room reset after game over.
 - World bounds and tree generation.
-- Player movement, facing direction, attack lockout, attack cooldown, and interaction input.
+- Player movement, facing direction, smooth dash movement with a 2-second cooldown, attack lockout, attack cooldown, and interaction input. Dash cooldown progress is synced for the under-player cooldown bar.
 - Axe left-click attacks and active axe whirlwind reduce server-authoritative player movement speed by 25%. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades can reduce the 10-second base cooldown by 1 second per rank and increase the 56px base AOE radius by 25% per rank, with server-enforced max rank 3.
 - Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites and server-enforced max ranks.
 - Tree damage, tree removal, and log spawning.
