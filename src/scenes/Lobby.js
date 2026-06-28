@@ -45,6 +45,18 @@ export class Lobby extends Phaser.Scene {
         this._nameBtn.on('pointerdown', () => this._beginNameEdit());
         this._updateNameDisplay();
 
+        const serverOptions = RoomClient.getServerOptions();
+        if (serverOptions.length > 1) {
+            this._serverBtn = this.add.text(cx, 222, '', {
+                fontFamily: 'Arial Black', fontSize: 22, color: '#66ddff',
+                stroke: '#000000', strokeThickness: 5,
+            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+            this._serverBtn.on('pointerover', () => this._serverBtn.setColor('#aeeeff'));
+            this._serverBtn.on('pointerout', () => this._serverBtn.setColor('#66ddff'));
+            this._serverBtn.on('pointerdown', () => this._toggleServerSelection());
+            this._updateServerDisplay();
+        }
+
         // ── Create Room button ───────────────────────────────────────────────
         this._createBtn = this.add.text(cx, 270, '[ CREATE ROOM ]', {
             fontFamily: 'Arial Black', fontSize: 38, color: '#00ff88',
@@ -228,6 +240,17 @@ export class Lobby extends Phaser.Scene {
 
     _updateGameMapDisplay() {
         this._gameMapBtn?.setText(`GAME MAP: ${this._selectedGameMapName()}`);
+    }
+
+    _toggleServerSelection() {
+        if (this._state !== 'idle') return;
+        RoomClient.selectNextServer();
+        this._updateServerDisplay();
+    }
+
+    _updateServerDisplay() {
+        const selectedServer = RoomClient.getSelectedServer();
+        this._serverBtn?.setText(`[ SERVER: ${selectedServer.label} ]`);
     }
 
     // ── Create Room ──────────────────────────────────────────────────────────

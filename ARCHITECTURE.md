@@ -228,7 +228,7 @@ GitHub Pages deployment is handled by `.github/workflows/deploy.yml`:
 
 1. Install root client dependencies.
 2. Build with `npm run client:build`.
-3. Pass `VITE_SERVER_URL` from repository secrets.
+3. Pass `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2` from repository secrets for the lobby server selector.
 4. Upload `docs/` as a Pages artifact.
 5. Deploy to GitHub Pages.
 
@@ -259,4 +259,4 @@ The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 - `GameState.ts` contains only synced schema data.
 - Private room maps contain server-only simulation details.
 - Client asset loading flows through `src/assets.js` and `Preloader`.
-- Production clients must use `wss://` for `VITE_SERVER_URL`.
+- Production clients must use `wss://` for `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2`; `VITE_SERVER_URL` remains a backward-compatible fallback for server 1.

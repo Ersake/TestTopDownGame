@@ -1,6 +1,22 @@
 import { Client } from "colyseus.js";
 
 const MAX_MAP_REPLACE_PAYLOAD_BYTES = 512 * 1024;
+const DEFAULT_SERVER_URL = "ws://localhost:2567";
+
+function normalizeServerUrl(url) {
+    return String(url || '').trim();
+}
+
+const SERVER_OPTIONS = [
+    {
+        label: 'SERVER 1',
+        url: normalizeServerUrl(import.meta.env.VITE_SERVER_URL_1 || import.meta.env.VITE_SERVER_URL || DEFAULT_SERVER_URL),
+    },
+    {
+        label: 'SERVER 2',
+        url: normalizeServerUrl(import.meta.env.VITE_SERVER_URL_2),
+    },
+].filter((server) => server.url);
 
 /**
  * RoomClient
@@ -20,11 +36,12 @@ class RoomClient {
     /** @type {Client | null} */
     _client = null;
 
+    _selectedServerIndex = 0;
+
     /** @private Initialise the Colyseus Client if not already done. */
     _ensureClient() {
         if (!this._client) {
-            const serverUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
-            this._client = new Client(serverUrl);
+            this._client = new Client(this.getSelectedServer().url);
         }
     }
 
@@ -81,6 +98,30 @@ class RoomClient {
      */
     async disconnect() {
         await this._leaveCurrentRoom();
+    }
+
+    getServerOptions() {
+        return SERVER_OPTIONS;
+    }
+
+    getSelectedServer() {
+        return SERVER_OPTIONS[this._selectedServerIndex] || SERVER_OPTIONS[0];
+    }
+
+    selectServer(index) {
+        if (this.room) return false;
+        const nextIndex = Math.max(0, Math.min(SERVER_OPTIONS.length - 1, index));
+        if (nextIndex !== this._selectedServerIndex) {
+            this._selectedServerIndex = nextIndex;
+            this._client = null;
+        }
+        return true;
+    }
+
+    selectNextServer() {
+        if (SERVER_OPTIONS.length <= 1) return this.getSelectedServer();
+        this.selectServer((this._selectedServerIndex + 1) % SERVER_OPTIONS.length);
+        return this.getSelectedServer();
     }
 
     /**

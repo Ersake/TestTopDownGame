@@ -36,12 +36,13 @@ jobs:
         run: npm install
 
       - name: Build client
-        # VITE_SERVER_URL must be set in repo Settings → Secrets and variables → Actions
-        # as a repository secret named VITE_SERVER_URL.
+        # VITE_SERVER_URL_1 and VITE_SERVER_URL_2 should be set in repo
+        # Settings → Secrets and variables → Actions as repository secrets.
         # Example value: wss://your-shmup-server.onrender.com
         run: npm run client:build
         env:
-          VITE_SERVER_URL: ${{ secrets.VITE_SERVER_URL }}
+          VITE_SERVER_URL_1: ${{ secrets.VITE_SERVER_URL_1 }}
+          VITE_SERVER_URL_2: ${{ secrets.VITE_SERVER_URL_2 }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
