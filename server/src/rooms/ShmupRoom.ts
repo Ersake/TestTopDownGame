@@ -486,6 +486,8 @@ interface PendingEnemySpawn {
 }
 interface TickMetrics {
     phases: Record<string, number>;
+    playerSubphases: Record<string, number>;
+    counters: Record<string, number>;
     enemySubphases: Record<string, number>;
     enemyCounters: Record<string, number>;
     spawnedEnemies: number;
@@ -502,6 +504,18 @@ interface TickMetrics {
         y: number;
         pathLength: number;
         targetId: string | null;
+    } | null;
+    slowestPlayer: {
+        id: string;
+        ms: number;
+        x: number;
+        y: number;
+        alive: boolean;
+        dead: boolean;
+        dashing: boolean;
+        bowCharging: boolean;
+        axeWhirlwind: boolean;
+        input: string;
     } | null;
 }
 
@@ -569,6 +583,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private solidSegmentCache = new Map<string, boolean>();
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
+    private recordingEnemyMetrics = false;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -1534,34 +1549,43 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private collidesWithMapTiles(playerX: number, playerY: number): boolean {
-        const footX = playerX;
-        const footY = playerY + PLAYER_TREE_Y_OFFSET;
-        const startCol = Math.floor((footX - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
-        const endCol = Math.floor((footX + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
-        const startRow = Math.floor((footY - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
-        const endRow = Math.floor((footY + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
-        for (let row = startRow; row <= endRow; row++) {
-            for (let col = startCol; col <= endCol; col++) {
-                for (const layer of [1, 2] as const) {
-                    const value = this.getMapTileValue(col, row, layer);
-                    if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
-                    const collider = this.getMapTileCollider(col, row, value - 1);
-                    if (circleOverlapsAabb(
-                        footX,
-                        footY,
-                        PLAYER_TREE_FOOT_RADIUS,
-                        collider.x,
-                        collider.y,
-                        collider.halfWidth,
-                        collider.halfHeight,
-                    )) return true;
+        return this.measurePlayerSubphase("playerMapCollision", () => {
+            this.incrementTickCounter("playerMapCollisionChecks");
+            const footX = playerX;
+            const footY = playerY + PLAYER_TREE_Y_OFFSET;
+            const startCol = Math.floor((footX - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+            const endCol = Math.floor((footX + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+            const startRow = Math.floor((footY - PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+            const endRow = Math.floor((footY + PLAYER_TREE_FOOT_RADIUS) / MAP_TILE_SIZE);
+            for (let row = startRow; row <= endRow; row++) {
+                for (let col = startCol; col <= endCol; col++) {
+                    for (const layer of [1, 2] as const) {
+                        this.incrementTickCounter("playerMapTileChecks");
+                        const value = this.getMapTileValue(col, row, layer);
+                        if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
+                        this.incrementTickCounter("playerMapSolidTileChecks");
+                        const collider = this.getMapTileCollider(col, row, value - 1);
+                        if (circleOverlapsAabb(
+                            footX,
+                            footY,
+                            PLAYER_TREE_FOOT_RADIUS,
+                            collider.x,
+                            collider.y,
+                            collider.halfWidth,
+                            collider.halfHeight,
+                        )) {
+                            this.incrementTickCounter("playerMapSolidHits");
+                            return true;
+                        }
+                    }
                 }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     private mapSolidOverlapsAabb(x: number, y: number, halfWidth: number, halfHeight: number): boolean {
+        this.incrementTickCounter("solidAabbChecks");
         this.incrementEnemyCounter("solidAabbChecks");
         const startCol = Math.floor((x - halfWidth) / MAP_TILE_SIZE);
         const endCol = Math.floor((x + halfWidth) / MAP_TILE_SIZE);
@@ -1570,9 +1594,11 @@ export class ShmupRoom extends Room<GameRoomState> {
         for (let row = startRow; row <= endRow; row++) {
             for (let col = startCol; col <= endCol; col++) {
                 for (const layer of [1, 2] as const) {
+                    this.incrementTickCounter("solidTileChecks");
                     this.incrementEnemyCounter("solidTileChecks");
                     const value = this.getMapTileValue(col, row, layer);
                     if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
+                    this.incrementTickCounter("solidTileColliderChecks");
                     const collider = this.getMapTileCollider(col, row, value - 1);
                     if (overlaps(
                         x,
@@ -1583,7 +1609,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                         collider.y,
                         collider.halfWidth,
                         collider.halfHeight,
-                    )) return true;
+                    )) {
+                        this.incrementTickCounter("solidAabbHits");
+                        return true;
+                    }
                 }
             }
         }
@@ -3308,28 +3337,35 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        this.measureTickPhase(tickMetrics, "elapsed", () => this.tickElapsedTime(dt));
-        this.measureTickPhase(tickMetrics, "players", () => this.tickPlayers(dtSec, dt));
-        this.measureTickPhase(tickMetrics, "axeAttacks", () => this.tickActiveAxeAttacks(dt));
-        this.measureTickPhase(tickMetrics, "revives", () => this.tickRevives(dt));
-        this.measureTickPhase(tickMetrics, "playerBullets", () => this.tickPlayerBullets(dtSec));
-        this.measureTickPhase(tickMetrics, "waves", () => this.tickEnemyWaves(tickMetrics));
         this.activeTickMetrics = tickMetrics;
         try {
-            this.measureTickPhase(tickMetrics, "enemyAI", () => this.tickEnemies(dtSec, dt));
+            this.measureTickPhase(tickMetrics, "elapsed", () => this.tickElapsedTime(dt));
+            this.measureTickPhase(tickMetrics, "players", () => this.tickPlayers(dtSec, dt));
+            this.measureTickPhase(tickMetrics, "axeAttacks", () => this.tickActiveAxeAttacks(dt));
+            this.measureTickPhase(tickMetrics, "revives", () => this.tickRevives(dt));
+            this.measureTickPhase(tickMetrics, "playerBullets", () => this.tickPlayerBullets(dtSec));
+            this.measureTickPhase(tickMetrics, "waves", () => this.tickEnemyWaves(tickMetrics));
+            this.recordingEnemyMetrics = true;
+            try {
+                this.measureTickPhase(tickMetrics, "enemyAI", () => this.tickEnemies(dtSec, dt));
+            } finally {
+                this.recordingEnemyMetrics = false;
+            }
+            this.measureTickPhase(tickMetrics, "enemySeparation", () => this.separateEnemyFeet(tickMetrics));
+            this.measureTickPhase(tickMetrics, "enemyBullets", () => this.tickEnemyBullets(dtSec));
+            this.measureTickPhase(tickMetrics, "collisions", () => this.tickCollisions());
+            this.measureTickPhase(tickMetrics, "campfires", () => this.tickCampfires(dt));
         } finally {
             this.activeTickMetrics = null;
         }
-        this.measureTickPhase(tickMetrics, "enemySeparation", () => this.separateEnemyFeet(tickMetrics));
-        this.measureTickPhase(tickMetrics, "enemyBullets", () => this.tickEnemyBullets(dtSec));
-        this.measureTickPhase(tickMetrics, "collisions", () => this.tickCollisions());
-        this.measureTickPhase(tickMetrics, "campfires", () => this.tickCampfires(dt));
         this.reportEnemySimulationStats(tickStartedAt, tickMetrics);
     }
 
     private createTickMetrics(): TickMetrics {
         return {
             phases: {},
+            playerSubphases: {},
+            counters: {},
             enemySubphases: {},
             enemyCounters: {},
             spawnedEnemies: 0,
@@ -3338,6 +3374,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             separationChecks: 0,
             separationResolutions: 0,
             slowestEnemy: null,
+            slowestPlayer: null,
         };
     }
 
@@ -3362,10 +3399,54 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
-    private incrementEnemyCounter(label: string, amount = 1): void {
+    private measurePlayerSubphase<T>(label: string, run: () => T): T {
+        const metrics = this.activeTickMetrics;
+        if (!metrics) return run();
+
+        const startedAt = performance.now();
+        try {
+            return run();
+        } finally {
+            metrics.playerSubphases[label] = (metrics.playerSubphases[label] || 0) + (performance.now() - startedAt);
+        }
+    }
+
+    private incrementTickCounter(label: string, amount = 1): void {
         const metrics = this.activeTickMetrics;
         if (!metrics) return;
+        metrics.counters[label] = (metrics.counters[label] || 0) + amount;
+    }
+
+    private incrementEnemyCounter(label: string, amount = 1): void {
+        const metrics = this.activeTickMetrics;
+        if (!metrics || !this.recordingEnemyMetrics) return;
         metrics.enemyCounters[label] = (metrics.enemyCounters[label] || 0) + amount;
+    }
+
+    private recordPlayerTickDuration(id: string, player: PlayerState, sp: ServerPlayer, elapsedMs: number): void {
+        const metrics = this.activeTickMetrics;
+        if (!metrics || (metrics.slowestPlayer && elapsedMs <= metrics.slowestPlayer.ms)) return;
+
+        const input = [
+            sp.input.left ? "L" : "",
+            sp.input.right ? "R" : "",
+            sp.input.up ? "U" : "",
+            sp.input.down ? "D" : "",
+            sp.input.fire ? "F" : "",
+            sp.input.interact ? "I" : "",
+        ].join("") || "none";
+        metrics.slowestPlayer = {
+            id,
+            ms: elapsedMs,
+            x: player.x,
+            y: player.y,
+            alive: sp.alive,
+            dead: player.isDead,
+            dashing: sp.dashMs > 0,
+            bowCharging: sp.bowCharging,
+            axeWhirlwind: sp.axeWhirlwind,
+            input,
+        };
     }
 
     private recordEnemyTickDuration(id: string, enemy: EnemyState, se: ServerEnemy, elapsedMs: number): void {
@@ -3506,118 +3587,149 @@ export class ShmupRoom extends Room<GameRoomState> {
     // ─── Player movement & firing ─────────────────────────────────────────────
     private tickPlayers(dtSec: number, dtMs: number) {
         this.state.players.forEach((player, sid) => {
+            this.incrementTickCounter("playerLoops");
+            const playerStartedAt = performance.now();
             const sp = this.serverPlayers.get(sid);
-            if (!sp || !sp.alive) return;
-            const { left, right, up, down, fire } = sp.input;
-            const isAttackLocked = sp.attackLockMs > 0;
-            sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
-            sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
-            sp.axeAttackSlowMs = Math.max(0, sp.axeAttackSlowMs - dtMs);
-            sp.dashCooldownMs = Math.max(0, sp.dashCooldownMs - dtMs);
-            player.dashCooldownProgress = sp.dashCooldownMs > 0
-                ? clamp(sp.dashCooldownMs / PLAYER_DASH_COOLDOWN_MS, 0, 1)
-                : 0;
-            this.updateAxeWhirlwindCooldown(player, sp, dtMs);
+            try {
+                if (!sp || !sp.alive) return;
+                const { left, right, up, down, fire } = sp.input;
+                const isAttackLocked = sp.attackLockMs > 0;
+                this.measurePlayerSubphase("playerCooldowns", () => {
+                    sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
+                    sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
+                    sp.axeAttackSlowMs = Math.max(0, sp.axeAttackSlowMs - dtMs);
+                    sp.dashCooldownMs = Math.max(0, sp.dashCooldownMs - dtMs);
+                    player.dashCooldownProgress = sp.dashCooldownMs > 0
+                        ? clamp(sp.dashCooldownMs / PLAYER_DASH_COOLDOWN_MS, 0, 1)
+                        : 0;
+                    this.updateAxeWhirlwindCooldown(player, sp, dtMs);
+                });
 
-            const inputX = Number(right) - Number(left);
-            const inputY = Number(down) - Number(up);
-            const inputLength = Math.hypot(inputX, inputY);
+                const inputX = Number(right) - Number(left);
+                const inputY = Number(down) - Number(up);
+                const inputLength = Math.hypot(inputX, inputY);
 
-            if (sp.bowCharging) {
-                if (player.activeItem !== ITEM_WOOD_BOW || this.didPressMovementAfterBowCharge(sp, left, right, up, down)) {
-                    this.clearBowCharge(player, sp);
-                } else {
-                    const chargeMs = this.getPlayerBowChargeMs(player);
-                    sp.bowChargeMs = Math.min(chargeMs, sp.bowChargeMs + dtMs);
-                    player.bowChargeProgress = clamp(sp.bowChargeMs / chargeMs, 0, 1);
+                if (sp.bowCharging) {
+                    const bowChargeStillActive = this.measurePlayerSubphase("playerBowCharge", () => {
+                        if (player.activeItem !== ITEM_WOOD_BOW || this.didPressMovementAfterBowCharge(sp, left, right, up, down)) {
+                            this.clearBowCharge(player, sp);
+                            return false;
+                        }
+                        const chargeMs = this.getPlayerBowChargeMs(player);
+                        sp.bowChargeMs = Math.min(chargeMs, sp.bowChargeMs + dtMs);
+                        player.bowChargeProgress = clamp(sp.bowChargeMs / chargeMs, 0, 1);
+                        sp.vx = 0;
+                        sp.vy = 0;
+                        player.x = sp.bowChargeX;
+                        player.y = sp.bowChargeY;
+                        if (sp.bowChargeMs >= chargeMs) this.fireBowCharge(sid);
+                        return true;
+                    });
+                    if (bowChargeStillActive) return;
+                }
+
+                if (sp.axeWhirlwind && (player.activeItem !== ITEM_WOOD_AXE || player.isDead || this.state.gameOver)) {
+                    this.setAxeWhirlwind(sid, false);
+                }
+
+                if (sp.dashMs > 0) {
+                    this.measurePlayerSubphase("playerDashMove", () => {
+                        const dashStepMs = Math.min(dtMs, sp.dashMs);
+                        const dashDistance = PLAYER_DASH_DISTANCE * (dashStepMs / PLAYER_DASH_DURATION_MS);
+                        const nextX = player.x + sp.dashDirX * dashDistance;
+                        const nextY = player.y + sp.dashDirY * dashDistance;
+                        const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
+                        sp.vx = dashStepMs > 0 ? ((resolved.x - player.x) / (dashStepMs / 1000)) : 0;
+                        sp.vy = dashStepMs > 0 ? ((resolved.y - player.y) / (dashStepMs / 1000)) : 0;
+                        const blocked = (resolved.x === player.x && nextX !== player.x) || (resolved.y === player.y && nextY !== player.y);
+                        if (blocked) this.incrementTickCounter("playerDashBlocked");
+                        player.x = resolved.x;
+                        player.y = resolved.y;
+                        sp.dashMs = blocked ? 0 : Math.max(0, sp.dashMs - dashStepMs);
+                        if (sp.dashMs <= 0) player.dashing = false;
+                    });
+                } else if (isAttackLocked) {
                     sp.vx = 0;
                     sp.vy = 0;
-                    player.x = sp.bowChargeX;
-                    player.y = sp.bowChargeY;
-                    if (sp.bowChargeMs >= chargeMs) this.fireBowCharge(sid);
-                    return;
+                    player.x = sp.attackLockX;
+                    player.y = sp.attackLockY;
+                } else {
+                    this.measurePlayerSubphase("playerNormalMove", () => {
+                        const facingDirection = directionFromInput(inputX, inputY);
+                        if (facingDirection) player.facingDirection = facingDirection;
+
+                        const axeMovementSlowed = sp.axeWhirlwind || sp.axeAttackSlowMs > 0;
+                        const moveSpeed = PLAYER_MAX_VEL * (axeMovementSlowed ? AXE_MOVEMENT_SPEED_MULTIPLIER : 1);
+                        sp.vx = inputLength > 0 ? (inputX / inputLength) * moveSpeed : 0;
+                        sp.vy = inputLength > 0 ? (inputY / inputLength) * moveSpeed : 0;
+
+                        const nextX = player.x + sp.vx * dtSec;
+                        const nextY = player.y + sp.vy * dtSec;
+                        const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
+                        if (resolved.x === player.x && nextX !== player.x) {
+                            sp.vx = 0;
+                            this.incrementTickCounter("playerMoveBlockedX");
+                        }
+                        if (resolved.y === player.y && nextY !== player.y) {
+                            sp.vy = 0;
+                            this.incrementTickCounter("playerMoveBlockedY");
+                        }
+                        player.x = resolved.x;
+                        player.y = resolved.y;
+                    });
                 }
-            }
 
-            if (sp.axeWhirlwind && (player.activeItem !== ITEM_WOOD_AXE || player.isDead || this.state.gameOver)) {
-                this.setAxeWhirlwind(sid, false);
-            }
-
-            if (sp.dashMs > 0) {
-                const dashStepMs = Math.min(dtMs, sp.dashMs);
-                const dashDistance = PLAYER_DASH_DISTANCE * (dashStepMs / PLAYER_DASH_DURATION_MS);
-                const nextX = player.x + sp.dashDirX * dashDistance;
-                const nextY = player.y + sp.dashDirY * dashDistance;
-                const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
-                sp.vx = dashStepMs > 0 ? ((resolved.x - player.x) / (dashStepMs / 1000)) : 0;
-                sp.vy = dashStepMs > 0 ? ((resolved.y - player.y) / (dashStepMs / 1000)) : 0;
-                const blocked = (resolved.x === player.x && nextX !== player.x) || (resolved.y === player.y && nextY !== player.y);
-                player.x = resolved.x;
-                player.y = resolved.y;
-                sp.dashMs = blocked ? 0 : Math.max(0, sp.dashMs - dashStepMs);
-                if (sp.dashMs <= 0) player.dashing = false;
-            } else if (isAttackLocked) {
-                sp.vx = 0;
-                sp.vy = 0;
-                player.x = sp.attackLockX;
-                player.y = sp.attackLockY;
-            } else {
-                const facingDirection = directionFromInput(inputX, inputY);
-                if (facingDirection) player.facingDirection = facingDirection;
-
-                const axeMovementSlowed = sp.axeWhirlwind || sp.axeAttackSlowMs > 0;
-                const moveSpeed = PLAYER_MAX_VEL * (axeMovementSlowed ? AXE_MOVEMENT_SPEED_MULTIPLIER : 1);
-                sp.vx = inputLength > 0 ? (inputX / inputLength) * moveSpeed : 0;
-                sp.vy = inputLength > 0 ? (inputY / inputLength) * moveSpeed : 0;
-
-                const nextX = player.x + sp.vx * dtSec;
-                const nextY = player.y + sp.vy * dtSec;
-                const resolved = this.movePlayerWithWorldColliders(player, nextX, nextY);
-                if (resolved.x === player.x && nextX !== player.x) sp.vx = 0;
-                if (resolved.y === player.y && nextY !== player.y) sp.vy = 0;
-                player.x = resolved.x;
-                player.y = resolved.y;
-            }
-
-            if (sp.axeWhirlwind) {
-                sp.axeWhirlwindElapsedMs += dtMs;
-                player.axeWhirlwindProgress = clamp(1 - (sp.axeWhirlwindElapsedMs / AXE_WHIRLWIND_MAX_DURATION_MS), 0, 1);
-                sp.axeWhirlwindTickMs -= dtMs;
-                while (sp.axeWhirlwind && sp.axeWhirlwindTickMs <= 0) {
-                    this.applyAxeWhirlwindImpact(sid);
-                    sp.axeWhirlwindTickMs += AXE_WHIRLWIND_TICK_MS;
+                if (sp.axeWhirlwind) {
+                    this.measurePlayerSubphase("playerAxeWhirlwind", () => {
+                        sp.axeWhirlwindElapsedMs += dtMs;
+                        player.axeWhirlwindProgress = clamp(1 - (sp.axeWhirlwindElapsedMs / AXE_WHIRLWIND_MAX_DURATION_MS), 0, 1);
+                        sp.axeWhirlwindTickMs -= dtMs;
+                        while (sp.axeWhirlwind && sp.axeWhirlwindTickMs <= 0) {
+                            this.applyAxeWhirlwindImpact(sid);
+                            sp.axeWhirlwindTickMs += AXE_WHIRLWIND_TICK_MS;
+                        }
+                        if (sp.axeWhirlwind && sp.axeWhirlwindElapsedMs >= AXE_WHIRLWIND_MAX_DURATION_MS) {
+                            this.endAxeWhirlwind(player, sp, true);
+                        }
+                    });
                 }
-                if (sp.axeWhirlwind && sp.axeWhirlwindElapsedMs >= AXE_WHIRLWIND_MAX_DURATION_MS) {
-                    this.endAxeWhirlwind(player, sp, true);
-                }
-            }
 
-            sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
-            if (!this.isMapEditor() && fire && sp.fireCounter === 0) {
-                sp.fireCounter = FIRE_RATE_MS;
-                this.spawnPlayerBullet(player.x, player.y - PLAYER_BULLET_Y_OFFSET, 1, sid);
+                this.measurePlayerSubphase("playerFire", () => {
+                    sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
+                    if (!this.isMapEditor() && fire && sp.fireCounter === 0) {
+                        sp.fireCounter = FIRE_RATE_MS;
+                        this.spawnPlayerBullet(player.x, player.y - PLAYER_BULLET_Y_OFFSET, 1, sid);
+                    }
+                });
+            } finally {
+                if (sp) this.recordPlayerTickDuration(sid, player, sp, performance.now() - playerStartedAt);
             }
         });
     }
 
     private collidesWithTestTreeTrunk(playerX: number, playerY: number): boolean {
+        this.incrementTickCounter("playerTreeCollisionChecks");
         let collides = false;
         this.state.trees.forEach((tree) => {
             if (collides) return;
+            this.incrementTickCounter("playerTreeObjectChecks");
             const hitbox = this.getTreeHitbox(tree);
             const dx = playerX - hitbox.x;
             const dy = (playerY + PLAYER_TREE_Y_OFFSET) - hitbox.y;
             const radius = PLAYER_TREE_FOOT_RADIUS + hitbox.radius;
             collides = dx * dx + dy * dy < radius * radius;
+            if (collides) this.incrementTickCounter("playerTreeCollisionHits");
         });
 
         return collides;
     }
 
     private collidesWithLayer3TableFoot(x: number, y: number, radius: number): boolean {
+        this.incrementTickCounter("tableCollisionChecks");
         let collides = false;
         const testTable = (table: EnchantmentTableState | CraftingTableState) => {
             if (collides) return;
+            this.incrementTickCounter("tableObjectChecks");
             collides = circleOverlapsAabb(
                 x,
                 y,
@@ -3627,6 +3739,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 LAYER3_ROW_OBJECT_HALF_WIDTH,
                 LAYER3_ROW_OBJECT_HALF_HEIGHT,
             );
+            if (collides) this.incrementTickCounter("tableCollisionHits");
         };
         this.state.enchantmentTables.forEach(testTable);
         this.state.craftingTables.forEach(testTable);
@@ -3641,6 +3754,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private collidesWithPlayerWorldColliders(playerX: number, playerY: number): boolean {
+        this.incrementTickCounter("playerWorldCollisionChecks");
         const footX = playerX;
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
         return this.collidesWithTestTreeTrunk(playerX, playerY)
@@ -3649,27 +3763,35 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private movePlayerWithWorldColliders(player: PlayerState, nextX: number, nextY: number): { x: number; y: number } {
-        const dx = nextX - player.x;
-        const dy = nextY - player.y;
-        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / MAX_PLAYER_MOVE_STEP));
-        const stepX = dx / steps;
-        const stepY = dy / steps;
-        let resolvedX = player.x;
-        let resolvedY = player.y;
+        return this.measurePlayerSubphase("playerMovementCollision", () => {
+            this.incrementTickCounter("playerMoveCalls");
+            const dx = nextX - player.x;
+            const dy = nextY - player.y;
+            const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / MAX_PLAYER_MOVE_STEP));
+            this.incrementTickCounter("playerMoveSteps", steps);
+            const stepX = dx / steps;
+            const stepY = dy / steps;
+            let resolvedX = player.x;
+            let resolvedY = player.y;
 
-        for (let i = 0; i < steps; i++) {
-            const candidateX = clamp(resolvedX + stepX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
-            if (!this.collidesWithPlayerWorldColliders(candidateX, resolvedY)) {
-                resolvedX = candidateX;
+            for (let i = 0; i < steps; i++) {
+                const candidateX = clamp(resolvedX + stepX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
+                if (!this.collidesWithPlayerWorldColliders(candidateX, resolvedY)) {
+                    resolvedX = candidateX;
+                } else {
+                    this.incrementTickCounter("playerMoveStepBlockedX");
+                }
+
+                const candidateY = clamp(resolvedY + stepY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+                if (!this.collidesWithPlayerWorldColliders(resolvedX, candidateY)) {
+                    resolvedY = candidateY;
+                } else {
+                    this.incrementTickCounter("playerMoveStepBlockedY");
+                }
             }
 
-            const candidateY = clamp(resolvedY + stepY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
-            if (!this.collidesWithPlayerWorldColliders(resolvedX, candidateY)) {
-                resolvedY = candidateY;
-            }
-        }
-
-        return { x: resolvedX, y: resolvedY };
+            return { x: resolvedX, y: resolvedY };
+        });
     }
 
     // ─── Player bullets ───────────────────────────────────────────────────────
@@ -3888,11 +4010,28 @@ export class ShmupRoom extends Room<GameRoomState> {
             .sort(([, a], [, b]) => b - a)
             .map(([label, ms]) => `${label}=${ms.toFixed(1)}ms`)
             .join(", ");
+        const playerSubphaseText = Object.entries(metrics.playerSubphases)
+            .filter(([, ms]) => ms >= TICK_PHASE_LOG_MIN_MS)
+            .sort(([, a], [, b]) => b - a)
+            .map(([label, ms]) => `${label}=${ms.toFixed(1)}ms`)
+            .join(", ");
+        const counterText = Object.entries(metrics.counters)
+            .filter(([, count]) => count > 0)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([label, count]) => `${label}=${count}`)
+            .join(", ");
         const enemyCounterText = Object.entries(metrics.enemyCounters)
             .filter(([, count]) => count > 0)
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([label, count]) => `${label}=${count}`)
             .join(", ");
+        const slowestPlayer = metrics.slowestPlayer
+            ? `slowPlayer=[id=${metrics.slowestPlayer.id}, ms=${metrics.slowestPlayer.ms.toFixed(1)}, `
+                + `alive=${metrics.slowestPlayer.alive}, dead=${metrics.slowestPlayer.dead}, `
+                + `dash=${metrics.slowestPlayer.dashing}, bow=${metrics.slowestPlayer.bowCharging}, `
+                + `axeWhirl=${metrics.slowestPlayer.axeWhirlwind}, input=${metrics.slowestPlayer.input}, `
+                + `pos=${metrics.slowestPlayer.x.toFixed(0)}:${metrics.slowestPlayer.y.toFixed(0)}]`
+            : "slowPlayer=none";
         const slowestEnemy = metrics.slowestEnemy
             ? `slowEnemy=[id=${metrics.slowestEnemy.id}, type=${metrics.slowestEnemy.enemyType}, mode=${metrics.slowestEnemy.mode}, `
                 + `ms=${metrics.slowestEnemy.ms.toFixed(1)}, path=${metrics.slowestEnemy.pathLength}, `
@@ -3908,8 +4047,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             + `spawned=${metrics.spawnedEnemies}, `
             + `scheduledWave=${metrics.scheduledWaveIndex ?? "none"}, scheduledEnemies=${metrics.scheduledEnemyCount}, `
             + `separationChecks=${metrics.separationChecks}, separationResolutions=${metrics.separationResolutions}, `
-            + `phases=[${phaseText || "none"}], enemyDetails=[${enemySubphaseText || "none"}], `
-            + `enemyOps=[${enemyCounterText || "none"}], ${slowestEnemy}`,
+            + `phases=[${phaseText || "none"}], playerDetails=[${playerSubphaseText || "none"}], `
+            + `enemyDetails=[${enemySubphaseText || "none"}], ops=[${counterText || "none"}], `
+            + `enemyOps=[${enemyCounterText || "none"}], ${slowestPlayer}, ${slowestEnemy}`,
         );
     }
 
