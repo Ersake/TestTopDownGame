@@ -5002,10 +5002,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private findNearestAlivePlayer(x: number, y: number): EnemyTarget | null {
         return this.measureEnemySubphase("targeting", () => {
             this.incrementEnemyCounter("targetSearches");
-            let nearest: EnemyTarget | null = null;
-            let nearestReachable: EnemyTarget | null = null;
-            const startCell = this.getNearestWalkableBuildCell(this.worldToBuildCell(x, y), NAV_TARGET_SEARCH_RADIUS);
-            const startKey = startCell ? this.buildCellKey(startCell.col, startCell.row) : null;
+            const aliveTargets: EnemyTarget[] = [];
 
             this.state.players.forEach((player, id) => {
                 this.incrementEnemyCounter("targetPlayerChecks");
@@ -5014,21 +5011,36 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 const dx = player.x - x;
                 const dy = player.y - y;
-                const distanceSq = dx * dx + dy * dy;
-                let pathCost: number | null = null;
+                aliveTargets.push({
+                    id,
+                    player,
+                    distanceSq: dx * dx + dy * dy,
+                    pathCost: null,
+                });
+            });
+
+            if (aliveTargets.length <= 1) {
+                return aliveTargets[0] || null;
+            }
+
+            let nearest: EnemyTarget | null = null;
+            let nearestReachable: EnemyTarget | null = null;
+            const startCell = this.getNearestWalkableBuildCell(this.worldToBuildCell(x, y), NAV_TARGET_SEARCH_RADIUS);
+            const startKey = startCell ? this.buildCellKey(startCell.col, startCell.row) : null;
+
+            aliveTargets.forEach((target) => {
                 if (startKey) {
-                    const flow = this.getNavFlowFieldForPlayer(player);
-                    pathCost = flow?.costs.get(startKey) ?? null;
+                    const flow = this.getNavFlowFieldForPlayer(target.player);
+                    target.pathCost = flow?.costs.get(startKey) ?? null;
                 }
 
-                const target: EnemyTarget = { id, player, distanceSq, pathCost };
-                if (!nearest || distanceSq < nearest.distanceSq) {
+                if (!nearest || target.distanceSq < nearest.distanceSq) {
                     nearest = target;
                 }
-                if (pathCost !== null
+                if (target.pathCost !== null
                     && (!nearestReachable
-                        || pathCost < (nearestReachable.pathCost ?? Number.POSITIVE_INFINITY)
-                        || (pathCost === nearestReachable.pathCost && distanceSq < nearestReachable.distanceSq))) {
+                        || target.pathCost < (nearestReachable.pathCost ?? Number.POSITIVE_INFINITY)
+                        || (target.pathCost === nearestReachable.pathCost && target.distanceSq < nearestReachable.distanceSq))) {
                     nearestReachable = target;
                 }
             });
