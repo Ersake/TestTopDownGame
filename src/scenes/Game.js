@@ -94,8 +94,8 @@ const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil((MAP_CHUNK_CELL_COUNT * 2) / 3) * 4;
 const MAP_FRAME_COUNT = 32 * 32;
 const MAP_MAX_FILLED_CELLS = 50000;
-const CASTLE_PARTIAL_SUPPORT_FRAMES = new Set([35, 36, 37, 67]);
-const CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES = new Set([68, 69]);
+const CASTLE_TOP_PARTIAL_SUPPORT_FRAMES = new Set([35, 36, 37]);
+const CASTLE_FULL_HEIGHT_PARTIAL_SUPPORT_FRAMES = new Set([67, 68, 69]);
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
@@ -2324,8 +2324,8 @@ export class Game extends Phaser.Scene {
     }
 
     getMapTileCollider(col, row, frame) {
-        const topHalfCollider = CASTLE_PARTIAL_SUPPORT_FRAMES.has(frame);
-        const narrowCollider = topHalfCollider || CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES.has(frame);
+        const topHalfCollider = CASTLE_TOP_PARTIAL_SUPPORT_FRAMES.has(frame);
+        const narrowCollider = topHalfCollider || CASTLE_FULL_HEIGHT_PARTIAL_SUPPORT_FRAMES.has(frame);
         return {
             x: col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
             y: row * MAP_TILE_SIZE + (topHalfCollider ? MAP_TILE_SIZE * 0.25 : MAP_TILE_SIZE * 0.5),
