@@ -169,9 +169,6 @@ const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
 const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
-const ENEMY_PATH_WAYPOINT_RADIUS = 12;
-const NAV_DIAGONAL_COST = Math.SQRT2;
-const NAV_TARGET_SEARCH_RADIUS = 6;
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
@@ -409,17 +406,6 @@ interface EnemyTarget {
     id: string;
     player: PlayerState;
     distanceSq: number;
-    pathCost: number | null;
-}
-interface NavFlowField {
-    topologyVersion: number;
-    targetKey: string;
-    targetCell: PathCell;
-    costs: Map<string, number>;
-    next: Map<string, PathCell>;
-}
-interface NavEdge extends PathCell {
-    cost: number;
 }
 interface ServerEnemy {
     mode: EnemyMode;
@@ -428,9 +414,7 @@ interface ServerEnemy {
     darkKnightTargetKind: DarkKnightTargetKind;
     darkKnightMarkX: number;
     darkKnightMarkY: number;
-    pathTargetCell: PathCell | null;
     path: PathCell[];
-    pathTopologyVersion: number;
     caltropsSlowMs: number;
     caltropsCheckMs: number;
 }
@@ -531,58 +515,6 @@ function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
 }
 
-class MinHeap<T> {
-    private items: T[] = [];
-
-    constructor(private readonly compare: (a: T, b: T) => number) {}
-
-    get length(): number {
-        return this.items.length;
-    }
-
-    push(item: T): void {
-        this.items.push(item);
-        this.bubbleUp(this.items.length - 1);
-    }
-
-    pop(): T | undefined {
-        if (this.items.length === 0) return undefined;
-        const first = this.items[0];
-        const last = this.items.pop()!;
-        if (this.items.length > 0) {
-            this.items[0] = last;
-            this.bubbleDown(0);
-        }
-        return first;
-    }
-
-    private bubbleUp(index: number): void {
-        while (index > 0) {
-            const parent = Math.floor((index - 1) / 2);
-            if (this.compare(this.items[index], this.items[parent]) >= 0) break;
-            [this.items[index], this.items[parent]] = [this.items[parent], this.items[index]];
-            index = parent;
-        }
-    }
-
-    private bubbleDown(index: number): void {
-        while (true) {
-            const left = index * 2 + 1;
-            const right = left + 1;
-            let smallest = index;
-            if (left < this.items.length && this.compare(this.items[left], this.items[smallest]) < 0) {
-                smallest = left;
-            }
-            if (right < this.items.length && this.compare(this.items[right], this.items[smallest]) < 0) {
-                smallest = right;
-            }
-            if (smallest === index) break;
-            [this.items[index], this.items[smallest]] = [this.items[smallest], this.items[index]];
-            index = smallest;
-        }
-    }
-}
-
 function sanitizeDisplayName(value: unknown): string {
     const name = String(value ?? "")
         .toUpperCase()
@@ -633,8 +565,6 @@ export class ShmupRoom extends Room<GameRoomState> {
     private mapTileCount = 0;
     private caltropsByBuildCell = new Map<string, CaltropsPoint[]>();
     private buildPathBlockedCells = new Set<string>();
-    private navEdgesByCell = new Map<string, NavEdge[]>();
-    private navFlowFields = new Map<string, NavFlowField>();
     private mapTopologyVersion = 0;
     private solidSegmentCache = new Map<string, boolean>();
     private readonly mapStorage = new MapStorage();
@@ -1031,25 +961,20 @@ export class ShmupRoom extends Room<GameRoomState> {
     private rebuildMapDerivedCaches(): void {
         this.rebuildCaltropsIndex();
         this.rebuildBuildPathBlockedCells();
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
     }
 
     private invalidateNavigationCaches(): void {
         this.mapTopologyVersion++;
         this.solidSegmentCache.clear();
-        this.navFlowFields.clear();
         this.serverEnemies.forEach((se) => {
             se.path = [];
-            se.pathTargetCell = null;
-            se.pathTopologyVersion = this.mapTopologyVersion;
         });
     }
 
     private updateMapCellDerivedCaches(col: number, row: number): void {
         this.rebuildCaltropsIndex();
         this.refreshBuildPathBlockedCellsNear(col, row);
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
     }
 
@@ -1096,22 +1021,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             for (let col = 0; col < columns; col++) {
                 if (this.computeBuildPathCellBlocked(col, row)) {
                     this.buildPathBlockedCells.add(this.buildCellKey(col, row));
-                }
-            }
-        }
-    }
-
-    private rebuildNavEdgesByCell(): void {
-        this.navEdgesByCell.clear();
-        this.solidSegmentCache.clear();
-        const columns = this.buildPathColumnCount();
-        const rows = this.buildPathRowCount();
-        for (let row = 0; row < rows; row++) {
-            for (let col = 0; col < columns; col++) {
-                if (this.isBuildPathCellBlocked(col, row)) continue;
-                const edges = this.computeNavEdgesForCell(col, row);
-                if (edges.length > 0) {
-                    this.navEdgesByCell.set(this.buildCellKey(col, row), edges);
                 }
             }
         }
@@ -1195,7 +1104,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const table = this.createEnchantmentTableState(cell.col, cell.row);
         this.state.enchantmentTables.set(table.id, table);
         this.rebuildBuildPathBlockedCells();
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
     }
 
@@ -1206,7 +1114,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const directId = this.getEnchantmentTableIdForCell(cell.col, cell.row);
         if (this.state.enchantmentTables.delete(directId)) {
             this.rebuildBuildPathBlockedCells();
-            this.rebuildNavEdgesByCell();
             this.invalidateNavigationCaches();
             return;
         }
@@ -1222,7 +1129,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
         if (removed) {
             this.rebuildBuildPathBlockedCells();
-            this.rebuildNavEdgesByCell();
             this.invalidateNavigationCaches();
         }
     }
@@ -1236,7 +1142,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const table = this.createCraftingTableState(cell.col, cell.row);
         this.state.craftingTables.set(table.id, table);
         this.rebuildBuildPathBlockedCells();
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
     }
 
@@ -1247,7 +1152,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const directId = this.getCraftingTableIdForCell(cell.col, cell.row);
         if (this.state.craftingTables.delete(directId)) {
             this.rebuildBuildPathBlockedCells();
-            this.rebuildNavEdgesByCell();
             this.invalidateNavigationCaches();
             return;
         }
@@ -1263,7 +1167,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
         if (removed) {
             this.rebuildBuildPathBlockedCells();
-            this.rebuildNavEdgesByCell();
             this.invalidateNavigationCaches();
         }
     }
@@ -1439,7 +1342,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.enchantmentTables.clear();
         nextTables.forEach((table, id) => this.state.enchantmentTables.set(id, table));
         this.rebuildBuildPathBlockedCells();
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
         this.relocatePlayersFromSolidMapTiles();
         return true;
@@ -1461,7 +1363,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.craftingTables.clear();
         nextTables.forEach((table, id) => this.state.craftingTables.set(id, table));
         this.rebuildBuildPathBlockedCells();
-        this.rebuildNavEdgesByCell();
         this.invalidateNavigationCaches();
         this.relocatePlayersFromSolidMapTiles();
         return true;
@@ -4053,9 +3954,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             darkKnightTargetKind: null,
             darkKnightMarkX: e.x,
             darkKnightMarkY: e.y,
-            pathTargetCell: null,
             path: [],
-            pathTopologyVersion: this.mapTopologyVersion,
             caltropsSlowMs: 0,
             caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
         });
@@ -4087,7 +3986,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                     enemy.action = "idle";
                     se.targetId = null;
                     se.path = [];
-                    se.pathTargetCell = null;
                     return;
                 }
 
@@ -4156,14 +4054,12 @@ export class ShmupRoom extends Room<GameRoomState> {
                     se.mode = "windup";
                     se.modeMs = ENEMY1_WINDUP_MS;
                     se.path = [];
-                    se.pathTargetCell = null;
                     return;
                 }
 
                 const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
                 if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
                     se.path = [];
-                    se.pathTargetCell = null;
                     const prevX = enemy.x;
                     const prevY = enemy.y;
                     const resolved = this.moveEnemyWithWorldColliders(
@@ -4177,9 +4073,8 @@ export class ShmupRoom extends Room<GameRoomState> {
                     return;
                 }
 
-                if (!this.followEnemyFlowField(enemy, se, target.player, move)) {
-                    enemy.action = "idle";
-                }
+                se.path = [];
+                enemy.action = "idle";
             } finally {
                 this.recordEnemyTickDuration(id, enemy, se, performance.now() - enemyStartedAt);
             }
@@ -4248,7 +4143,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (canStartCast) {
             this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
             se.path = [];
-            se.pathTargetCell = null;
             enemy.action = "charge";
             se.mode = "casterCharge";
             se.modeMs = CASTER_CHARGE_MS;
@@ -4273,7 +4167,6 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
-            se.pathTargetCell = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
             const resolved = this.moveEnemyWithWorldColliders(
@@ -4287,9 +4180,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        if (!this.followEnemyFlowField(enemy, se, target.player, move)) {
-            enemy.action = "idle";
-        }
+        se.path = [];
+        enemy.action = "idle";
     }
 
     private hasCasterLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -4358,7 +4250,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
         if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
-            se.pathTargetCell = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
             const resolved = this.moveEnemyWithWorldColliders(
@@ -4372,9 +4263,8 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        if (!this.followEnemyFlowField(enemy, se, target.player, move)) {
-            enemy.action = "idle";
-        }
+        se.path = [];
+        enemy.action = "idle";
     }
 
     private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -4397,7 +4287,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         se.darkKnightMarkY = target.y;
         se.darkKnightTargetKind = "playerMark";
         se.path = [];
-        se.pathTargetCell = null;
 
         const direction = directionFromInput(target.x - enemy.x, target.y - enemy.y);
         if (direction) enemy.facingDirection = direction;
@@ -4610,115 +4499,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
     }
 
-    private followEnemyFlowField(enemy: EnemyState, se: ServerEnemy, target: PlayerState, moveDistance: number): boolean {
-        return this.measureEnemySubphase("flowFollow", () => {
-            this.incrementEnemyCounter("flowFollowCalls");
-            const flow = this.getNavFlowFieldForPlayer(target);
-            const start = this.getNearestWalkableBuildCell(
-                this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET),
-                NAV_TARGET_SEARCH_RADIUS,
-            );
-            if (!flow || !start) {
-                this.incrementEnemyCounter("flowFollowNoRoute");
-                se.path = [];
-                return false;
-            }
-
-            const startKey = this.buildCellKey(start.col, start.row);
-            const cost = flow.costs.get(startKey);
-            if (cost === undefined) {
-                this.incrementEnemyCounter("flowFollowNoRoute");
-                se.path = [];
-                return false;
-            }
-
-            const nextCell = flow.next.get(startKey);
-            if (!nextCell) {
-                this.incrementEnemyCounter("flowFollowAtTarget");
-                se.path = [];
-                return false;
-            }
-
-            const waypoint = this.buildCellCenter(nextCell);
-            const targetX = waypoint.x;
-            const targetY = waypoint.y - ENEMY_FOOT_Y_OFFSET;
-            const dx = targetX - enemy.x;
-            const dy = targetY - enemy.y;
-            const distance = Math.hypot(dx, dy);
-            if (distance <= 0) return false;
-
-            const step = Math.min(moveDistance, distance);
-            const prevX = enemy.x;
-            const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWorldColliders(
-                enemy,
-                enemy.x + (dx / distance) * step,
-                enemy.y + (dy / distance) * step,
-            );
-            const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
-            enemy.x = resolved.x;
-            enemy.y = resolved.y;
-            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
-            this.incrementEnemyCounter(moved ? "flowFollowMoves" : "flowFollowBlocked");
-            se.path = moved ? [nextCell] : [];
-            se.pathTargetCell = flow.targetCell;
-            se.pathTopologyVersion = flow.topologyVersion;
-            return moved;
-        });
-    }
-
-    private getNavFlowFieldForPlayer(player: PlayerState): NavFlowField | null {
-        const targetCenter = this.worldToBuildCell(player.x, player.y + PLAYER_TREE_Y_OFFSET);
-        const targetCell = this.getNearestWalkableBuildCell(targetCenter, NAV_TARGET_SEARCH_RADIUS);
-        if (!targetCell) return null;
-
-        const targetKey = this.buildCellKey(targetCell.col, targetCell.row);
-        const cacheKey = `${this.mapTopologyVersion}:${targetKey}`;
-        const cached = this.navFlowFields.get(cacheKey);
-        if (cached) return cached;
-
-        return this.measureEnemySubphase("flowBuild", () => {
-            this.incrementEnemyCounter("flowBuilds");
-            const flow: NavFlowField = {
-                topologyVersion: this.mapTopologyVersion,
-                targetKey,
-                targetCell,
-                costs: new Map<string, number>([[targetKey, 0]]),
-                next: new Map<string, PathCell>(),
-            };
-            const open = new MinHeap<PathCell & { cost: number }>((a, b) => a.cost - b.cost);
-            open.push({ ...targetCell, cost: 0 });
-            const closed = new Set<string>();
-
-            while (open.length > 0) {
-                const current = open.pop();
-                if (!current) break;
-
-                const currentKey = this.buildCellKey(current.col, current.row);
-                if (closed.has(currentKey)) continue;
-                closed.add(currentKey);
-                this.incrementEnemyCounter("flowVisitedCells");
-
-                for (const neighbor of this.getNavNeighbors(current.col, current.row)) {
-                    const neighborKey = this.buildCellKey(neighbor.col, neighbor.row);
-                    if (closed.has(neighborKey)) continue;
-
-                    const nextCost = current.cost + neighbor.cost;
-                    if (nextCost >= (flow.costs.get(neighborKey) ?? Number.POSITIVE_INFINITY)) continue;
-
-                    flow.costs.set(neighborKey, nextCost);
-                    flow.next.set(neighborKey, { col: current.col, row: current.row });
-                    open.push({ ...neighbor, cost: nextCost });
-                }
-            }
-
-            this.incrementEnemyCounter("flowReachableCells", flow.costs.size);
-            if (this.navFlowFields.size > 16) this.navFlowFields.clear();
-            this.navFlowFields.set(cacheKey, flow);
-            return flow;
-        });
-    }
-
     private getNearestWalkableBuildCell(center: PathCell, maxRadius: number): PathCell | null {
         for (let radius = 0; radius <= maxRadius; radius++) {
             let best: PathCell | null = null;
@@ -4737,92 +4517,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (best) return best;
         }
         return null;
-    }
-
-    private getNavNeighbors(col: number, row: number): NavEdge[] {
-        return this.navEdgesByCell.get(this.buildCellKey(col, row)) || [];
-    }
-
-    private computeNavEdgesForCell(col: number, row: number): NavEdge[] {
-        const edges: NavEdge[] = [];
-        const from = this.buildCellCenter({ col, row });
-        for (let rowOffset = -1; rowOffset <= 1; rowOffset++) {
-            for (let colOffset = -1; colOffset <= 1; colOffset++) {
-                if (colOffset === 0 && rowOffset === 0) continue;
-                const nextCol = col + colOffset;
-                const nextRow = row + rowOffset;
-                if (!this.isBuildPathCellInside(nextCol, nextRow) || this.isBuildPathCellBlocked(nextCol, nextRow)) continue;
-                if (colOffset !== 0 && rowOffset !== 0
-                    && (this.isBuildPathCellBlocked(col + colOffset, row) || this.isBuildPathCellBlocked(col, row + rowOffset))) {
-                    continue;
-                }
-                const to = this.buildCellCenter({ col: nextCol, row: nextRow });
-                if (!this.isNavCellEdgeClear(from, to)) continue;
-                edges.push({
-                    col: nextCol,
-                    row: nextRow,
-                    cost: colOffset !== 0 && rowOffset !== 0 ? NAV_DIAGONAL_COST : 1,
-                });
-            }
-        }
-        return edges;
-    }
-
-    private isNavCellEdgeClear(from: { x: number; y: number }, to: { x: number; y: number }): boolean {
-        let clear = true;
-        const testTable = (table: EnchantmentTableState | CraftingTableState) => {
-            if (!clear) return;
-            clear = !capsuleOverlapsAabb(
-                from.x,
-                from.y,
-                to.x,
-                to.y,
-                ENEMY_FOOT_RADIUS,
-                table.x,
-                table.y,
-                LAYER3_ROW_OBJECT_HALF_WIDTH,
-                LAYER3_ROW_OBJECT_HALF_HEIGHT,
-            );
-        };
-        this.state.enchantmentTables.forEach(testTable);
-        this.state.craftingTables.forEach(testTable);
-        return clear && !this.segmentOverlapsSolidMapTile(from.x, from.y, to.x, to.y, ENEMY_FOOT_RADIUS);
-    }
-
-    private followEnemyPath(enemy: EnemyState, se: ServerEnemy, moveDistance: number): boolean {
-        this.incrementEnemyCounter("pathFollowCalls");
-        while (se.path.length > 0) {
-            const nextCell = se.path[0];
-            const waypoint = this.buildCellCenter(nextCell);
-            const targetX = waypoint.x;
-            const targetY = waypoint.y - ENEMY_FOOT_Y_OFFSET;
-            const dx = targetX - enemy.x;
-            const dy = targetY - enemy.y;
-            const distance = Math.hypot(dx, dy);
-
-            if (distance <= ENEMY_PATH_WAYPOINT_RADIUS) {
-                se.path.shift();
-                this.incrementEnemyCounter("pathWaypointsConsumed");
-                continue;
-            }
-
-            const step = Math.min(moveDistance, distance);
-            const prevX = enemy.x;
-            const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWorldColliders(
-                enemy,
-                enemy.x + (dx / distance) * step,
-                enemy.y + (dy / distance) * step,
-            );
-            const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
-            enemy.x = resolved.x;
-            enemy.y = resolved.y;
-            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
-            this.incrementEnemyCounter(moved ? "pathFollowMoves" : "pathFollowBlocked");
-            return moved;
-        }
-
-        return false;
     }
 
     private applyDarkKnightAoeImpact(enemyId: string, attackOrigin: AttackOrigin) {
@@ -5002,7 +4696,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private findNearestAlivePlayer(x: number, y: number): EnemyTarget | null {
         return this.measureEnemySubphase("targeting", () => {
             this.incrementEnemyCounter("targetSearches");
-            const aliveTargets: EnemyTarget[] = [];
+            let nearest: EnemyTarget | null = null;
 
             this.state.players.forEach((player, id) => {
                 this.incrementEnemyCounter("targetPlayerChecks");
@@ -5011,41 +4705,17 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 const dx = player.x - x;
                 const dy = player.y - y;
-                aliveTargets.push({
+                const target: EnemyTarget = {
                     id,
                     player,
                     distanceSq: dx * dx + dy * dy,
-                    pathCost: null,
-                });
-            });
-
-            if (aliveTargets.length <= 1) {
-                return aliveTargets[0] || null;
-            }
-
-            let nearest: EnemyTarget | null = null;
-            let nearestReachable: EnemyTarget | null = null;
-            const startCell = this.getNearestWalkableBuildCell(this.worldToBuildCell(x, y), NAV_TARGET_SEARCH_RADIUS);
-            const startKey = startCell ? this.buildCellKey(startCell.col, startCell.row) : null;
-
-            aliveTargets.forEach((target) => {
-                if (startKey) {
-                    const flow = this.getNavFlowFieldForPlayer(target.player);
-                    target.pathCost = flow?.costs.get(startKey) ?? null;
-                }
-
+                };
                 if (!nearest || target.distanceSq < nearest.distanceSq) {
                     nearest = target;
                 }
-                if (target.pathCost !== null
-                    && (!nearestReachable
-                        || target.pathCost < (nearestReachable.pathCost ?? Number.POSITIVE_INFINITY)
-                        || (target.pathCost === nearestReachable.pathCost && target.distanceSq < nearestReachable.distanceSq))) {
-                    nearestReachable = target;
-                }
             });
 
-            return nearestReachable || nearest;
+            return nearest;
         });
     }
 
