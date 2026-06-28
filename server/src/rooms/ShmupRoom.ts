@@ -122,8 +122,7 @@ const ENEMY_NEXT_WAVE_DELAY_MS = 3000;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
-const ENABLE_ENEMY_DIAGNOSTICS = process.env.NODE_ENV !== "production" || process.env.ENABLE_ENEMY_DIAGNOSTICS === "true";
-const ENABLE_DEBUG_ROUND = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEBUG_ROUND === "true";
+const ENABLE_ENEMY_DIAGNOSTICS = true;
 const SLOW_TICK_LOG_THRESHOLD_MS = 75;
 const TICK_PHASE_LOG_MIN_MS = 1;
 const INITIAL_MELEE_WAVE_COUNT = 5;
@@ -778,11 +777,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             void this.sendMapList(client);
         });
 
-        if (ENABLE_DEBUG_ROUND) {
-            this.onMessage("debugSetRound", (client, data) => {
-                this.debugSetRound(client, data);
-            });
-        }
+        this.onMessage("debugSetRound", (client, data) => {
+            this.debugSetRound(client, data);
+        });
     }
 
     private debugSetRound(client: Client, data: unknown) {

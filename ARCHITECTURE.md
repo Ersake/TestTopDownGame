@@ -108,7 +108,7 @@ Important server files:
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
-| `"debugSetRound"` | Escape-menu debug controls | Development or explicit live lag testing only. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. Production servers require `ENABLE_DEBUG_ROUND=true`, and production client builds require `VITE_ENABLE_DEBUG_ROUND=true`. |
+| `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -132,7 +132,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"mapSaveConflict"` | Save rejected because the map name already exists. |
 | `"mapSaved"` | Save success confirmation. |
 | `"mapLoaded"` | Load success confirmation, including whether data was trimmed. |
-| `"debugRoundResult"` | Acceptance or validation feedback for a `"debugSetRound"` request when debug round controls are enabled. |
+| `"debugRoundResult"` | Acceptance or validation feedback for a `"debugSetRound"` request. |
 
 Durable game facts should usually be schema state, not transient messages.
 
@@ -252,7 +252,7 @@ The server listens on `process.env.PORT` or `2567`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 
-Optional live lag testing can expose the Escape-menu round jump controls without enabling the map editor. Set `ENABLE_DEBUG_ROUND=true` on the server and build the client with `VITE_ENABLE_DEBUG_ROUND=true`. Set `ENABLE_ENEMY_DIAGNOSTICS=true` on the server if production enemy simulation logs are needed while testing.
+Live lag testing currently exposes the Escape-menu round jump controls and enemy simulation diagnostics in production. The map editor remains development-only.
 
 ---
 
