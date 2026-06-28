@@ -196,7 +196,7 @@ Current server-owned systems include:
 - Player join/leave and room reset after game over.
 - World bounds and tree generation.
 - Player movement, facing direction, attack lockout, attack cooldown, and interaction input.
-- Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades can reduce the 10-second base cooldown by 1 second per rank and increase the 56px base AOE radius by 25% per rank, with server-enforced max rank 3.
+- Axe left-click attacks and active axe whirlwind reduce server-authoritative player movement speed by 25%. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades can reduce the 10-second base cooldown by 1 second per rank and increase the 56px base AOE radius by 25% per rank, with server-enforced max rank 3.
 - Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites and server-enforced max ranks.
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.

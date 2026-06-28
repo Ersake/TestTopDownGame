@@ -18,6 +18,7 @@ import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStor
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 255;   // px/s
+const AXE_MOVEMENT_SPEED_MULTIPLIER = 0.75;
 const PLAYER_MAX_HEALTH = 5;
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
@@ -397,6 +398,7 @@ interface ServerPlayer {
     attackLockX: number;
     attackLockY: number;
     attackCooldownMs: number;
+    axeAttackSlowMs: number;
     dashCooldownMs: number;
     bowCharging: boolean;
     bowChargeMs: number;
@@ -656,6 +658,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.attackItem = attackItem;
             player.attackSeq++;
             sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
+            sp.axeAttackSlowMs = Math.max(sp.axeAttackSlowMs, AXE_ATTACK_LINGER_MS);
             const targetX = data?.targetX;
             const targetY = data?.targetY;
 
@@ -2258,6 +2261,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             attackLockX: ps.x,
             attackLockY: ps.y,
             attackCooldownMs: 0,
+            axeAttackSlowMs: 0,
             dashCooldownMs: 0,
             bowCharging: false,
             bowChargeMs: 0,
@@ -2356,6 +2360,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.attackLockX = player.x;
             sp.attackLockY = player.y;
             sp.attackCooldownMs = 0;
+            sp.axeAttackSlowMs = 0;
             sp.dashCooldownMs = 0;
             sp.bowCharging = false;
             sp.bowChargeMs = 0;
@@ -3400,6 +3405,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.vy = 0;
         targetSp.attackLockMs = 0;
         targetSp.attackCooldownMs = 0;
+        targetSp.axeAttackSlowMs = 0;
         targetSp.dashCooldownMs = 0;
         targetSp.revivingTargetId = null;
         targetSp.bowCharging = false;
@@ -3438,6 +3444,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const isAttackLocked = sp.attackLockMs > 0;
             sp.attackLockMs = Math.max(0, sp.attackLockMs - dtMs);
             sp.attackCooldownMs = Math.max(0, sp.attackCooldownMs - dtMs);
+            sp.axeAttackSlowMs = Math.max(0, sp.axeAttackSlowMs - dtMs);
             sp.dashCooldownMs = Math.max(0, sp.dashCooldownMs - dtMs);
             this.updateAxeWhirlwindCooldown(player, sp, dtMs);
 
@@ -3474,8 +3481,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const facingDirection = directionFromInput(inputX, inputY);
                 if (facingDirection) player.facingDirection = facingDirection;
 
-                sp.vx = inputLength > 0 ? (inputX / inputLength) * PLAYER_MAX_VEL : 0;
-                sp.vy = inputLength > 0 ? (inputY / inputLength) * PLAYER_MAX_VEL : 0;
+                const axeMovementSlowed = sp.axeWhirlwind || sp.axeAttackSlowMs > 0;
+                const moveSpeed = PLAYER_MAX_VEL * (axeMovementSlowed ? AXE_MOVEMENT_SPEED_MULTIPLIER : 1);
+                sp.vx = inputLength > 0 ? (inputX / inputLength) * moveSpeed : 0;
+                sp.vy = inputLength > 0 ? (inputY / inputLength) * moveSpeed : 0;
 
                 const nextX = player.x + sp.vx * dtSec;
                 const nextY = player.y + sp.vy * dtSec;
@@ -5265,6 +5274,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.alive   = false;
         sp.vx = 0;
         sp.vy = 0;
+        sp.axeAttackSlowMs = 0;
         this.clearBowCharge(player, sp);
         this.clearAxeWhirlwindState(player, sp);
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
@@ -5299,6 +5309,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeMoveRight = false;
             sp.bowChargeMoveUp = false;
             sp.bowChargeMoveDown = false;
+            sp.axeAttackSlowMs = 0;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindElapsedMs = 0;
