@@ -169,6 +169,12 @@ const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
 const ENEMY_SEPARATION_ITERATIONS = 2;
 const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
+const ENEMY_PATH_WAYPOINT_RADIUS = 12;
+const ENEMY_PATH_REPATH_MS = 250;
+const ENEMY_PATH_MAX_BUILDS_PER_TICK = 8;
+const ENEMY_PATH_MAX_EXPANSIONS = 2000;
+const ENEMY_PATH_TARGET_SEARCH_RADIUS = 6;
+const ENEMY_PATH_DIAGONAL_COST = Math.SQRT2;
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
@@ -415,6 +421,9 @@ interface ServerEnemy {
     darkKnightMarkX: number;
     darkKnightMarkY: number;
     path: PathCell[];
+    pathTargetCell: PathCell | null;
+    pathTopologyVersion: number;
+    repathMs: number;
     caltropsSlowMs: number;
     caltropsCheckMs: number;
 }
@@ -584,6 +593,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
     private recordingEnemyMetrics = false;
+    private enemyPathBuildsThisTick = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -984,6 +994,9 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.solidSegmentCache.clear();
         this.serverEnemies.forEach((se) => {
             se.path = [];
+            se.pathTargetCell = null;
+            se.pathTopologyVersion = this.mapTopologyVersion;
+            se.repathMs = 0;
         });
     }
 
@@ -4095,6 +4108,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             darkKnightMarkX: e.x,
             darkKnightMarkY: e.y,
             path: [],
+            pathTargetCell: null,
+            pathTopologyVersion: this.mapTopologyVersion,
+            repathMs: 0,
             caltropsSlowMs: 0,
             caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
         });
@@ -4102,6 +4118,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private tickEnemies(dtSec: number, dtMs: number) {
         const dead: string[] = [];
+        this.enemyPathBuildsThisTick = 0;
         this.state.enemies.forEach((enemy, id) => {
             this.incrementEnemyCounter("enemyLoops");
             if (enemy.isDead) return;
@@ -4112,6 +4129,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
             try {
                 this.tickEnemyCaltropsSlow(enemy, se, dtMs);
+                se.repathMs = Math.max(0, se.repathMs - dtMs);
                 if (se.mode === "stun") {
                     enemy.action = "idle";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -4200,6 +4218,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
                 if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
                     se.path = [];
+                    se.pathTargetCell = null;
                     const prevX = enemy.x;
                     const prevY = enemy.y;
                     const resolved = this.moveEnemyWithWorldColliders(
@@ -4213,8 +4232,9 @@ export class ShmupRoom extends Room<GameRoomState> {
                     return;
                 }
 
-                se.path = [];
-                enemy.action = "idle";
+                if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+                    enemy.action = "idle";
+                }
             } finally {
                 this.recordEnemyTickDuration(id, enemy, se, performance.now() - enemyStartedAt);
             }
@@ -4307,6 +4327,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
+            se.pathTargetCell = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
             const resolved = this.moveEnemyWithWorldColliders(
@@ -4320,8 +4341,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        se.path = [];
-        enemy.action = "idle";
+        if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+            enemy.action = "idle";
+        }
     }
 
     private hasCasterLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -4390,6 +4412,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
         if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
+            se.pathTargetCell = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
             const resolved = this.moveEnemyWithWorldColliders(
@@ -4403,8 +4426,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        se.path = [];
-        enemy.action = "idle";
+        if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+            enemy.action = "idle";
+        }
     }
 
     private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
@@ -4659,6 +4683,209 @@ export class ShmupRoom extends Room<GameRoomState> {
         return null;
     }
 
+    private followEnemyPathToTarget(enemy: EnemyState, se: ServerEnemy, target: PlayerState, moveDistance: number): boolean {
+        return this.measureEnemySubphase("pathFollow", () => {
+            this.incrementEnemyCounter("pathFollowCalls");
+            const targetCell = this.getNearestWalkableBuildCell(
+                this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET),
+                ENEMY_PATH_TARGET_SEARCH_RADIUS,
+            );
+            if (!targetCell) {
+                this.incrementEnemyCounter("pathNoRoute");
+                se.path = [];
+                se.pathTargetCell = null;
+                se.repathMs = ENEMY_PATH_REPATH_MS;
+                return false;
+            }
+
+            const targetChanged = !se.pathTargetCell
+                || se.pathTargetCell.col !== targetCell.col
+                || se.pathTargetCell.row !== targetCell.row;
+            const topologyChanged = se.pathTopologyVersion !== this.mapTopologyVersion;
+            const shouldBuild = topologyChanged || targetChanged || se.path.length === 0 || se.repathMs <= 0;
+            if (shouldBuild) {
+                if (se.repathMs > 0 && se.path.length === 0 && !topologyChanged && !targetChanged) {
+                    return false;
+                }
+                if (this.enemyPathBuildsThisTick >= ENEMY_PATH_MAX_BUILDS_PER_TICK) {
+                    this.incrementEnemyCounter("pathBuildSkippedBudget");
+                    return false;
+                }
+
+                const startCell = this.getNearestWalkableBuildCell(
+                    this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET),
+                    ENEMY_PATH_TARGET_SEARCH_RADIUS,
+                );
+                if (!startCell) {
+                    this.incrementEnemyCounter("pathNoRoute");
+                    se.path = [];
+                    se.pathTargetCell = targetCell;
+                    se.pathTopologyVersion = this.mapTopologyVersion;
+                    se.repathMs = ENEMY_PATH_REPATH_MS;
+                    return false;
+                }
+
+                this.enemyPathBuildsThisTick++;
+                this.incrementEnemyCounter("pathBuilds");
+                const path = this.buildEnemyPath(startCell, targetCell);
+                se.pathTargetCell = targetCell;
+                se.pathTopologyVersion = this.mapTopologyVersion;
+                se.repathMs = ENEMY_PATH_REPATH_MS;
+                if (!path) {
+                    se.path = [];
+                    return false;
+                }
+                se.path = path;
+            }
+
+            return this.followEnemyPath(enemy, se, moveDistance);
+        });
+    }
+
+    private buildEnemyPath(start: PathCell, goal: PathCell): PathCell[] | null {
+        const startKey = this.buildCellKey(start.col, start.row);
+        const goalKey = this.buildCellKey(goal.col, goal.row);
+        if (startKey === goalKey) {
+            this.incrementEnemyCounter("pathFound");
+            return [];
+        }
+
+        const open: Array<PathCell & { g: number; f: number }> = [{
+            ...start,
+            g: 0,
+            f: this.enemyPathHeuristic(start, goal),
+        }];
+        const cameFrom = new Map<string, string>();
+        const gScore = new Map<string, number>([[startKey, 0]]);
+        const closed = new Set<string>();
+        let visited = 0;
+
+        while (open.length > 0) {
+            let bestIndex = 0;
+            for (let i = 1; i < open.length; i++) {
+                if (open[i].f < open[bestIndex].f) bestIndex = i;
+            }
+            const current = open.splice(bestIndex, 1)[0];
+            const currentKey = this.buildCellKey(current.col, current.row);
+            if (closed.has(currentKey)) continue;
+            closed.add(currentKey);
+            visited++;
+            this.incrementEnemyCounter("pathCellsVisited");
+
+            if (currentKey === goalKey) {
+                this.incrementEnemyCounter("pathFound");
+                return this.reconstructEnemyPath(cameFrom, startKey, goalKey);
+            }
+            if (visited >= ENEMY_PATH_MAX_EXPANSIONS) {
+                this.incrementEnemyCounter("pathExpansionLimit");
+                return null;
+            }
+
+            for (const neighbor of this.getEnemyPathNeighbors(current.col, current.row)) {
+                const neighborKey = this.buildCellKey(neighbor.col, neighbor.row);
+                if (closed.has(neighborKey)) continue;
+
+                const tentativeG = current.g + neighbor.cost;
+                if (tentativeG >= (gScore.get(neighborKey) ?? Number.POSITIVE_INFINITY)) continue;
+
+                cameFrom.set(neighborKey, currentKey);
+                gScore.set(neighborKey, tentativeG);
+                open.push({
+                    col: neighbor.col,
+                    row: neighbor.row,
+                    g: tentativeG,
+                    f: tentativeG + this.enemyPathHeuristic(neighbor, goal),
+                });
+            }
+        }
+
+        this.incrementEnemyCounter("pathNoRoute");
+        return null;
+    }
+
+    private getEnemyPathNeighbors(col: number, row: number): Array<PathCell & { cost: number }> {
+        const neighbors: Array<PathCell & { cost: number }> = [];
+        for (let rowOffset = -1; rowOffset <= 1; rowOffset++) {
+            for (let colOffset = -1; colOffset <= 1; colOffset++) {
+                if (colOffset === 0 && rowOffset === 0) continue;
+                const nextCol = col + colOffset;
+                const nextRow = row + rowOffset;
+                if (!this.isBuildPathCellInside(nextCol, nextRow) || this.isBuildPathCellBlocked(nextCol, nextRow)) continue;
+                if (colOffset !== 0 && rowOffset !== 0
+                    && (this.isBuildPathCellBlocked(col + colOffset, row) || this.isBuildPathCellBlocked(col, row + rowOffset))) {
+                    continue;
+                }
+                neighbors.push({
+                    col: nextCol,
+                    row: nextRow,
+                    cost: colOffset !== 0 && rowOffset !== 0 ? ENEMY_PATH_DIAGONAL_COST : 1,
+                });
+            }
+        }
+        return neighbors;
+    }
+
+    private enemyPathHeuristic(from: PathCell, to: PathCell): number {
+        const dx = Math.abs(from.col - to.col);
+        const dy = Math.abs(from.row - to.row);
+        const diagonal = Math.min(dx, dy);
+        const straight = Math.max(dx, dy) - diagonal;
+        return straight + diagonal * ENEMY_PATH_DIAGONAL_COST;
+    }
+
+    private reconstructEnemyPath(cameFrom: Map<string, string>, startKey: string, goalKey: string): PathCell[] {
+        const path: PathCell[] = [];
+        let currentKey = goalKey;
+        while (currentKey !== startKey) {
+            const [col, row] = currentKey.split(":").map(Number);
+            path.push({ col, row });
+            const previousKey = cameFrom.get(currentKey);
+            if (!previousKey) return [];
+            currentKey = previousKey;
+        }
+        path.reverse();
+        return path;
+    }
+
+    private followEnemyPath(enemy: EnemyState, se: ServerEnemy, moveDistance: number): boolean {
+        while (se.path.length > 0) {
+            const nextCell = se.path[0];
+            const waypoint = this.buildCellCenter(nextCell);
+            const targetX = waypoint.x;
+            const targetY = waypoint.y - ENEMY_FOOT_Y_OFFSET;
+            const dx = targetX - enemy.x;
+            const dy = targetY - enemy.y;
+            const distance = Math.hypot(dx, dy);
+
+            if (distance <= ENEMY_PATH_WAYPOINT_RADIUS) {
+                se.path.shift();
+                this.incrementEnemyCounter("pathWaypointsConsumed");
+                continue;
+            }
+
+            const step = Math.min(moveDistance, distance);
+            const prevX = enemy.x;
+            const prevY = enemy.y;
+            const resolved = this.moveEnemyWithWorldColliders(
+                enemy,
+                enemy.x + (dx / distance) * step,
+                enemy.y + (dy / distance) * step,
+            );
+            const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
+            enemy.x = resolved.x;
+            enemy.y = resolved.y;
+            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+            this.incrementEnemyCounter(moved ? "pathFollowMoves" : "pathFollowBlocked");
+            if (!moved) {
+                se.path = [];
+                se.repathMs = 0;
+            }
+            return moved;
+        }
+
+        return false;
+    }
+
     private applyDarkKnightAoeImpact(enemyId: string, attackOrigin: AttackOrigin) {
         if (this.state.gameOver) return;
         const enemy = this.state.enemies.get(enemyId);
@@ -4738,7 +4965,15 @@ export class ShmupRoom extends Room<GameRoomState> {
     private computeBuildPathCellBlocked(col: number, row: number): boolean {
         const center = this.buildCellCenter({ col, row });
         if (this.collidesWithLayer3TableFoot(center.x, center.y, ENEMY_FOOT_RADIUS)) return true;
-        return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);
+        return this.isMapTileFullyBlockedForEnemyNav(col, row);
+    }
+
+    private isMapTileFullyBlockedForEnemyNav(col: number, row: number): boolean {
+        if (!this.isMapCellInside(col, row)) return true;
+        const layer2 = this.getMapTileValue(col, row, 2);
+        if (layer2 > 0 && this.isSolidMapFrame(layer2 - 1)) return true;
+        const layer1 = this.getMapTileValue(col, row, 1);
+        return layer1 > 0 && this.isSolidMapFrame(layer1 - 1);
     }
 
     private separateEnemyFeet(metrics?: TickMetrics) {
