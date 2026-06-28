@@ -2836,7 +2836,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private shouldPreserveDarkKnightAttackCooldown(enemy: EnemyState): boolean {
         if (enemy.enemyType !== ENEMY_TYPE_DARK_KNIGHT) return false;
         const se = this.serverEnemies.get(enemy.id);
-        return se?.mode === "dkAttack" || se?.mode === "dkCooldown";
+        return se?.mode === "dkRush" || se?.mode === "dkAttack" || se?.mode === "dkCooldown";
     }
 
     private findEnemyHitsByAttack(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string[] {

@@ -201,7 +201,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1 plus axe max-campfire upgrade ranks.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.
