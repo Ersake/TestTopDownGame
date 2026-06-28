@@ -43,6 +43,8 @@ const MAP_CHUNK_ENCODED_BYTES = MAP_CHUNK_CELL_COUNT * 2;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil(MAP_CHUNK_ENCODED_BYTES / 3) * 4;
 const MAP_SAVE_VERSION = 1;
 const PRODUCTION_GAME_MAP_NAME = "lvlone";
+const CASTLE_PARTIAL_SUPPORT_FRAMES = new Set([35, 36, 37, 67]);
+const CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES = new Set([68, 69]);
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
@@ -450,6 +452,12 @@ interface AttackOrigin {
 interface AttackVector {
     x: number;
     y: number;
+}
+interface MapTileCollider {
+    x: number;
+    y: number;
+    halfWidth: number;
+    halfHeight: number;
 }
 interface ActiveAxeAttack {
     attackerId: string;
@@ -972,7 +980,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const previousValue = this.getMapTileValue(col, row, layer);
         if (previousValue === nextValue) return;
         if (previousValue === 0 && this.mapTileCount >= MAP_MAX_FILLED_CELLS) return;
-        if (this.isSolidMapFrame(frame) && this.mapCellOverlapsPlayer(col, row)) return;
+        if (this.isSolidMapFrame(frame) && this.mapCellOverlapsPlayer(col, row, frame)) return;
 
         const chunkCol = Math.floor(col / MAP_CHUNK_SIZE);
         const chunkRow = Math.floor(row / MAP_CHUNK_SIZE);
@@ -1382,9 +1390,19 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
     }
 
-    private mapCellOverlapsPlayer(col: number, row: number): boolean {
-        const x = col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
-        const y = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
+    private getMapTileCollider(col: number, row: number, frame: number): MapTileCollider {
+        const topHalfCollider = CASTLE_PARTIAL_SUPPORT_FRAMES.has(frame);
+        const narrowCollider = topHalfCollider || CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES.has(frame);
+        return {
+            x: col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+            y: row * MAP_TILE_SIZE + (topHalfCollider ? MAP_TILE_SIZE * 0.25 : MAP_TILE_SIZE * 0.5),
+            halfWidth: MAP_TILE_SIZE * (narrowCollider ? 0.25 : 0.5),
+            halfHeight: MAP_TILE_SIZE * (topHalfCollider ? 0.25 : 0.5),
+        };
+    }
+
+    private mapCellOverlapsPlayer(col: number, row: number, frame: number): boolean {
+        const collider = this.getMapTileCollider(col, row, frame);
         let overlapsPlayer = false;
         this.state.players.forEach((player) => {
             if (overlapsPlayer) return;
@@ -1392,10 +1410,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                 player.x,
                 player.y + PLAYER_TREE_Y_OFFSET,
                 PLAYER_TREE_FOOT_RADIUS,
-                x,
-                y,
-                MAP_TILE_SIZE * 0.5,
-                MAP_TILE_SIZE * 0.5,
+                collider.x,
+                collider.y,
+                collider.halfWidth,
+                collider.halfHeight,
             );
         });
         return overlapsPlayer;
@@ -1412,7 +1430,17 @@ export class ShmupRoom extends Room<GameRoomState> {
             for (let col = startCol; col <= endCol; col++) {
                 for (const layer of [1, 2] as const) {
                     const value = this.getMapTileValue(col, row, layer);
-                    if (value > 0 && this.isSolidMapFrame(value - 1)) return true;
+                    if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
+                    const collider = this.getMapTileCollider(col, row, value - 1);
+                    if (circleOverlapsAabb(
+                        footX,
+                        footY,
+                        PLAYER_TREE_FOOT_RADIUS,
+                        collider.x,
+                        collider.y,
+                        collider.halfWidth,
+                        collider.halfHeight,
+                    )) return true;
                 }
             }
         }
@@ -1430,7 +1458,18 @@ export class ShmupRoom extends Room<GameRoomState> {
                 for (const layer of [1, 2] as const) {
                     this.incrementEnemyCounter("solidTileChecks");
                     const value = this.getMapTileValue(col, row, layer);
-                    if (value > 0 && this.isSolidMapFrame(value - 1)) return true;
+                    if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
+                    const collider = this.getMapTileCollider(col, row, value - 1);
+                    if (overlaps(
+                        x,
+                        y,
+                        halfWidth,
+                        halfHeight,
+                        collider.x,
+                        collider.y,
+                        collider.halfWidth,
+                        collider.halfHeight,
+                    )) return true;
                 }
             }
         }

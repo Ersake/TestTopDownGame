@@ -93,6 +93,8 @@ const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil((MAP_CHUNK_CELL_COUNT * 2) / 3) * 4;
 const MAP_FRAME_COUNT = 32 * 32;
 const MAP_MAX_FILLED_CELLS = 50000;
+const CASTLE_PARTIAL_SUPPORT_FRAMES = new Set([35, 36, 37, 67]);
+const CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES = new Set([68, 69]);
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
@@ -2310,6 +2312,31 @@ export class Game extends Phaser.Scene {
         return values[localRow * MAP_CHUNK_SIZE + localCol] || 0;
     }
 
+    isSolidMapFrame(frame) {
+        if (!Number.isInteger(frame)) return false;
+        const col = frame % MAP_PALETTE_COLUMNS;
+        const row = Math.floor(frame / MAP_PALETTE_COLUMNS);
+        const isCastle = col >= 0 && col < 6 && row >= 0 && row < 3;
+        const isWater = col >= 8 && col < 14 && row >= 7 && row < 10;
+        const isTree = col >= 11 && col < 14 && row >= 11 && row < 14;
+        return isCastle
+            || isWater
+            || isTree
+            || frame === WORKBENCH_LEFT_FRAME
+            || frame === WORKBENCH_RIGHT_FRAME;
+    }
+
+    getMapTileCollider(col, row, frame) {
+        const topHalfCollider = CASTLE_PARTIAL_SUPPORT_FRAMES.has(frame);
+        const narrowCollider = topHalfCollider || CASTLE_LOWER_PARTIAL_SUPPORT_FRAMES.has(frame);
+        return {
+            x: col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+            y: row * MAP_TILE_SIZE + (topHalfCollider ? MAP_TILE_SIZE * 0.25 : MAP_TILE_SIZE * 0.5),
+            halfWidth: MAP_TILE_SIZE * (narrowCollider ? 0.25 : 0.5),
+            halfHeight: MAP_TILE_SIZE * (topHalfCollider ? 0.25 : 0.5),
+        };
+    }
+
     isWorkbenchLeftCell(col, row, layer = 1) {
         return this.getMapTileValue(col, row, layer) === WORKBENCH_LEFT_FRAME + 1
             && this.getMapTileValue(col + 1, row, layer) === WORKBENCH_RIGHT_FRAME + 1;
@@ -4366,6 +4393,7 @@ export class Game extends Phaser.Scene {
         const g = this.hitboxGraphics;
         g.clear();
 
+        this.drawMapSolidHitboxes(g);
         this.drawPlayerHitboxes(g);
         this.drawPlayerBulletHitboxes(g);
         this.drawEnemyBulletHitboxes(g);
@@ -4373,6 +4401,33 @@ export class Game extends Phaser.Scene {
         this.drawTreeHitboxes(g);
         this.drawCampfireHitboxes(g);
         this.drawCaltropsHitboxes(g);
+    }
+
+    drawMapSolidHitboxes(graphics) {
+        if (!this.mapTileCache || this.mapTileCache.size <= 0) return;
+
+        graphics.lineStyle(1, 0x55ccff, 0.72);
+        this.mapTileCache.forEach((chunk) => {
+            for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+                for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                    const index = localRow * MAP_CHUNK_SIZE + localCol;
+                    const col = chunk.col * MAP_CHUNK_SIZE + localCol;
+                    const row = chunk.row * MAP_CHUNK_SIZE + localRow;
+                    for (const value of [chunk.layer1[index] || 0, chunk.layer2[index] || 0]) {
+                        if (value <= 0) continue;
+                        const frame = value - 1;
+                        if (!this.isSolidMapFrame(frame)) continue;
+                        const collider = this.getMapTileCollider(col, row, frame);
+                        graphics.strokeRect(
+                            collider.x - collider.halfWidth,
+                            collider.y - collider.halfHeight,
+                            collider.halfWidth * 2,
+                            collider.halfHeight * 2,
+                        );
+                    }
+                }
+            }
+        });
     }
 
     drawPlayerHitboxes(graphics) {
