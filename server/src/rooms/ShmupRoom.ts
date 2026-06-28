@@ -53,7 +53,9 @@ const LAYER3_ROW_OBJECT_HALF_HEIGHT = MAP_TILE_SIZE * 0.5;
 const CAMPFIRE_CRAFT_WOOD_COST = 10;
 const CALTROPS_FRAME = 449;
 const CALTROPS_SLOW_RADIUS = 44;
-const CALTROPS_SPEED_MULTIPLIER = 0.75;
+const CALTROPS_SPEED_MULTIPLIER = 0.6;
+const CALTROPS_CHECK_INTERVAL_MS = 150;
+const CALTROPS_SLOW_MS = 250;
 const CALTROPS_CRAFT_WOOD_COST = 4;
 const TREE_COUNT = 25;
 const TREE_GRID_COLS = 5;
@@ -114,16 +116,17 @@ const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
-const ENEMY_WAVE_SPAWN_INTERVAL_MS = 1500;
-const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 1;
+const ENEMY_WAVE_SPAWN_INTERVAL_MS = 900;
+const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 2;
 const ENEMY_NEXT_WAVE_DELAY_MS = 3000;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
-const ENABLE_ENEMY_DIAGNOSTICS = process.env.NODE_ENV !== "production";
+const ENABLE_ENEMY_DIAGNOSTICS = process.env.NODE_ENV !== "production" || process.env.ENABLE_ENEMY_DIAGNOSTICS === "true";
+const ENABLE_DEBUG_ROUND = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEBUG_ROUND === "true";
 const SLOW_TICK_LOG_THRESHOLD_MS = 75;
 const TICK_PHASE_LOG_MIN_MS = 1;
-const INITIAL_MELEE_WAVE_COUNT = 3;
+const INITIAL_MELEE_WAVE_COUNT = 5;
 const MELEE_PER_MINUTE = 5;
 const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
 const ENEMY_TYPE_CASTER = 3;
@@ -417,6 +420,9 @@ interface ServerEnemy {
     pathRefreshMs: number;
     pathTargetCell: PathCell | null;
     path: PathCell[];
+    pathTopologyVersion: number;
+    caltropsSlowMs: number;
+    caltropsCheckMs: number;
 }
 interface ServerBullet {
     vx: number;
@@ -445,6 +451,10 @@ interface MapTileCollider {
     y: number;
     halfWidth: number;
     halfHeight: number;
+}
+interface CaltropsPoint {
+    x: number;
+    y: number;
 }
 interface ActiveAxeAttack {
     attackerId: string;
@@ -559,6 +569,10 @@ export class ShmupRoom extends Room<GameRoomState> {
     private gameOverRestartMs   = 0;
     private mapTiles = new Map<string, { layer1: Uint16Array; layer2: Uint16Array }>();
     private mapTileCount = 0;
+    private caltropsByBuildCell = new Map<string, CaltropsPoint[]>();
+    private buildPathBlockedCells = new Set<string>();
+    private mapTopologyVersion = 0;
+    private solidSegmentCache = new Map<string, boolean>();
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
     private enemyPathRefreshesThisTick = 0;
@@ -764,7 +778,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             void this.sendMapList(client);
         });
 
-        if (process.env.NODE_ENV !== "production") {
+        if (ENABLE_DEBUG_ROUND) {
             this.onMessage("debugSetRound", (client, data) => {
                 this.debugSetRound(client, data);
             });
@@ -953,6 +967,99 @@ export class ShmupRoom extends Room<GameRoomState> {
         return layer1 > 0 && TREE_SPAWN_GROUND_FRAMES.has(layer1 - 1);
     }
 
+    private rebuildMapDerivedCaches(): void {
+        this.rebuildCaltropsIndex();
+        this.rebuildBuildPathBlockedCells();
+        this.invalidateNavigationCaches();
+    }
+
+    private invalidateNavigationCaches(): void {
+        this.mapTopologyVersion++;
+        this.solidSegmentCache.clear();
+        this.serverEnemies.forEach((se) => {
+            se.path = [];
+            se.pathTargetCell = null;
+            se.pathRefreshMs = 0;
+            se.pathTopologyVersion = this.mapTopologyVersion;
+        });
+    }
+
+    private updateMapCellDerivedCaches(col: number, row: number): void {
+        this.rebuildCaltropsIndex();
+        this.refreshBuildPathBlockedCellsNear(col, row);
+        this.invalidateNavigationCaches();
+    }
+
+    private addCaltropsIndexPoint(x: number, y: number): void {
+        const cell = this.worldToBuildCell(x, y);
+        const key = this.buildCellKey(cell.col, cell.row);
+        const bucket = this.caltropsByBuildCell.get(key);
+        if (bucket) {
+            bucket.push({ x, y });
+        } else {
+            this.caltropsByBuildCell.set(key, [{ x, y }]);
+        }
+    }
+
+    private rebuildCaltropsIndex(): void {
+        this.caltropsByBuildCell.clear();
+        this.state.caltrops.forEach((caltrops) => {
+            this.addCaltropsIndexPoint(caltrops.x, caltrops.y);
+        });
+        this.mapTiles.forEach((chunk, key) => {
+            const position = this.parseMapChunkKey(key);
+            if (!position) return;
+            for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+                for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                    const index = localRow * MAP_CHUNK_SIZE + localCol;
+                    if (chunk.layer1[index] !== CALTROPS_FRAME + 1 && chunk.layer2[index] !== CALTROPS_FRAME + 1) continue;
+                    const col = position.chunkCol * MAP_CHUNK_SIZE + localCol;
+                    const row = position.chunkRow * MAP_CHUNK_SIZE + localRow;
+                    if (!this.isMapCellInside(col, row)) continue;
+                    this.addCaltropsIndexPoint(
+                        col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+                        row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+                    );
+                }
+            }
+        });
+    }
+
+    private rebuildBuildPathBlockedCells(): void {
+        this.buildPathBlockedCells.clear();
+        const columns = this.buildPathColumnCount();
+        const rows = this.buildPathRowCount();
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < columns; col++) {
+                if (this.computeBuildPathCellBlocked(col, row)) {
+                    this.buildPathBlockedCells.add(this.buildCellKey(col, row));
+                }
+            }
+        }
+    }
+
+    private refreshBuildPathBlockedCellsNear(mapCol: number, mapRow: number): void {
+        for (let row = mapRow - 1; row <= mapRow + 1; row++) {
+            for (let col = mapCol - 1; col <= mapCol + 1; col++) {
+                if (!this.isBuildPathCellInside(col, row)) continue;
+                const key = this.buildCellKey(col, row);
+                if (this.computeBuildPathCellBlocked(col, row)) {
+                    this.buildPathBlockedCells.add(key);
+                } else {
+                    this.buildPathBlockedCells.delete(key);
+                }
+            }
+        }
+    }
+
+    private buildPathColumnCount(): number {
+        return Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE);
+    }
+
+    private buildPathRowCount(): number {
+        return Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
+    }
+
     private placeMapTile(data: unknown): void {
         const payload = data as { col?: unknown; row?: unknown; frame?: unknown; layer?: unknown } | null;
         const col = Number(payload?.col);
@@ -973,6 +1080,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         cells[index] = nextValue;
         if (previousValue === 0) this.mapTileCount++;
         this.syncMapChunk(chunkCol, chunkRow);
+        this.updateMapCellDerivedCaches(col, row);
     }
 
     private removeMapTile(data: unknown): void {
@@ -996,6 +1104,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.mapTiles.delete(this.mapChunkKey(chunkCol, chunkRow));
             this.syncMapChunk(chunkCol, chunkRow);
         }
+        this.updateMapCellDerivedCaches(col, row);
     }
 
     private placeEnchantmentTable(data: unknown): void {
@@ -1006,6 +1115,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const table = this.createEnchantmentTableState(cell.col, cell.row);
         this.state.enchantmentTables.set(table.id, table);
+        this.rebuildBuildPathBlockedCells();
+        this.invalidateNavigationCaches();
     }
 
     private removeEnchantmentTable(data: unknown): void {
@@ -1013,13 +1124,25 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!cell) return;
 
         const directId = this.getEnchantmentTableIdForCell(cell.col, cell.row);
-        if (this.state.enchantmentTables.delete(directId)) return;
+        if (this.state.enchantmentTables.delete(directId)) {
+            this.rebuildBuildPathBlockedCells();
+            this.invalidateNavigationCaches();
+            return;
+        }
 
+        let removed = false;
         this.state.enchantmentTables.forEach((table, id) => {
             const insideX = cell.col >= table.col && cell.col <= table.col + 1;
             const insideY = cell.row === table.row;
-            if (insideX && insideY) this.state.enchantmentTables.delete(id);
+            if (insideX && insideY) {
+                this.state.enchantmentTables.delete(id);
+                removed = true;
+            }
         });
+        if (removed) {
+            this.rebuildBuildPathBlockedCells();
+            this.invalidateNavigationCaches();
+        }
     }
 
     private placeCraftingTable(data: unknown): void {
@@ -1030,6 +1153,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const table = this.createCraftingTableState(cell.col, cell.row);
         this.state.craftingTables.set(table.id, table);
+        this.rebuildBuildPathBlockedCells();
+        this.invalidateNavigationCaches();
     }
 
     private removeCraftingTable(data: unknown): void {
@@ -1037,13 +1162,25 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!cell) return;
 
         const directId = this.getCraftingTableIdForCell(cell.col, cell.row);
-        if (this.state.craftingTables.delete(directId)) return;
+        if (this.state.craftingTables.delete(directId)) {
+            this.rebuildBuildPathBlockedCells();
+            this.invalidateNavigationCaches();
+            return;
+        }
 
+        let removed = false;
         this.state.craftingTables.forEach((table, id) => {
             const insideX = cell.col >= table.col && cell.col <= table.col + 1;
             const insideY = cell.row === table.row;
-            if (insideX && insideY) this.state.craftingTables.delete(id);
+            if (insideX && insideY) {
+                this.state.craftingTables.delete(id);
+                removed = true;
+            }
         });
+        if (removed) {
+            this.rebuildBuildPathBlockedCells();
+            this.invalidateNavigationCaches();
+        }
     }
 
     private getMapObjectCellFromData(data: unknown): { col: number; row: number } | null {
@@ -1196,6 +1333,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             stateChunk.layer2 = this.encodeMapChunk(chunk.layer2);
             this.state.mapChunks.set(key, stateChunk);
         });
+        this.rebuildMapDerivedCaches();
         this.relocatePlayersFromSolidMapTiles();
         return { accepted: true, trimmed };
     }
@@ -1215,6 +1353,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.enchantmentTables.clear();
         nextTables.forEach((table, id) => this.state.enchantmentTables.set(id, table));
+        this.rebuildBuildPathBlockedCells();
+        this.invalidateNavigationCaches();
         this.relocatePlayersFromSolidMapTiles();
         return true;
     }
@@ -1234,6 +1374,8 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.state.craftingTables.clear();
         nextTables.forEach((table, id) => this.state.craftingTables.set(id, table));
+        this.rebuildBuildPathBlockedCells();
+        this.invalidateNavigationCaches();
         this.relocatePlayersFromSolidMapTiles();
         return true;
     }
@@ -2288,6 +2430,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.campfires.clear();
         this.campfireOwners.clear();
         this.state.caltrops.clear();
+        this.rebuildCaltropsIndex();
         this.generateTrees();
 
         this.state.players.forEach((player, sid) => {
@@ -2972,6 +3115,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!this.state.caltrops.has(caltropsId)) return false;
         if (!this.grantHotbarItem(player, ITEM_WOOD_CALTROPS)) return false;
         this.state.caltrops.delete(caltropsId);
+        this.rebuildCaltropsIndex();
         return true;
     }
 
@@ -3013,6 +3157,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         caltrops.x = cell.x;
         caltrops.y = cell.y;
         this.state.caltrops.set(caltrops.id, caltrops);
+        this.rebuildCaltropsIndex();
         this.setHotbarItem(player, player.activeSlot, EMPTY_HOTBAR_ITEM);
         return true;
     }
@@ -3825,6 +3970,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             pathRefreshMs: rndInt(0, ENEMY_PATH_INITIAL_REFRESH_JITTER_MS),
             pathTargetCell: null,
             path: [],
+            pathTopologyVersion: this.mapTopologyVersion,
+            caltropsSlowMs: 0,
+            caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
         });
     }
 
@@ -3839,6 +3987,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (!se) { dead.push(id); return; }
 
             try {
+                this.tickEnemyCaltropsSlow(enemy, se, dtMs);
                 if (se.mode === "stun") {
                     enemy.action = "idle";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -4315,23 +4464,51 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private segmentOverlapsSolidMapTile(fromX: number, fromY: number, toX: number, toY: number, radius: number): boolean {
+        const cacheKey = [
+            this.mapTopologyVersion,
+            Math.round(fromX),
+            Math.round(fromY),
+            Math.round(toX),
+            Math.round(toY),
+            Math.round(radius),
+        ].join(":");
+        const cached = this.solidSegmentCache.get(cacheKey);
+        if (cached !== undefined) return cached;
+        if (this.solidSegmentCache.size > 4096) this.solidSegmentCache.clear();
+
         this.incrementEnemyCounter("solidSegmentChecks");
-        const distance = Math.hypot(toX - fromX, toY - fromY);
-        const steps = Math.max(1, Math.ceil(distance / (MAP_TILE_SIZE * 0.5)));
-        this.incrementEnemyCounter("solidSegmentSamples", steps + 1);
-        for (let step = 0; step <= steps; step++) {
-            const t = step / steps;
-            const x = fromX + (toX - fromX) * t;
-            const y = fromY + (toY - fromY) * t;
-            if (this.mapSolidOverlapsAabb(x, y, radius, radius)) {
-                this.incrementEnemyCounter("solidSegmentHits");
-                return true;
+        const candidateCells = this.getSolidMapSegmentCandidateCells(fromX, fromY, toX, toY, radius);
+        this.incrementEnemyCounter("solidSegmentSamples", candidateCells.size);
+        for (const key of candidateCells) {
+            const [col, row] = key.split(":").map(Number);
+            for (const layer of [1, 2] as const) {
+                this.incrementEnemyCounter("solidTileChecks");
+                const value = this.getMapTileValue(col, row, layer);
+                if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
+                const collider = this.getMapTileCollider(col, row, value - 1);
+                if (capsuleOverlapsAabb(
+                    fromX,
+                    fromY,
+                    toX,
+                    toY,
+                    radius,
+                    collider.x,
+                    collider.y,
+                    collider.halfWidth,
+                    collider.halfHeight,
+                )) {
+                    this.incrementEnemyCounter("solidSegmentHits");
+                    this.solidSegmentCache.set(cacheKey, true);
+                    return true;
+                }
             }
         }
+        this.solidSegmentCache.set(cacheKey, false);
         return false;
     }
 
     private shouldRefreshEnemyPath(se: ServerEnemy, target: PlayerState): boolean {
+        if (se.pathTopologyVersion !== this.mapTopologyVersion) return true;
         if (!se.pathTargetCell) return se.pathRefreshMs === 0;
         if (se.pathRefreshMs === 0) return true;
 
@@ -4353,6 +4530,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.path = this.findEnemyPath(enemy, target);
             se.pathRefreshMs = ENEMY_PATH_REFRESH_MS;
             se.pathTargetCell = targetCell;
+            se.pathTopologyVersion = this.mapTopologyVersion;
             if (se.path.length > 0) {
                 this.incrementEnemyCounter("pathRefreshSuccesses");
             } else {
@@ -4387,40 +4565,43 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private getEnemyCaltropsSpeedMultiplier(enemy: EnemyState): number {
-        return this.isEnemyTouchingCaltrops(enemy) ? CALTROPS_SPEED_MULTIPLIER : 1;
+        return (this.serverEnemies.get(enemy.id)?.caltropsSlowMs ?? 0) > 0 ? CALTROPS_SPEED_MULTIPLIER : 1;
     }
 
-    private isEnemyTouchingCaltrops(enemy: EnemyState): boolean {
+    private tickEnemyCaltropsSlow(enemy: EnemyState, se: ServerEnemy, dtMs: number): void {
+        se.caltropsSlowMs = Math.max(0, se.caltropsSlowMs - dtMs);
+        se.caltropsCheckMs = Math.max(0, se.caltropsCheckMs - dtMs);
+        if (se.caltropsCheckMs > 0) return;
+
+        se.caltropsCheckMs = CALTROPS_CHECK_INTERVAL_MS;
+        if (this.isEnemyTouchingIndexedCaltrops(enemy)) {
+            se.caltropsSlowMs = CALTROPS_SLOW_MS;
+        }
+    }
+
+    private isEnemyTouchingIndexedCaltrops(enemy: EnemyState): boolean {
         return this.measureEnemySubphase("caltrops", () => {
             this.incrementEnemyCounter("caltropsChecks");
+            if (this.caltropsByBuildCell.size === 0) return false;
+
             const footX = enemy.x;
             const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
             const radius = CALTROPS_SLOW_RADIUS + ENEMY_FOOT_RADIUS;
             const radiusSq = radius * radius;
 
-            let touching = false;
-            this.state.caltrops.forEach((caltrops) => {
-                if (touching) return;
-                this.incrementEnemyCounter("caltropsObjectChecks");
-                const dx = footX - caltrops.x;
-                const dy = footY - caltrops.y;
-                touching = dx * dx + dy * dy <= radiusSq;
-            });
-            if (touching) return true;
-
-            const startCol = Math.floor((footX - radius) / MAP_TILE_SIZE);
-            const endCol = Math.floor((footX + radius) / MAP_TILE_SIZE);
-            const startRow = Math.floor((footY - radius) / MAP_TILE_SIZE);
-            const endRow = Math.floor((footY + radius) / MAP_TILE_SIZE);
+            const startCol = Math.floor((footX - radius) / BUILD_GRID_SIZE);
+            const endCol = Math.floor((footX + radius) / BUILD_GRID_SIZE);
+            const startRow = Math.floor((footY - radius) / BUILD_GRID_SIZE);
+            const endRow = Math.floor((footY + radius) / BUILD_GRID_SIZE);
             for (let row = startRow; row <= endRow; row++) {
                 for (let col = startCol; col <= endCol; col++) {
-                    for (const layer of [1, 2] as const) {
-                        this.incrementEnemyCounter("caltropsTileChecks");
-                        if (this.getMapTileValue(col, row, layer) !== CALTROPS_FRAME + 1) continue;
-                        const tileX = col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
-                        const tileY = row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5;
-                        const dx = footX - tileX;
-                        const dy = footY - tileY;
+                    this.incrementEnemyCounter("caltropsCellChecks");
+                    const bucket = this.caltropsByBuildCell.get(this.buildCellKey(col, row));
+                    if (!bucket) continue;
+                    for (const caltrops of bucket) {
+                        this.incrementEnemyCounter("caltropsObjectChecks");
+                        const dx = footX - caltrops.x;
+                        const dy = footY - caltrops.y;
                         if (dx * dx + dy * dy <= radiusSq) return true;
                     }
                 }
@@ -4591,6 +4772,27 @@ export class ShmupRoom extends Room<GameRoomState> {
         return Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
     }
 
+    private getSolidMapSegmentCandidateCells(fromX: number, fromY: number, toX: number, toY: number, radius: number): Set<string> {
+        const candidates = new Set<string>();
+        const distance = Math.hypot(toX - fromX, toY - fromY);
+        const steps = Math.max(1, Math.ceil(distance / (MAP_TILE_SIZE * 0.5)));
+        for (let step = 0; step <= steps; step++) {
+            const t = step / steps;
+            const x = fromX + (toX - fromX) * t;
+            const y = fromY + (toY - fromY) * t;
+            const startCol = Math.floor((x - radius) / MAP_TILE_SIZE);
+            const endCol = Math.floor((x + radius) / MAP_TILE_SIZE);
+            const startRow = Math.floor((y - radius) / MAP_TILE_SIZE);
+            const endRow = Math.floor((y + radius) / MAP_TILE_SIZE);
+            for (let row = startRow; row <= endRow; row++) {
+                for (let col = startCol; col <= endCol; col++) {
+                    if (this.isMapCellInside(col, row)) candidates.add(this.buildCellKey(col, row));
+                }
+            }
+        }
+        return candidates;
+    }
+
     private worldToBuildCell(x: number, y: number): PathCell {
         return {
             col: Math.floor(clamp(x, 0, WORLD_WIDTH - 1) / BUILD_GRID_SIZE),
@@ -4611,11 +4813,15 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private isBuildPathCellInside(col: number, row: number): boolean {
         return col >= 0 && row >= 0
-            && col < Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE)
-            && row < Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
+            && col < this.buildPathColumnCount()
+            && row < this.buildPathRowCount();
     }
 
     private isBuildPathCellBlocked(col: number, row: number): boolean {
+        return this.buildPathBlockedCells.has(this.buildCellKey(col, row));
+    }
+
+    private computeBuildPathCellBlocked(col: number, row: number): boolean {
         const center = this.buildCellCenter({ col, row });
         if (this.collidesWithLayer3TableFoot(center.x, center.y, ENEMY_FOOT_RADIUS)) return true;
         return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);

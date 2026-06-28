@@ -39,9 +39,11 @@ jobs:
         # VITE_SERVER_URL must be set in repo Settings → Secrets and variables → Actions
         # as a repository secret named VITE_SERVER_URL.
         # Example value: wss://your-shmup-server.onrender.com
+        # Optional live lag testing: set repository variable VITE_ENABLE_DEBUG_ROUND to "true".
         run: npm run client:build
         env:
           VITE_SERVER_URL: ${{ secrets.VITE_SERVER_URL }}
+          VITE_ENABLE_DEBUG_ROUND: ${{ vars.VITE_ENABLE_DEBUG_ROUND }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

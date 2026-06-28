@@ -181,6 +181,7 @@ const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
 const DEBUG_MAX_ROUND = 99;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
+const ENABLE_DEBUG_ROUND = IS_DEVELOPMENT_BUILD || import.meta.env.VITE_ENABLE_DEBUG_ROUND === 'true';
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
@@ -698,7 +699,7 @@ export class Game extends Phaser.Scene {
             .setInteractive({ useHandCursor: true });
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
-        if (IS_DEVELOPMENT_BUILD) {
+        if (ENABLE_DEBUG_ROUND) {
             this.initDebugRoundControls();
         }
 
@@ -773,7 +774,7 @@ export class Game extends Phaser.Scene {
     }
 
     setDebugRoundControlsVisible(visible) {
-        if (!IS_DEVELOPMENT_BUILD || !this.debugRoundInput) return;
+        if (!ENABLE_DEBUG_ROUND || !this.debugRoundInput) return;
         this.debugRoundInput.node.style.visibility = visible ? 'visible' : 'hidden';
         this.debugRoundInput.node.style.pointerEvents = visible ? 'auto' : 'none';
         this.debugRoundStatusText?.setVisible(visible && !!this.debugRoundStatusText.text);
@@ -2838,7 +2839,7 @@ export class Game extends Phaser.Scene {
             });
         });
 
-        if (IS_DEVELOPMENT_BUILD) {
+        if (ENABLE_DEBUG_ROUND) {
             room.onMessage('debugRoundResult', (result) => {
                 if (result?.accepted) {
                     this.setDebugRoundStatus(`Started round ${result.round}.`, '#aaffaa');

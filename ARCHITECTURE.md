@@ -108,7 +108,7 @@ Important server files:
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
-| `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
+| `"debugSetRound"` | Escape-menu debug controls | Development or explicit live lag testing only. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. Production servers require `ENABLE_DEBUG_ROUND=true`, and production client builds require `VITE_ENABLE_DEBUG_ROUND=true`. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -132,7 +132,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"mapSaveConflict"` | Save rejected because the map name already exists. |
 | `"mapSaved"` | Save success confirmation. |
 | `"mapLoaded"` | Load success confirmation, including whether data was trimmed. |
-| `"debugRoundResult"` | Development-only acceptance or validation feedback for a `"debugSetRound"` request. |
+| `"debugRoundResult"` | Acceptance or validation feedback for a `"debugSetRound"` request when debug round controls are enabled. |
 
 Durable game facts should usually be schema state, not transient messages.
 
@@ -199,7 +199,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1 plus axe max-campfire upgrade ranks.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.
@@ -217,7 +217,7 @@ Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no t
 
 Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
-Enemy navigation treats solid saved-map tiles and layer-3 table objects as blocked cells, so pathing routes around authored colliders instead of walking through them.
+Enemy navigation treats solid saved-map tiles and layer-3 table objects as blocked cells, so pathing routes around authored colliders instead of walking through them. The room keeps private cached path-cell occupancy and invalidates enemy paths when map tiles or layer-3 table topology changes.
 
 In saved-map regular rooms, wood drops relocate to nearby green/walkable authored tiles and are not spawned on non-green tiles. Player projectiles are removed when their movement segment crosses a solid authored tile.
 
@@ -251,6 +251,8 @@ npm run server:start
 The server listens on `process.env.PORT` or `2567`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
+
+Optional live lag testing can expose the Escape-menu round jump controls without enabling the map editor. Set `ENABLE_DEBUG_ROUND=true` on the server and build the client with `VITE_ENABLE_DEBUG_ROUND=true`. Set `ENABLE_ENEMY_DIAGNOSTICS=true` on the server if production enemy simulation logs are needed while testing.
 
 ---
 
