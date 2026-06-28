@@ -42,7 +42,6 @@ export class PlayerState extends Schema {
     @type("int16")   bowDamageUpgrades: number = 0;
     @type("int16")   bowPierceUpgrades: number = 0;
     @type("int16")   bowChargeTimeUpgrades: number = 0;
-    @type("int16")   barricadeHealthUpgrades: number = 0;
     @type("int16")   woodGatherUpgrades: number = 0;
     @type("int16")   campfireUpgrades: number = 0;
     @type("int16")   pendingCampfireCharges: number = 0;
@@ -100,14 +99,6 @@ export class LogState extends Schema {
     @type("int8")    amount: number = 5;
 }
 
-export class WoodBlockState extends Schema {
-    @type("string")  id: string = "";
-    @type("float32") x: number = 0;
-    @type("float32") y: number = 0;
-    @type("int8")    health: number = 5;
-    @type("int8")    maxHealth: number = 5;
-}
-
 export class CampfireState extends Schema {
     @type("string")  id: string = "";
     @type("float32") x: number = 0;
@@ -150,7 +141,6 @@ export class GameRoomState extends Schema {
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
     @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
     @type({ map: LogState })          logs          = new MapSchema<LogState>();
-    @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
     @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
     @type({ map: CaltropState })      caltrops      = new MapSchema<CaltropState>();
     @type({ map: EnchantmentTableState }) enchantmentTables = new MapSchema<EnchantmentTableState>();

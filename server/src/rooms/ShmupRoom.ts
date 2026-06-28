@@ -7,7 +7,6 @@ import {
     EnemyBulletState,
     TreeState,
     LogState,
-    WoodBlockState,
     CampfireState,
     CaltropState,
     EnchantmentTableState,
@@ -96,9 +95,7 @@ const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
 const BUILD_GRID_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
 const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
-const BUILD_BLOCK_COST = 1;
 const BUILD_RANGE = 192;
-const WOOD_BLOCK_HEALTH = 5;
 const FIRST_LEVEL_UP_KILLS = 5;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
@@ -144,7 +141,6 @@ const DARK_KNIGHT_WALK_SPEED = 88;
 const DARK_KNIGHT_RUSH_SPEED = 230;
 const DARK_KNIGHT_MIN_RUSH_MS = 500;
 const DARK_KNIGHT_MARK_REACH_RADIUS = 12;
-const DARK_KNIGHT_WOOD_REACH_RANGE = 14;
 const DARK_KNIGHT_ATTACK_MS = 900;
 const DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS = 600;
 const DARK_KNIGHT_COOLDOWN_MS = 1560;
@@ -165,8 +161,6 @@ const ENEMY1_ATTACK_DAMAGE = 1;
 const ENEMY1_ATTACK_HIT_OFFSET = 28;
 const ENEMY1_ATTACK_HIT_HW = 42;
 const ENEMY1_ATTACK_HIT_HH = 36;
-const ENEMY_ATTACK_WOOD_BLOCK_PADDING = 2;
-const ENEMY_WOOD_BLOCK_ATTACK_DAMAGE = 1;
 const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
@@ -192,7 +186,6 @@ const OUTFIT_COLOR_COUNT = 5;
 const EMPTY_HOTBAR_ITEM = "";
 const EMPTY_HOTBAR_COUNT = 0;
 const WOOD_STACK_MAX = 99;
-const WOOD_BLOCK_REPAIR_AMOUNT = 1;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
 const CAMPFIRE_HEAL_AMOUNT = 1;
@@ -204,7 +197,6 @@ const UPGRADE_IDS = new Set([
     "bow_damage",
     "bow_pierce",
     "bow_charge_time",
-    "hammer_barricade_hp",
     "hammer_wood_gather",
 ]);
 type UpgradeNodeConfig = {
@@ -226,7 +218,6 @@ const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
     ],
     [ITEM_HAMMER]: [
         { id: "hammer_wood_gather" },
-        { id: "hammer_barricade_hp", prerequisite: "hammer_wood_gather" },
     ],
 };
 const VALID_DIRECTIONS = new Set(["E", "SE", "S", "SW", "W", "NW", "N", "NE"]);
@@ -301,15 +292,6 @@ function circleOverlapsAabb(cx: number, cy: number, radius: number,
     const dy = cy - closestY;
 
     return dx * dx + dy * dy < radius * radius;
-}
-
-function pointAabbDistanceSq(px: number, py: number,
-                             bx: number, by: number, bhw: number, bhh: number): number {
-    const closestX = clamp(px, bx - bhw, bx + bhw);
-    const closestY = clamp(py, by - bhh, by + bhh);
-    const dx = px - closestX;
-    const dy = py - closestY;
-    return dx * dx + dy * dy;
 }
 
 function pointSegmentDistanceSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
@@ -422,14 +404,13 @@ interface ServerPlayer {
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
-type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "woodWindup" | "woodAttack" | "dkWalk" | "dkRush" | "dkAttack" | "dkCooldown" | "stun";
-type DarkKnightTargetKind = "playerMark" | "woodBlock" | null;
+type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "dkWalk" | "dkRush" | "dkAttack" | "dkCooldown" | "stun";
+type DarkKnightTargetKind = "playerMark" | null;
 interface PathCell { col: number; row: number; }
 interface ServerEnemy {
     mode: EnemyMode;
     modeMs: number;
     targetId: string | null;
-    targetWoodBlockId: string | null;
     darkKnightTargetKind: DarkKnightTargetKind;
     darkKnightMarkX: number;
     darkKnightMarkY: number;
@@ -704,16 +685,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.swapPlayerHotbarSlots(client.sessionId, data);
         });
 
-        this.onMessage("buildWoodBlock", (client, data) => {
-            this.tryBuildWoodBlock(client.sessionId, data);
+        this.onMessage("removeDeployable", (client, data) => {
+            this.tryRemoveDeployable(client.sessionId, data);
         });
 
         this.onMessage("removeWoodBlock", (client, data) => {
-            this.tryRemoveWoodBlock(client.sessionId, data);
-        });
-
-        this.onMessage("repairWoodBlock", (client, data) => {
-            this.tryRepairWoodBlock(client.sessionId, data);
+            this.tryRemoveDeployable(client.sessionId, data);
         });
 
         this.onMessage("placeCampfire", (client, data) => {
@@ -1684,9 +1661,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             case "bow_charge_time":
                 player.bowChargeTimeUpgrades++;
                 break;
-            case "hammer_barricade_hp":
-                player.barricadeHealthUpgrades++;
-                break;
             case "hammer_wood_gather":
                 player.woodGatherUpgrades++;
                 break;
@@ -1717,8 +1691,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                 return Math.max(0, player.bowPierceUpgrades || 0);
             case "bow_charge_time":
                 return Math.max(0, player.bowChargeTimeUpgrades || 0);
-            case "hammer_barricade_hp":
-                return Math.max(0, player.barricadeHealthUpgrades || 0);
             case "hammer_wood_gather":
                 return Math.max(0, player.woodGatherUpgrades || 0);
             default:
@@ -2313,7 +2285,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.activeAxeAttacks = [];
         this.nextEnemyWaveStartMs = null;
         this.state.logs.clear();
-        this.state.woodBlocks.clear();
         this.state.campfires.clear();
         this.campfireOwners.clear();
         this.state.caltrops.clear();
@@ -2356,7 +2327,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.bowDamageUpgrades = 0;
             player.bowPierceUpgrades = 0;
             player.bowChargeTimeUpgrades = 0;
-            player.barricadeHealthUpgrades = 0;
             player.woodGatherUpgrades = 0;
             player.campfireUpgrades = 0;
             player.pendingCampfireCharges = 0;
@@ -2983,47 +2953,15 @@ export class ShmupRoom extends Room<GameRoomState> {
         return amount;
     }
 
-    private tryBuildWoodBlock(sessionId: string, data: unknown): boolean {
+    private tryRemoveDeployable(sessionId: string, data: unknown): boolean {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
         if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
-        if (player.activeItem !== ITEM_WOOD || this.getHotbarCount(player, player.activeSlot) < BUILD_BLOCK_COST) return false;
-
-        const cell = this.getBuildCellFromData(data);
-        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
-        if (this.isBuildCellOccupied(cell, cell.x, cell.y)) return false;
-
-        const block = new WoodBlockState();
-        const maxHealth = WOOD_BLOCK_HEALTH + 5 * Math.max(0, player.barricadeHealthUpgrades || 0);
-        block.id = this.getWoodBlockIdForCell(cell);
-        block.x = cell.x;
-        block.y = cell.y;
-        block.health = maxHealth;
-        block.maxHealth = maxHealth;
-        this.state.woodBlocks.set(block.id, block);
-        this.consumeActiveWood(player, BUILD_BLOCK_COST);
-        player.wood = this.getTotalHeldWood(player);
-        return true;
-    }
-
-    private tryRemoveWoodBlock(sessionId: string, data: unknown): boolean {
-        const sp = this.serverPlayers.get(sessionId);
-        const player = this.state.players.get(sessionId);
-        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
-        if (player.activeItem !== ITEM_HAMMER && player.activeItem !== ITEM_WOOD) return false;
-
-        const cell = this.getBuildCellFromData(data);
-        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
-
-        const woodBlockId = this.getWoodBlockIdForCell(cell);
-        if (this.state.woodBlocks.has(woodBlockId)) {
-            if (!this.addWoodToHotbar(player, BUILD_BLOCK_COST)) return false;
-            this.state.woodBlocks.delete(woodBlockId);
-            player.wood = this.getTotalHeldWood(player);
-            return true;
-        }
-
         if (player.activeItem !== ITEM_HAMMER) return false;
+
+        const cell = this.getBuildCellFromData(data);
+        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
+
         const campfireId = this.getCampfireIdForCell(cell);
         if (this.removeCampfire(campfireId)) {
             this.grantCampfireItem(player);
@@ -3034,21 +2972,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!this.state.caltrops.has(caltropsId)) return false;
         if (!this.grantHotbarItem(player, ITEM_WOOD_CALTROPS)) return false;
         this.state.caltrops.delete(caltropsId);
-        return true;
-    }
-
-    private tryRepairWoodBlock(sessionId: string, data: unknown): boolean {
-        const sp = this.serverPlayers.get(sessionId);
-        const player = this.state.players.get(sessionId);
-        if (!sp || !sp.alive || !player || this.state.gameOver || !this.state.gameStarted) return false;
-        if (player.activeItem !== ITEM_HAMMER) return false;
-
-        const cell = this.getBuildCellFromData(data);
-        if (!cell || !this.isBuildCellInRange(player, cell.x, cell.y)) return false;
-
-        const block = this.state.woodBlocks.get(this.getWoodBlockIdForCell(cell));
-        if (!block || block.health >= block.maxHealth) return false;
-        block.health = Math.min(block.maxHealth, block.health + WOOD_BLOCK_REPAIR_AMOUNT);
         return true;
     }
 
@@ -3109,10 +3032,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         return { id: `${col}-${row}`, col, row, x, y };
     }
 
-    private getWoodBlockIdForCell(cell: { col: number; row: number }): string {
-        return `wood-${cell.col}-${cell.row}`;
-    }
-
     private getCampfireIdForCell(cell: { col: number; row: number }): string {
         return `campfire-${cell.col}-${cell.row}`;
     }
@@ -3128,7 +3047,6 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private isBuildCellOccupied(cell: { col: number; row: number }, blockX: number, blockY: number): boolean {
-        if (this.state.woodBlocks.has(this.getWoodBlockIdForCell(cell))) return true;
         if (this.state.campfires.has(this.getCampfireIdForCell(cell))) return true;
         if (this.state.caltrops.has(this.getCaltropsIdForCell(cell))) return true;
         if (this.collidesWithLayer3TableFoot(blockX, blockY, BUILD_BLOCK_HALF_SIZE)) return true;
@@ -3564,24 +3482,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         return collides;
     }
 
-    private collidesWithWoodBlockFoot(x: number, y: number, radius: number): boolean {
-        let collides = false;
-        this.state.woodBlocks.forEach((block) => {
-            if (collides) return;
-            collides = circleOverlapsAabb(
-                x,
-                y,
-                radius,
-                block.x,
-                block.y,
-                BUILD_BLOCK_HALF_SIZE,
-                BUILD_BLOCK_HALF_SIZE,
-            );
-        });
-
-        return collides;
-    }
-
     private collidesWithLayer3TableFoot(x: number, y: number, radius: number): boolean {
         let collides = false;
         const testTable = (table: EnchantmentTableState | CraftingTableState) => {
@@ -3604,8 +3504,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private collidesWithEnemyWorldFoot(x: number, y: number, radius: number): boolean {
         this.incrementEnemyCounter("enemyWorldCollisionChecks");
-        return this.collidesWithWoodBlockFoot(x, y, radius)
-            || this.collidesWithLayer3TableFoot(x, y, radius)
+        return this.collidesWithLayer3TableFoot(x, y, radius)
             || this.mapSolidOverlapsAabb(x, y, radius, radius);
     }
 
@@ -3613,7 +3512,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         const footX = playerX;
         const footY = playerY + PLAYER_TREE_Y_OFFSET;
         return this.collidesWithTestTreeTrunk(playerX, playerY)
-            || this.collidesWithWoodBlockFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS)
             || this.collidesWithLayer3TableFoot(footX, footY, PLAYER_TREE_FOOT_RADIUS)
             || this.collidesWithMapTiles(playerX, playerY);
     }
@@ -3875,7 +3773,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             + `tick=${tickDurationMs.toFixed(1)}ms, active=${this.state.enemies.size}/${MAX_ACTIVE_ENEMIES}, `
             + `queued=${this.pendingEnemySpawns.length}, players=${this.state.players.size}, `
             + `playerBullets=${this.state.playerBullets.size}, enemyBullets=${this.state.enemyBullets.size}, `
-            + `woodBlocks=${this.state.woodBlocks.size}, spawned=${metrics.spawnedEnemies}, `
+            + `spawned=${metrics.spawnedEnemies}, `
             + `scheduledWave=${metrics.scheduledWaveIndex ?? "none"}, scheduledEnemies=${metrics.scheduledEnemyCount}, `
             + `separationChecks=${metrics.separationChecks}, separationResolutions=${metrics.separationResolutions}, `
             + `phases=[${phaseText || "none"}], enemyDetails=[${enemySubphaseText || "none"}], `
@@ -3921,7 +3819,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             mode: enemyType === ENEMY_TYPE_DARK_KNIGHT ? "dkWalk" : "chase",
             modeMs: 0,
             targetId: target?.id || null,
-            targetWoodBlockId: null,
             darkKnightTargetKind: null,
             darkKnightMarkX: e.x,
             darkKnightMarkY: e.y,
@@ -3955,7 +3852,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                 if (!target) {
                     enemy.action = "idle";
                     se.targetId = null;
-                    se.targetWoodBlockId = null;
                     se.path = [];
                     se.pathTargetCell = null;
                     return;
@@ -3977,33 +3873,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                     return;
                 }
 
-                if (se.mode === "woodAttack" || se.mode === "woodWindup") {
-                    const block = se.targetWoodBlockId ? this.state.woodBlocks.get(se.targetWoodBlockId) : undefined;
-                    se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
-                    const routeOpened = this.hasDirectWoodBlockPath(
-                        enemy.x,
-                        enemy.y + ENEMY_FOOT_Y_OFFSET,
-                        target.player.x,
-                        target.player.y + PLAYER_TREE_Y_OFFSET,
-                    );
-
-                    if (!routeOpened) {
-                        if (this.shouldRefreshEnemyPath(se, target.player)) {
-                            this.refreshEnemyWoodBlockPath(enemy, se, target.player);
-                        }
-                    }
-
-                    if (!block || routeOpened || se.path.length > 0) {
-                        se.mode = "chase";
-                        se.modeMs = 0;
-                        se.targetWoodBlockId = null;
-                        enemy.action = "run";
-                    } else {
-                        this.tickEnemyWoodBlockAttack(id, enemy, se, block, dtMs);
-                        return;
-                    }
-                }
-
                 if (se.mode === "attack") {
                     enemy.action = "attack";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -4019,7 +3888,6 @@ export class ShmupRoom extends Room<GameRoomState> {
                     if (this.hasEnemyLineOfSightToPlayer(enemy, target.player)) {
                         this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
                     }
-                    se.targetWoodBlockId = null;
                     enemy.action = "idle";
                     if (se.mode !== "windup") {
                         se.mode = "windup";
@@ -4059,14 +3927,13 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
 
                 const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
-                if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+                if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
                     se.path = [];
                     se.pathTargetCell = null;
                     se.pathRefreshMs = 0;
-                    se.targetWoodBlockId = null;
                     const prevX = enemy.x;
                     const prevY = enemy.y;
-                    const resolved = this.moveEnemyWithWoodBlocks(
+                    const resolved = this.moveEnemyWithWorldColliders(
                         enemy,
                         enemy.x + (dx / distance) * move,
                         enemy.y + (dy / distance) * move,
@@ -4079,7 +3946,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 const prevDirectX = enemy.x;
                 const prevDirectY = enemy.y;
-                const directResolved = this.moveEnemyWithWoodBlocks(
+                const directResolved = this.moveEnemyWithWorldColliders(
                     enemy,
                     enemy.x + (dx / distance) * move,
                     enemy.y + (dy / distance) * move,
@@ -4087,15 +3954,11 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
                 if (this.shouldRefreshEnemyPath(se, target.player)) {
-                    this.refreshEnemyWoodBlockPath(enemy, se, target.player);
+                    this.refreshEnemyPath(enemy, se, target.player);
                 }
 
                 const pathMoved = this.followEnemyPath(enemy, se, move);
                 if (pathMoved) return;
-
-                const blockingBlock = this.findEnemyBlockingWoodBlock(enemy, target.player)
-                    || this.findNearestEnemyWoodBlockInAttackRange(enemy);
-                if (blockingBlock && this.tickEnemyWoodBlockAttack(id, enemy, se, blockingBlock, dtMs, move)) return;
 
                 enemy.x = directResolved.x;
                 enemy.y = directResolved.y;
@@ -4167,7 +4030,6 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         if (canStartCast) {
             this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
-            se.targetWoodBlockId = null;
             se.path = [];
             se.pathTargetCell = null;
             enemy.action = "charge";
@@ -4192,14 +4054,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+        if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
             se.pathTargetCell = null;
             se.pathRefreshMs = 0;
-            se.targetWoodBlockId = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWoodBlocks(
+            const resolved = this.moveEnemyWithWorldColliders(
                 enemy,
                 enemy.x + (dx / distance) * move,
                 enemy.y + (dy / distance) * move,
@@ -4212,7 +4073,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const prevDirectX = enemy.x;
         const prevDirectY = enemy.y;
-        const directResolved = this.moveEnemyWithWoodBlocks(
+        const directResolved = this.moveEnemyWithWorldColliders(
             enemy,
             enemy.x + (dx / distance) * move,
             enemy.y + (dy / distance) * move,
@@ -4220,7 +4081,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
         if (this.shouldRefreshEnemyPath(se, target.player)) {
-            this.refreshEnemyWoodBlockPath(enemy, se, target.player);
+            this.refreshEnemyPath(enemy, se, target.player);
         }
 
         const pathMoved = this.followEnemyPath(enemy, se, move);
@@ -4271,7 +4132,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.modeMs = Math.max(0, se.modeMs - dtMs);
             if (se.modeMs === 0) {
                 se.mode = "dkWalk";
-                se.targetWoodBlockId = null;
                 se.darkKnightTargetKind = null;
                 enemy.action = "walk";
             }
@@ -4282,7 +4142,6 @@ export class ShmupRoom extends Room<GameRoomState> {
             enemy.action = "run";
             if (this.tickDarkKnightRush(enemyId, enemy, se, dtSec, dtMs)) return;
             se.mode = "dkWalk";
-            se.targetWoodBlockId = null;
             se.darkKnightTargetKind = null;
         }
 
@@ -4297,14 +4156,13 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (distance <= 0) return;
 
         const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
-        if (this.hasDirectWoodBlockPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+        if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
             se.path = [];
             se.pathTargetCell = null;
             se.pathRefreshMs = 0;
-            se.targetWoodBlockId = null;
             const prevX = enemy.x;
             const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWoodBlocks(
+            const resolved = this.moveEnemyWithWorldColliders(
                 enemy,
                 enemy.x + (dx / distance) * move,
                 enemy.y + (dy / distance) * move,
@@ -4317,7 +4175,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         const prevDirectX = enemy.x;
         const prevDirectY = enemy.y;
-        const directResolved = this.moveEnemyWithWoodBlocks(
+        const directResolved = this.moveEnemyWithWorldColliders(
             enemy,
             enemy.x + (dx / distance) * move,
             enemy.y + (dy / distance) * move,
@@ -4325,7 +4183,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         se.pathRefreshMs = Math.max(0, se.pathRefreshMs - dtMs);
         if (this.shouldRefreshEnemyPath(se, target.player)) {
-            this.refreshEnemyWoodBlockPath(enemy, se, target.player);
+            this.refreshEnemyPath(enemy, se, target.player);
         }
 
         const pathMoved = this.followEnemyPath(enemy, se, move);
@@ -4354,27 +4212,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         se.modeMs = DARK_KNIGHT_MIN_RUSH_MS;
         se.darkKnightMarkX = target.x;
         se.darkKnightMarkY = target.y;
-        se.targetWoodBlockId = null;
         se.darkKnightTargetKind = "playerMark";
         se.path = [];
         se.pathTargetCell = null;
         se.pathRefreshMs = 0;
 
-        const blockingBlock = this.findBlockingWoodBlockToPoint(
-            enemy.x,
-            enemy.y + ENEMY_FOOT_Y_OFFSET,
-            target.x,
-            target.y + PLAYER_TREE_Y_OFFSET,
-        );
-        if (blockingBlock) {
-            se.targetWoodBlockId = blockingBlock.id;
-            se.darkKnightTargetKind = "woodBlock";
-        }
-
-        const direction = directionFromInput(
-            (blockingBlock?.x ?? target.x) - enemy.x,
-            ((blockingBlock?.y ?? target.y) - enemy.y),
-        );
+        const direction = directionFromInput(target.x - enemy.x, target.y - enemy.y);
         if (direction) enemy.facingDirection = direction;
         enemy.action = "run";
     }
@@ -4382,45 +4225,8 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickDarkKnightRush(enemyId: string, enemy: EnemyState, se: ServerEnemy, dtSec: number, dtMs: number): boolean {
         se.modeMs = Math.max(0, se.modeMs - dtMs);
         const canAttack = se.modeMs === 0;
-        let targetX = se.darkKnightMarkX;
-        let targetY = se.darkKnightMarkY;
-
-        if (se.darkKnightTargetKind === "woodBlock") {
-            const block = se.targetWoodBlockId ? this.state.woodBlocks.get(se.targetWoodBlockId) : undefined;
-            if (!block) return false;
-
-            const footX = enemy.x;
-            const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
-            const distanceSq = pointAabbDistanceSq(
-                footX,
-                footY,
-                block.x,
-                block.y,
-                BUILD_BLOCK_HALF_SIZE,
-                BUILD_BLOCK_HALF_SIZE,
-            );
-            if (distanceSq <= DARK_KNIGHT_WOOD_REACH_RANGE * DARK_KNIGHT_WOOD_REACH_RANGE) {
-                if (!canAttack) return true;
-                this.startDarkKnightAttack(enemyId, enemy, se);
-                return true;
-            }
-
-            targetX = block.x;
-            targetY = block.y - ENEMY_FOOT_Y_OFFSET;
-        } else {
-            const blockingBlock = this.findBlockingWoodBlockToPoint(
-                enemy.x,
-                enemy.y + ENEMY_FOOT_Y_OFFSET,
-                se.darkKnightMarkX,
-                se.darkKnightMarkY + PLAYER_TREE_Y_OFFSET,
-            );
-            if (blockingBlock) {
-                se.targetWoodBlockId = blockingBlock.id;
-                se.darkKnightTargetKind = "woodBlock";
-                targetX = blockingBlock.x;
-                targetY = blockingBlock.y - ENEMY_FOOT_Y_OFFSET;
-            }
-        }
+        const targetX = se.darkKnightMarkX;
+        const targetY = se.darkKnightMarkY;
 
         const dx = targetX - enemy.x;
         const dy = targetY - enemy.y;
@@ -4434,7 +4240,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const move = Math.min(DARK_KNIGHT_RUSH_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
         const prevX = enemy.x;
         const prevY = enemy.y;
-        const resolved = this.moveEnemyWithWoodBlocks(
+        const resolved = this.moveEnemyWithWorldColliders(
             enemy,
             enemy.x + (dx / distance) * move,
             enemy.y + (dy / distance) * move,
@@ -4444,18 +4250,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         enemy.y = resolved.y;
         this.setEnemyFacingFromMovement(enemy, prevX, prevY);
 
-        if (!moved && se.darkKnightTargetKind !== "woodBlock") {
-            const blockingBlock = this.findNearestEnemyWoodBlockInAttackRange(enemy)
-                || this.findBlockingWoodBlockToPoint(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, targetX, targetY + ENEMY_FOOT_Y_OFFSET);
-            if (blockingBlock) {
-                se.targetWoodBlockId = blockingBlock.id;
-                se.darkKnightTargetKind = "woodBlock";
-            } else {
-                return false;
-            }
-        }
-
-        return true;
+        return moved;
     }
 
     private startDarkKnightAttack(enemyId: string, enemy: EnemyState, se: ServerEnemy) {
@@ -4469,7 +4264,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         }, DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS);
     }
 
-    private moveEnemyWithWoodBlocks(enemy: EnemyState, nextX: number, nextY: number): { x: number; y: number } {
+    private moveEnemyWithWorldColliders(enemy: EnemyState, nextX: number, nextY: number): { x: number; y: number } {
         return this.measureEnemySubphase("movement", () => {
             this.incrementEnemyCounter("movementCalls");
             let resolvedX = clamp(nextX, -ENEMY1_EDGE_OFFSET, WORLD_WIDTH + ENEMY1_EDGE_OFFSET);
@@ -4488,31 +4283,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         });
     }
 
-    private hasDirectWoodBlockPath(fromX: number, fromY: number, toX: number, toY: number): boolean {
+    private hasDirectEnemyPath(fromX: number, fromY: number, toX: number, toY: number): boolean {
         return this.measureEnemySubphase("directPath", () => {
             this.incrementEnemyCounter("directPathChecks");
             let clear = true;
-            this.state.woodBlocks.forEach((block) => {
-                if (!clear) return;
-                this.incrementEnemyCounter("directPathWoodBlockChecks");
-                clear = !capsuleOverlapsAabb(
-                    fromX,
-                    fromY,
-                    toX,
-                    toY,
-                    ENEMY_FOOT_RADIUS,
-                    block.x,
-                    block.y,
-                    BUILD_BLOCK_HALF_SIZE,
-                    BUILD_BLOCK_HALF_SIZE,
-                );
-            });
-
-            if (!clear) {
-                this.incrementEnemyCounter("directPathBlockedByWood");
-                return false;
-            }
-
             const testTable = (table: EnchantmentTableState | CraftingTableState) => {
                 if (!clear) return;
                 clear = !capsuleOverlapsAabb(
@@ -4565,7 +4339,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         return this.gridDistance(se.pathTargetCell, targetCell) >= ENEMY_PATH_TARGET_REFRESH_CELLS;
     }
 
-    private refreshEnemyWoodBlockPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
+    private refreshEnemyPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
         if (this.enemyPathRefreshesThisTick >= ENEMY_PATH_MAX_REFRESHES_PER_TICK) {
             this.incrementEnemyCounter("pathRefreshDeferred");
             se.pathRefreshMs = ENEMY_PATH_REFRESH_DEFER_MS + rndInt(0, ENEMY_PATH_REFRESH_DEFER_MS);
@@ -4576,7 +4350,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         return this.measureEnemySubphase("pathRefresh", () => {
             this.incrementEnemyCounter("pathRefreshes");
             const targetCell = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
-            se.path = this.findEnemyWoodBlockPath(enemy, target);
+            se.path = this.findEnemyPath(enemy, target);
             se.pathRefreshMs = ENEMY_PATH_REFRESH_MS;
             se.pathTargetCell = targetCell;
             if (se.path.length > 0) {
@@ -4676,7 +4450,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             const step = Math.min(moveDistance, distance);
             const prevX = enemy.x;
             const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWoodBlocks(
+            const resolved = this.moveEnemyWithWorldColliders(
                 enemy,
                 enemy.x + (dx / distance) * step,
                 enemy.y + (dy / distance) * step,
@@ -4690,116 +4464,6 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         return false;
-    }
-
-    private tickEnemyWoodBlockAttack(enemyId: string, enemy: EnemyState, se: ServerEnemy, block: WoodBlockState, dtMs: number, moveDistance = 0): boolean {
-        se.targetWoodBlockId = block.id;
-        const footX = enemy.x;
-        const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
-        const distanceSq = pointAabbDistanceSq(
-            footX,
-            footY,
-            block.x,
-            block.y,
-            BUILD_BLOCK_HALF_SIZE,
-            BUILD_BLOCK_HALF_SIZE,
-        );
-        const attackRange = ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON + ENEMY_FOOT_RADIUS;
-
-        if (distanceSq > attackRange * attackRange) {
-            se.mode = "chase";
-            se.modeMs = 0;
-            enemy.action = "run";
-            if (moveDistance > 0) {
-                const dx = block.x - footX;
-                const dy = block.y - footY;
-                const distance = Math.hypot(dx, dy);
-                if (distance > 0) {
-                    const prevX = enemy.x;
-                    const prevY = enemy.y;
-                    const resolved = this.moveEnemyWithWoodBlocks(
-                        enemy,
-                        enemy.x + (dx / distance) * moveDistance,
-                        enemy.y + (dy / distance) * moveDistance,
-                    );
-                    enemy.x = resolved.x;
-                    enemy.y = resolved.y;
-                    this.setEnemyFacingFromMovement(enemy, prevX, prevY);
-                }
-            }
-            return true;
-        }
-
-        this.faceEnemyTowardPoint(enemy, block.x, block.y);
-        se.path = [];
-        if (se.mode === "woodAttack") {
-            enemy.action = "attack";
-            se.modeMs = Math.max(0, se.modeMs - dtMs);
-            if (se.modeMs === 0) {
-                se.mode = "woodWindup";
-                se.modeMs = ENEMY1_WINDUP_MS;
-                enemy.action = "idle";
-            }
-            return true;
-        }
-
-        enemy.action = "idle";
-        if (se.mode !== "woodWindup") {
-            se.mode = "woodWindup";
-            se.modeMs = ENEMY1_WINDUP_MS;
-            return true;
-        }
-
-        se.modeMs = Math.max(0, se.modeMs - dtMs);
-        if (se.modeMs === 0) {
-            se.mode = "woodAttack";
-            se.modeMs = ENEMY1_ATTACK_MS;
-            enemy.action = "attack";
-            enemy.attackSeq++;
-            const targetBlockId = block.id;
-            setTimeout(() => {
-                this.applyEnemyWoodBlockImpact(enemyId, targetBlockId);
-            }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
-        }
-
-        return true;
-    }
-
-    private findEnemyBlockingWoodBlock(enemy: EnemyState, target: PlayerState): WoodBlockState | null {
-        return this.findBlockingWoodBlockToPoint(
-            enemy.x,
-            enemy.y + ENEMY_FOOT_Y_OFFSET,
-            target.x,
-            target.y + PLAYER_TREE_Y_OFFSET,
-        );
-    }
-
-    private findBlockingWoodBlockToPoint(fromX: number, fromY: number, toX: number, toY: number): WoodBlockState | null {
-        return this.measureEnemySubphase("woodBlockScan", () => {
-            let nearestBlock: WoodBlockState | null = null;
-            let nearestT = Number.POSITIVE_INFINITY;
-
-            this.state.woodBlocks.forEach((block) => {
-                this.incrementEnemyCounter("woodBlockSegmentChecks");
-                const t = segmentAabbIntersectionT(
-                    fromX,
-                    fromY,
-                    toX,
-                    toY,
-                    block.x,
-                    block.y,
-                    BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
-                    BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
-                );
-                if (t === null) return;
-                if (t < nearestT) {
-                    nearestBlock = block;
-                    nearestT = t;
-                }
-            });
-
-            return nearestBlock;
-        });
     }
 
     private applyDarkKnightAoeImpact(enemyId: string, attackOrigin: AttackOrigin) {
@@ -4827,76 +4491,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (hurt) this.broadcast("playerHurt", hurt);
         });
 
-        const destroyedWoodBlockIds: string[] = [];
-        this.state.woodBlocks.forEach((block, blockId) => {
-            if (!circleOverlapsAabb(
-                impactX,
-                impactY,
-                DARK_KNIGHT_AOE_RADIUS,
-                block.x,
-                block.y,
-                BUILD_BLOCK_HALF_SIZE,
-                BUILD_BLOCK_HALF_SIZE,
-            )) return;
-
-            block.health = Math.max(0, block.health - DARK_KNIGHT_ATTACK_DAMAGE);
-            if (block.health <= 0) destroyedWoodBlockIds.push(blockId);
-        });
-        destroyedWoodBlockIds.forEach((blockId) => this.state.woodBlocks.delete(blockId));
     }
 
-    private findNearestEnemyWoodBlockInAttackRange(enemy: EnemyState): WoodBlockState | null {
-        return this.measureEnemySubphase("woodBlockScan", () => {
-            const footX = enemy.x;
-            const footY = enemy.y + ENEMY_FOOT_Y_OFFSET;
-            const attackRange = ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON + ENEMY_FOOT_RADIUS;
-            const attackRangeSq = attackRange * attackRange;
-            let nearestBlock: WoodBlockState | null = null;
-            let nearestDistanceSq = Number.POSITIVE_INFINITY;
-
-            this.state.woodBlocks.forEach((block) => {
-                this.incrementEnemyCounter("woodBlockRangeChecks");
-                const distanceSq = pointAabbDistanceSq(
-                    footX,
-                    footY,
-                    block.x,
-                    block.y,
-                    BUILD_BLOCK_HALF_SIZE,
-                    BUILD_BLOCK_HALF_SIZE,
-                );
-                if (distanceSq > attackRangeSq || distanceSq >= nearestDistanceSq) return;
-                nearestBlock = block;
-                nearestDistanceSq = distanceSq;
-            });
-
-            return nearestBlock;
-        });
-    }
-
-    private applyEnemyWoodBlockImpact(enemyId: string, blockId: string) {
-        if (this.state.gameOver) return;
-        const enemy = this.state.enemies.get(enemyId);
-        const block = this.state.woodBlocks.get(blockId);
-        if (!enemy || enemy.isDead || !block) return;
-
-        const attackRange = ENEMY1_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON + ENEMY_FOOT_RADIUS;
-        const distanceSq = pointAabbDistanceSq(
-            enemy.x,
-            enemy.y + ENEMY_FOOT_Y_OFFSET,
-            block.x,
-            block.y,
-            BUILD_BLOCK_HALF_SIZE,
-            BUILD_BLOCK_HALF_SIZE,
-        );
-        if (distanceSq > attackRange * attackRange) return;
-
-        block.health = Math.max(0, block.health - ENEMY_WOOD_BLOCK_ATTACK_DAMAGE);
-        if (block.health <= 0) {
-            this.state.woodBlocks.delete(blockId);
-        }
-    }
-
-    private findEnemyWoodBlockPath(enemy: EnemyState, target: PlayerState): PathCell[] {
+    private findEnemyPath(enemy: EnemyState, target: PlayerState): PathCell[] {
         this.incrementEnemyCounter("pathRequests");
         const start = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
         const targetCenter = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
@@ -5019,7 +4616,6 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private isBuildPathCellBlocked(col: number, row: number): boolean {
-        if (this.state.woodBlocks.has(`wood-${col}-${row}`)) return true;
         const center = this.buildCellCenter({ col, row });
         if (this.collidesWithLayer3TableFoot(center.x, center.y, ENEMY_FOOT_RADIUS)) return true;
         return this.mapSolidOverlapsAabb(center.x, center.y, ENEMY_FOOT_RADIUS, ENEMY_FOOT_RADIUS);
@@ -5151,31 +4747,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (!sp || !sp.alive || player.isDead) return;
 
             if (!overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
-            if (this.isEnemyAttackBlockedByWood(attackOrigin, player)) return;
 
             const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
         });
-    }
-
-    private isEnemyAttackBlockedByWood(attackOrigin: AttackOrigin, player: PlayerState): boolean {
-        let nearestBlockT = Number.POSITIVE_INFINITY;
-
-        this.state.woodBlocks.forEach((block) => {
-            const t = segmentAabbIntersectionT(
-                attackOrigin.x,
-                attackOrigin.y,
-                player.x,
-                player.y,
-                block.x,
-                block.y,
-                BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
-                BUILD_BLOCK_HALF_SIZE + ENEMY_ATTACK_WOOD_BLOCK_PADDING,
-            );
-            if (t !== null && t < nearestBlockT) nearestBlockT = t;
-        });
-
-        return nearestBlockT < 1;
     }
 
     private getEnemyAttackVector(attackOrigin: AttackOrigin, target: PlayerState, fallbackDirection: string): AttackVector {

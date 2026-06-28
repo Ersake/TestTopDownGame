@@ -101,8 +101,7 @@ Important server files:
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
-| `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"` | Building helpers | Requests server-authoritative wood block placement, removal, or repair. |
-| `"placeCampfire"`, `"placeCaltrops"` | Placement helpers | Requests server-authoritative deployable placement. |
+| `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"` | Placement helpers | Requests server-authoritative deployable placement or hammer removal. |
 | `"craftItem"` | `RoomClient.sendCraftItem()` | Requests crafting by recipe ID. |
 | `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Requests an enchantment-table skill spend with `{ upgradeId, item, slot }`; the server validates skill points, table range, item tree, hotbar slot contents, prerequisites, and max ranks. |
 | `"setOutfitColor"` | `RoomClient.sendSetOutfitColor()` | Requests player presentation color changes. |
@@ -151,7 +150,6 @@ Durable game facts should usually be schema state, not transient messages.
 | `enemyBullets` | `MapSchema<EnemyBulletState>` | Server-owned enemy bullet positions. |
 | `trees` | `MapSchema<TreeState>` | Active harvestable trees. |
 | `logs` | `MapSchema<LogState>` | Dropped wood pickups. |
-| `woodBlocks` | `MapSchema<WoodBlockState>` | Player-built barricades with server-owned health. |
 | `campfires` | `MapSchema<CampfireState>` | Player-placed healing deployables. |
 | `caltrops` | `MapSchema<CaltropState>` | Player-placed slowing/damage deployables. |
 | `mapChunks` | `MapSchema<MapChunkState>` | Sparse server-owned map tile chunks rendered by editor and saved-map game rooms. |
@@ -179,7 +177,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Deployable State
 
-`WoodBlockState`, `CampfireState`, and `CaltropState` sync renderable deployables created by server-authoritative building and crafting systems.
+`CampfireState` and `CaltropState` sync renderable deployables created by server-authoritative crafting and placement systems.
 
 ### Private Server State
 
@@ -219,7 +217,7 @@ Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no t
 
 Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
-Enemy navigation treats player-built wood blocks and solid saved-map tiles as blocked cells, so pathing routes around authored colliders instead of walking through them.
+Enemy navigation treats solid saved-map tiles and layer-3 table objects as blocked cells, so pathing routes around authored colliders instead of walking through them.
 
 In saved-map regular rooms, wood drops relocate to nearby green/walkable authored tiles and are not spawned on non-green tiles. Player projectiles are removed when their movement segment crosses a solid authored tile.
 

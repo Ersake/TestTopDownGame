@@ -130,18 +130,9 @@ const MAP_DRAFT_STORAGE_KEY = 'testtopdown-map-drafts:v1';
 const MAP_DRAFT_VERSION = 5;
 const EDITOR_WORLD_BACKGROUND_COLOR = 0x707070;
 const EDITOR_WORLD_BACKGROUND_CSS = '#707070';
-const WOOD_BLOCK_SIZE = BUILD_GRID_SIZE;
-const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
-const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
-const WOOD_BLOCK_HEALTH_BAR_WIDTH = 28;
-const WOOD_BLOCK_HEALTH_BAR_HEIGHT = 4;
-const WOOD_BLOCK_HEALTH_BAR_Y_OFFSET = -24;
-const WOOD_BLOCK_HEALTH_BAR_FILL_COLOR = 0x22ff44;
-const WOOD_BLOCK_HIT_FLASH_MS = 90;
 const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
 const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
 const BUILD_DRAG_SEND_INTERVAL_MS = 35;
-const HAMMER_REPAIR_TICK_MS = 500;
 const CAMPFIRE_DISPLAY_SIZE = 84;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
@@ -301,7 +292,6 @@ const PLAYER_BUFFS = [
     { field: 'bowDamageUpgrades', label: 'Bow damage' },
     { field: 'bowPierceUpgrades', label: 'Bow pierce' },
     { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
-    { field: 'barricadeHealthUpgrades', label: 'Barricade health' },
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
 ];
 const ENCHANTMENT_MAX_RANK = 3;
@@ -330,7 +320,6 @@ const ENCHANTMENT_SKILL_TREES = {
         displayName: 'Hammer',
         nodes: [
             { id: 'hammer_wood_gather', label: '+50% wood gather', field: 'woodGatherUpgrades' },
-            { id: 'hammer_barricade_hp', label: '+5 barricade HP', field: 'barricadeHealthUpgrades', prerequisite: 'hammer_wood_gather' },
         ],
     },
 };
@@ -485,7 +474,6 @@ export class Game extends Phaser.Scene {
         this.casterChargeSounds = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
-        this.woodBlockSprites    = new Map();
         this.campfireSprites     = new Map();
         this.caltropSprites      = new Map();
         this.enchantmentTableSprites = new Map();
@@ -2688,7 +2676,7 @@ export class Game extends Phaser.Scene {
     }
 
     syncBuildModeForActiveItem(item) {
-        const shouldBuild = item === ITEM_WOOD || item === ITEM_HAMMER || item === ITEM_CAMPFIRE || item === ITEM_WOOD_CALTROPS;
+        const shouldBuild = item === ITEM_HAMMER || item === ITEM_CAMPFIRE || item === ITEM_WOOD_CALTROPS;
         if (this.isBuildModeActive === shouldBuild && this.buildPreviewKind === item) return;
 
         this.isBuildModeActive = shouldBuild;
@@ -3480,60 +3468,6 @@ export class Game extends Phaser.Scene {
             this.logSprites.delete(id);
         });
 
-        const addWoodBlock = (block, id) => {
-            const blockId = id || block.id;
-            if (!blockId || this.woodBlockSprites.has(blockId)) return;
-
-            const fill = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, WOOD_BLOCK_FILL_COLOR, 1)
-                .setOrigin(0.5)
-                .setDepth(80);
-            const outline = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE)
-                .setOrigin(0.5)
-                .setStrokeStyle(2, WOOD_BLOCK_STROKE_COLOR, 0.85)
-                .setDepth(81);
-            const healthBackground = this.add.graphics().setDepth(82);
-            const healthFill = this.add.graphics().setDepth(83);
-            this.registerWorldObject(fill, outline, healthBackground, healthFill);
-
-            this.woodBlockSprites.set(blockId, {
-                fill,
-                outline,
-                healthBackground,
-                healthFill,
-                block,
-                lastHealth: block.health ?? block.maxHealth ?? 5,
-                flashEvent: null,
-            });
-            this.updateWoodBlockHealthBar(blockId);
-
-            block.onChange(() => {
-                const sprites = this.woodBlockSprites.get(blockId);
-                if (!sprites) return;
-                sprites.fill.setPosition(block.x, block.y);
-                sprites.outline.setPosition(block.x, block.y);
-                const health = block.health ?? block.maxHealth ?? 5;
-                if (health < sprites.lastHealth) {
-                    this.flashWoodBlockHit(blockId);
-                }
-                sprites.lastHealth = health;
-                this.updateWoodBlockHealthBar(blockId);
-            });
-        };
-
-        state.woodBlocks.onAdd(addWoodBlock);
-        state.woodBlocks.forEach(addWoodBlock);
-
-        state.woodBlocks.onRemove((_block, id) => {
-            const sprites = this.woodBlockSprites.get(id);
-            if (!sprites) return;
-            sprites.fill.destroy();
-            sprites.outline.destroy();
-            sprites.healthBackground.destroy();
-            sprites.healthFill.destroy();
-            sprites.flashEvent?.remove(false);
-            this.woodBlockSprites.delete(id);
-        });
-
         const addCampfire = (campfire, id) => {
             const campfireId = id || campfire.id;
             if (!campfireId || this.campfireSprites.has(campfireId)) return;
@@ -4154,7 +4088,7 @@ export class Game extends Phaser.Scene {
                 .setDepth(CALTROPS_DEPTH)
                 .setVisible(false);
         } else {
-            this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
+            this.buildPreview = this.add.rectangle(0, 0, BUILD_GRID_SIZE, BUILD_GRID_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
                 .setOrigin(0.5)
                 .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
                 .setDepth(82)
@@ -4271,9 +4205,7 @@ export class Game extends Phaser.Scene {
         this.activeBuildPointer = pointer;
 
         const now = this.time.now;
-        const activeItem = this.getLocalActiveItem();
-        const minInterval = activeItem === ITEM_HAMMER && this.activeBuildButton === 0 ? HAMMER_REPAIR_TICK_MS : BUILD_DRAG_SEND_INTERVAL_MS;
-        if (now - this.lastBuildDragSentAt < minInterval) return;
+        if (now - this.lastBuildDragSentAt < BUILD_DRAG_SEND_INTERVAL_MS) return;
         this.sendBuildIntentAtPointer(pointer, this.activeBuildButton, false);
     }
 
@@ -4292,23 +4224,17 @@ export class Game extends Phaser.Scene {
         if (!cell) return;
 
         const activeItem = this.getLocalActiveItem();
-        const isRepairTick = button === 0 && activeItem === ITEM_HAMMER;
-        if (isRepairTick && !force && this.time.now - this.lastBuildDragSentAt < HAMMER_REPAIR_TICK_MS) return;
-        if (!force && !isRepairTick && cell.id === this.lastBuildDragCellId) return;
+        if (!force && cell.id === this.lastBuildDragCellId) return;
 
         this.lastBuildDragCellId = cell.id;
         this.lastBuildDragSentAt = this.time.now;
 
-        if (button === 0 && activeItem === ITEM_WOOD) {
-            RoomClient.sendBuildWoodBlock(cell.x, cell.y);
-        } else if (button === 0 && activeItem === ITEM_HAMMER) {
-            RoomClient.sendRepairWoodBlock(cell.x, cell.y);
-        } else if (button === 0 && activeItem === ITEM_CAMPFIRE) {
+        if (button === 0 && activeItem === ITEM_CAMPFIRE) {
             RoomClient.sendPlaceCampfire(cell.x, cell.y);
         } else if (button === 0 && activeItem === ITEM_WOOD_CALTROPS) {
             RoomClient.sendPlaceCaltrops(cell.x, cell.y);
-        } else if (button === 2 && (activeItem === ITEM_HAMMER || activeItem === ITEM_WOOD)) {
-            RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
+        } else if (button === 2 && activeItem === ITEM_HAMMER) {
+            RoomClient.sendRemoveDeployable(cell.x, cell.y);
         }
     }
 
@@ -6112,43 +6038,6 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    updateWoodBlockHealthBar(blockId) {
-        const sprites = this.woodBlockSprites.get(blockId);
-        if (!sprites) return;
-
-        const maxHealth = Math.max(1, sprites.block.maxHealth || 5);
-        const health = Phaser.Math.Clamp(sprites.block.health ?? maxHealth, 0, maxHealth);
-        sprites.healthBackground.clear();
-        sprites.healthFill.clear();
-        if (health >= maxHealth) return;
-
-        const x = sprites.block.x - WOOD_BLOCK_HEALTH_BAR_WIDTH * 0.5;
-        const y = sprites.block.y + WOOD_BLOCK_HEALTH_BAR_Y_OFFSET;
-        const fillWidth = (health / maxHealth) * WOOD_BLOCK_HEALTH_BAR_WIDTH;
-
-        sprites.healthBackground.fillStyle(0x050505, 1);
-        sprites.healthBackground.fillRect(x, y, WOOD_BLOCK_HEALTH_BAR_WIDTH, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
-
-        if (fillWidth > 0) {
-            sprites.healthFill.fillStyle(WOOD_BLOCK_HEALTH_BAR_FILL_COLOR, 1);
-            sprites.healthFill.fillRect(x, y, fillWidth, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
-        }
-    }
-
-    flashWoodBlockHit(blockId) {
-        const sprites = this.woodBlockSprites.get(blockId);
-        if (!sprites) return;
-
-        sprites.flashEvent?.remove(false);
-        sprites.fill.setFillStyle(0xffffff, 1);
-        sprites.flashEvent = this.time.delayedCall(WOOD_BLOCK_HIT_FLASH_MS, () => {
-            const current = this.woodBlockSprites.get(blockId);
-            if (!current) return;
-            current.fill.setFillStyle(WOOD_BLOCK_FILL_COLOR, 1);
-            current.flashEvent = null;
-        });
-    }
-
     addExplosion(x, y) {
         const explosion = new Explosion(this, x, y);
         this.registerWorldObject(explosion);
@@ -6196,13 +6085,6 @@ export class Game extends Phaser.Scene {
         });
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
-        });
-        this.woodBlockSprites.forEach(({ fill, outline, healthBackground, healthFill, flashEvent }) => {
-            flashEvent?.remove(false);
-            fill.destroy();
-            outline.destroy();
-            healthBackground.destroy();
-            healthFill.destroy();
         });
         this.campfireSprites.forEach(({ sprite, radius, healBar }) => {
             sprite.destroy();
@@ -6290,7 +6172,6 @@ export class Game extends Phaser.Scene {
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
-        this.woodBlockSprites.clear();
         this.campfireSprites.clear();
         this.caltropSprites.clear();
         this.enchantmentTableSprites.clear();

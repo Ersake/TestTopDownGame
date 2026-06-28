@@ -181,7 +181,7 @@ Use room messages for discrete events that are not naturally represented as dura
 Examples already in use:
 
 - Client to server gameplay: `"input"`, `"attack"`, `"dash"`, `"bowChargeStart"`, `"bowAim"`, `"bowCancel"`, `"axeWhirlwind"`, `"equipSlot"`.
-- Client to server building/crafting: `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"`, `"placeCampfire"`, `"placeCaltrops"`, `"craftItem"`, `"selectUpgrade"`, `"setOutfitColor"`.
+- Client to server building/crafting: `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"`, `"craftItem"`, `"selectUpgrade"`, `"setOutfitColor"`.
 - Map editor client to server: `"placeMapTile"`, `"removeMapTile"`, `"saveMap"`, `"loadMap"`, `"listMaps"`.
 - Development client to server: `"debugSetRound"`.
 - Server to client gameplay: `"treeHit"`, `"enemyHit"`, `"woodPickup"`, `"reviveStarted"`, `"playerHurt"`, `"craftResult"`, `"itemCrafted"`, `"levelReset"`, `"playerLevelUp"`, `"enemyWaveStarted"`.

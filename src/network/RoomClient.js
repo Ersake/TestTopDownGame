@@ -142,19 +142,9 @@ class RoomClient {
         this.room.send("swapHotbarSlots", { fromSlot, toSlot });
     }
 
-    sendBuildWoodBlock(x, y) {
+    sendRemoveDeployable(x, y) {
         if (!this.room) return;
-        this.room.send("buildWoodBlock", { x, y });
-    }
-
-    sendRemoveWoodBlock(x, y) {
-        if (!this.room) return;
-        this.room.send("removeWoodBlock", { x, y });
-    }
-
-    sendRepairWoodBlock(x, y) {
-        if (!this.room) return;
-        this.room.send("repairWoodBlock", { x, y });
+        this.room.send("removeDeployable", { x, y });
     }
 
     sendPlaceCampfire(x, y) {
