@@ -171,7 +171,8 @@ const ENEMY_SEPARATION_ITERATIONS = 2;
 const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_REPATH_MS = 250;
-const ENEMY_PATH_MAX_BUILDS_PER_TICK = 8;
+const ENEMY_PATH_FAILED_RETRY_MS = 900;
+const ENEMY_PATH_MAX_BUILDS_PER_TICK = 3;
 const ENEMY_PATH_MAX_EXPANSIONS = 2000;
 const ENEMY_PATH_TARGET_SEARCH_RADIUS = 6;
 const ENEMY_PATH_DIAGONAL_COST = Math.SQRT2;
@@ -536,6 +537,58 @@ const rndReal = (min: number, max: number) => Math.random() * (max - min) + min;
 
 function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
+}
+
+class MinHeap<T> {
+    private items: T[] = [];
+
+    constructor(private readonly compare: (a: T, b: T) => number) {}
+
+    get length(): number {
+        return this.items.length;
+    }
+
+    push(item: T): void {
+        this.items.push(item);
+        this.bubbleUp(this.items.length - 1);
+    }
+
+    pop(): T | undefined {
+        if (this.items.length === 0) return undefined;
+        const first = this.items[0];
+        const last = this.items.pop()!;
+        if (this.items.length > 0) {
+            this.items[0] = last;
+            this.bubbleDown(0);
+        }
+        return first;
+    }
+
+    private bubbleUp(index: number): void {
+        while (index > 0) {
+            const parent = Math.floor((index - 1) / 2);
+            if (this.compare(this.items[index], this.items[parent]) >= 0) break;
+            [this.items[index], this.items[parent]] = [this.items[parent], this.items[index]];
+            index = parent;
+        }
+    }
+
+    private bubbleDown(index: number): void {
+        while (true) {
+            const left = index * 2 + 1;
+            const right = left + 1;
+            let smallest = index;
+            if (left < this.items.length && this.compare(this.items[left], this.items[smallest]) < 0) {
+                smallest = left;
+            }
+            if (right < this.items.length && this.compare(this.items[right], this.items[smallest]) < 0) {
+                smallest = right;
+            }
+            if (smallest === index) break;
+            [this.items[index], this.items[smallest]] = [this.items[smallest], this.items[index]];
+            index = smallest;
+        }
+    }
 }
 
 function sanitizeDisplayName(value: unknown): string {
@@ -4694,7 +4747,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.incrementEnemyCounter("pathNoRoute");
                 se.path = [];
                 se.pathTargetCell = null;
-                se.repathMs = ENEMY_PATH_REPATH_MS;
+                se.repathMs = ENEMY_PATH_FAILED_RETRY_MS;
                 return false;
             }
 
@@ -4702,7 +4755,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 || se.pathTargetCell.col !== targetCell.col
                 || se.pathTargetCell.row !== targetCell.row;
             const topologyChanged = se.pathTopologyVersion !== this.mapTopologyVersion;
-            const shouldBuild = topologyChanged || targetChanged || se.path.length === 0 || se.repathMs <= 0;
+            const shouldBuild = topologyChanged || targetChanged || se.path.length === 0;
             if (shouldBuild) {
                 if (se.repathMs > 0 && se.path.length === 0 && !topologyChanged && !targetChanged) {
                     return false;
@@ -4721,7 +4774,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                     se.path = [];
                     se.pathTargetCell = targetCell;
                     se.pathTopologyVersion = this.mapTopologyVersion;
-                    se.repathMs = ENEMY_PATH_REPATH_MS;
+                    se.repathMs = ENEMY_PATH_FAILED_RETRY_MS;
                     return false;
                 }
 
@@ -4730,11 +4783,12 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const path = this.buildEnemyPath(startCell, targetCell);
                 se.pathTargetCell = targetCell;
                 se.pathTopologyVersion = this.mapTopologyVersion;
-                se.repathMs = ENEMY_PATH_REPATH_MS;
                 if (!path) {
                     se.path = [];
+                    se.repathMs = ENEMY_PATH_FAILED_RETRY_MS;
                     return false;
                 }
+                se.repathMs = ENEMY_PATH_REPATH_MS;
                 se.path = path;
             }
 
@@ -4750,22 +4804,20 @@ export class ShmupRoom extends Room<GameRoomState> {
             return [];
         }
 
-        const open: Array<PathCell & { g: number; f: number }> = [{
+        const open = new MinHeap<PathCell & { g: number; f: number }>((a, b) => a.f - b.f);
+        open.push({
             ...start,
             g: 0,
             f: this.enemyPathHeuristic(start, goal),
-        }];
+        });
         const cameFrom = new Map<string, string>();
         const gScore = new Map<string, number>([[startKey, 0]]);
         const closed = new Set<string>();
         let visited = 0;
 
         while (open.length > 0) {
-            let bestIndex = 0;
-            for (let i = 1; i < open.length; i++) {
-                if (open[i].f < open[bestIndex].f) bestIndex = i;
-            }
-            const current = open.splice(bestIndex, 1)[0];
+            const current = open.pop();
+            if (!current) break;
             const currentKey = this.buildCellKey(current.col, current.row);
             if (closed.has(currentKey)) continue;
             closed.add(currentKey);
