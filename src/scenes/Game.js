@@ -20,6 +20,7 @@ const DEFAULT_PLAYER_DIRECTION = 'N';
 const PLAYER_DISPLAY_SIZE = 128;
 const PLAYER_VISUAL_Y_OFFSET = 6;
 const PLAYER_VISUAL_MOVE_SPEED = 255;
+const PLAYER_DASH_VISUAL_MOVE_SPEED = 900;
 const PLAYER_VISUAL_SNAP_DISTANCE = 96;
 const PLAYER_BODY_DEPTH = 100;
 const PLAYER_WEAPON_DEPTH = 101;
@@ -93,9 +94,21 @@ const MAP_CHUNK_CELL_COUNT = MAP_CHUNK_SIZE * MAP_CHUNK_SIZE;
 const MAP_CHUNK_ENCODED_LENGTH = Math.ceil((MAP_CHUNK_CELL_COUNT * 2) / 3) * 4;
 const MAP_FRAME_COUNT = 32 * 32;
 const MAP_MAX_FILLED_CELLS = 50000;
+const CASTLE_TOP_PARTIAL_SUPPORT_FRAMES = new Set([35, 36, 37]);
+const CASTLE_FULL_HEIGHT_PARTIAL_SUPPORT_FRAMES = new Set([67, 68, 69]);
 const WORKBENCH_LEFT_FRAME = 294;
 const WORKBENCH_RIGHT_FRAME = 295;
 const WORKBENCH_INTERACT_RANGE = 80;
+const ENCHANTMENT_TABLE_FRAME = 0;
+const ENCHANTMENT_TABLE_DISPLAY_SIZE = MAP_TILE_SIZE * 2;
+const ENCHANTMENT_TABLE_VISUAL_Y_OFFSET = -MAP_TILE_SIZE * 0.5;
+const ENCHANTMENT_TABLE_DEPTH = 87;
+const ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY = 'enchantment-table-idle';
+const ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY = 'enchantment-table-effect';
+const CRAFTING_TABLE_FRAME = 0;
+const CRAFTING_TABLE_DISPLAY_SIZE = MAP_TILE_SIZE * 2;
+const CRAFTING_TABLE_VISUAL_Y_OFFSET = -MAP_TILE_SIZE * 0.5;
+const CRAFTING_TABLE_DEPTH = 87;
 const CALTROPS_FRAME = 449;
 const CALTROPS_DISPLAY_SIZE = 40;
 const CALTROPS_DEPTH = 85;
@@ -117,18 +130,9 @@ const MAP_DRAFT_STORAGE_KEY = 'testtopdown-map-drafts:v1';
 const MAP_DRAFT_VERSION = 5;
 const EDITOR_WORLD_BACKGROUND_COLOR = 0x707070;
 const EDITOR_WORLD_BACKGROUND_CSS = '#707070';
-const WOOD_BLOCK_SIZE = BUILD_GRID_SIZE;
-const WOOD_BLOCK_FILL_COLOR = 0x8a5a2b;
-const WOOD_BLOCK_STROKE_COLOR = 0x4b2d14;
-const WOOD_BLOCK_HEALTH_BAR_WIDTH = 28;
-const WOOD_BLOCK_HEALTH_BAR_HEIGHT = 4;
-const WOOD_BLOCK_HEALTH_BAR_Y_OFFSET = -24;
-const WOOD_BLOCK_HEALTH_BAR_FILL_COLOR = 0x22ff44;
-const WOOD_BLOCK_HIT_FLASH_MS = 90;
 const BUILD_PREVIEW_FILL_COLOR = 0xfff0a8;
 const BUILD_PREVIEW_STROKE_COLOR = 0xffffff;
 const BUILD_DRAG_SEND_INTERVAL_MS = 35;
-const HAMMER_REPAIR_TICK_MS = 500;
 const CAMPFIRE_DISPLAY_SIZE = 84;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
@@ -165,7 +169,6 @@ const AXE_ATTACK_HIT_SOUND_DELAY_MS = 200;
 const SWORD_SPIN_SOUND_VOLUME = 0.48;
 const SWORD_SPIN_HIGH_PASS_HZ = 180;
 const AXE_WHIRLWIND_SOUND_INTERVAL_MS = 500;
-const AXE_WHIRLWIND_RESTART_COOLDOWN_MS = AXE_WHIRLWIND_SOUND_INTERVAL_MS;
 const WOOD_HIT_SOUND_VOLUME = 0.75;
 const TREE_FALL_SOUND_VOLUME = 0.5;
 const SKELETON_HIT_SOUND_VOLUME = 0.75;
@@ -178,6 +181,7 @@ const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
 const DEBUG_MAX_ROUND = 99;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
+const ENABLE_DEBUG_ROUND = true;
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
 const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
@@ -197,6 +201,10 @@ const PLAYER_BOW_CHARGE_BAR_Y_OFFSET = PLAYER_HEALTH_BAR_Y_OFFSET + PLAYER_HEALT
 const PLAYER_BOW_CHARGE_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 1;
 const PLAYER_BOW_CHARGE_BAR_COLOR = 0xffffff;
 const PLAYER_BOW_CHARGE_BAR_ALPHA = 0.55;
+const PLAYER_DASH_COOLDOWN_BAR_Y_OFFSET = 36;
+const PLAYER_DASH_COOLDOWN_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 1;
+const PLAYER_DASH_COOLDOWN_BAR_COLOR = 0xffffff;
+const PLAYER_DASH_COOLDOWN_BAR_ALPHA = 0.38;
 const PLAYER_REVIVE_BAR_WIDTH = 58;
 const PLAYER_REVIVE_BAR_HEIGHT = 7;
 const PLAYER_REVIVE_BAR_Y_OFFSET = -38;
@@ -221,6 +229,11 @@ const HOTBAR_ICON_SIZE = 35;
 const HOTBAR_BOTTOM_GAP = 12;
 const HOTBAR_SLOT_FILL_COLOR = 0xffffff;
 const HOTBAR_SLOT_ACTIVE_COLOR = 0xfff4a3;
+const HOTBAR_DRAG_START_DISTANCE = 6;
+const HOTBAR_COOLDOWN_OVERLAY_COLOR = 0x000000;
+const HOTBAR_COOLDOWN_OVERLAY_ALPHA = 0.55;
+const HOTBAR_ACTIVE_OVERLAY_COLOR = 0xffffff;
+const HOTBAR_ACTIVE_OVERLAY_ALPHA = 0.42;
 const OUTFIT_TAN_INDEX = 4;
 const OUTFIT_COLOR_BUTTON_RADIUS = 11;
 const OUTFIT_COLOR_BUTTON_X = 40;
@@ -273,16 +286,50 @@ const PLAYER_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const ENEMY_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const FRAMES_PER_DIRECTION = 15;
 const PLAYER_BUFFS = [
-    { field: 'axeSwingSpeedUpgrades', label: 'Axe swing speed' },
-    { field: 'axeTreeDamageUpgrades', label: 'Axe wood damage' },
-    { field: 'axeEnemyDamageUpgrades', label: 'Axe enemy damage' },
+    { field: 'axeWoodGainUpgrades', label: 'Axe wood gain' },
+    { field: 'axeCampfireMaxUpgrades', label: 'Axe max campfires' },
+    { field: 'axeWhirlwindCooldownUpgrades', label: 'Whirlwind cooldown' },
+    { field: 'axeWhirlwindAoeUpgrades', label: 'Whirlwind AOE' },
     { field: 'bowDamageUpgrades', label: 'Bow damage' },
     { field: 'bowPierceUpgrades', label: 'Bow pierce' },
     { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
-    { field: 'barricadeHealthUpgrades', label: 'Barricade health' },
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
-    { field: 'campfireUpgrades', label: 'Campfire charge' },
 ];
+const ENCHANTMENT_MAX_RANK = 3;
+const ENCHANTMENT_SKILL_TREES = {
+    [ITEM_WOOD_AXE]: {
+        title: 'Axe Skills',
+        displayName: 'Axe',
+        nodes: [
+            { id: 'axe_wood_gain', label: '+25% wood gain', field: 'axeWoodGainUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
+            { id: 'axe_campfire_max', label: '+1 max campfires', field: 'axeCampfireMaxUpgrades', prerequisite: 'axe_wood_gain', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 1 },
+            { id: 'axe_whirlwind_cooldown', label: '-1 second whirlwind cooldown', field: 'axeWhirlwindCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
+            { id: 'axe_whirlwind_aoe', label: '+25% AOE size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 1 },
+        ],
+    },
+    [ITEM_WOOD_BOW]: {
+        title: 'Bow Skills',
+        displayName: 'Bow',
+        nodes: [
+            { id: 'bow_damage', label: '+1 damage', field: 'bowDamageUpgrades' },
+            { id: 'bow_pierce', label: '+1 pierce', field: 'bowPierceUpgrades', prerequisite: 'bow_damage' },
+            { id: 'bow_charge_time', label: '-25% charge time', field: 'bowChargeTimeUpgrades', prerequisite: 'bow_pierce' },
+        ],
+    },
+    [ITEM_HAMMER]: {
+        title: 'Hammer Skills',
+        displayName: 'Hammer',
+        nodes: [
+            { id: 'hammer_wood_gather', label: '+50% wood gather', field: 'woodGatherUpgrades' },
+        ],
+    },
+};
+const ENCHANTMENT_NODE_BY_ID = Object.values(ENCHANTMENT_SKILL_TREES)
+    .flatMap(({ nodes }) => nodes)
+    .reduce((lookup, node) => {
+        lookup[node.id] = node;
+        return lookup;
+    }, {});
 const CRAFTING_RECIPES = [
     {
         id: CAMPFIRE_CRAFT_RECIPE_ID,
@@ -343,6 +390,7 @@ export class Game extends Phaser.Scene {
             this.updateLocalPlayerAnimation();
             this.updateRemotePlayerAnimations();
             this.updatePlayerHealthBars();
+            this.updatePlayerDashCooldownBars();
             this.updatePlayerNameLabels();
             return;
         }
@@ -356,6 +404,7 @@ export class Game extends Phaser.Scene {
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
         this.updatePlayerBowChargeBars();
+        this.updatePlayerDashCooldownBars();
         this.updatePlayerReviveBars();
         this.updatePlayerNameLabels();
         this.updatePlayerLevelLabels();
@@ -364,6 +413,7 @@ export class Game extends Phaser.Scene {
         this.updateCasterChargeEffects();
         this.updateCampfireHealBars();
         this.updateCraftingMenuProximity();
+        this.updateEnchantmentMenuProximity();
         this.updateHitboxOverlay();
     }
 
@@ -395,6 +445,7 @@ export class Game extends Phaser.Scene {
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
         this.playerBowChargeBars = new Map();
+        this.playerDashCooldownBars = new Map();
         this.playerReviveBars = new Map();
         this.playerNameLabels = new Map();
         this.playerLevelLabels = new Map();
@@ -405,8 +456,14 @@ export class Game extends Phaser.Scene {
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
         this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-        this.upgradeUiMode = 'root';
-        this.upgradeUiObjects = [];
+        this.hotbarDrag = null;
+        this.localAxeWhirlwindProgress = 0;
+        this.localAxeWhirlwindCooldownProgress = 0;
+        this.skillPointText = null;
+        this.enchantmentUi = null;
+        this.enchantmentUiObjects = new Set();
+        this.enchantmentSelectedItem = '';
+        this.enchantmentSelectedSlot = 0;
         this.outfitColorIndex = OUTFIT_TAN_INDEX;
         this.outfitColorButtons = [];
         this.outfitColorButtonObjects = new Set();
@@ -418,9 +475,10 @@ export class Game extends Phaser.Scene {
         this.casterChargeSounds = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
-        this.woodBlockSprites    = new Map();
         this.campfireSprites     = new Map();
         this.caltropSprites      = new Map();
+        this.enchantmentTableSprites = new Map();
+        this.craftingTableSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
         this.playerBulletSprites = new Map();
         /** @type {Map<string, Phaser.GameObjects.Sprite>} */
@@ -442,6 +500,9 @@ export class Game extends Phaser.Scene {
         this.mapDraftNameInput = null;
         this.serverMapNames = new Set();
         this.mapDirty = false;
+        this.activeMapTool = 'tiles';
+        this.activeLayer3Tool = 'enchantment';
+        this.mapToolButtons = [];
         this.editorGridGraphics = null;
         this.editorBoundaryGraphics = null;
         this.editorGridRenderKey = '';
@@ -472,7 +533,6 @@ export class Game extends Phaser.Scene {
         this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
         this.nextHeldAttackAt = 0;
-        this.nextAxeWhirlwindAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
         this.cameraZoom = CAMERA_MIN_ZOOM;
@@ -521,6 +581,9 @@ export class Game extends Phaser.Scene {
             this.handleEscapeQuit(event);
         };
         this.handleGlobalMouseUp = (event) => {
+            if (event?.button === 0 || (typeof event?.buttons === 'number' && (event.buttons & 1) === 0)) {
+                window.setTimeout(() => this.cancelHotbarDrag(), 0);
+            }
             if (event?.button === 2 || (typeof event?.buttons === 'number' && (event.buttons & 2) === 0)) {
                 this.stopAxeWhirlwind();
             }
@@ -538,6 +601,8 @@ export class Game extends Phaser.Scene {
             window.removeEventListener('mouseup', this.handleGlobalMouseUp, true);
             this.disableBuildMode();
             this.closeCraftingMenu();
+            this.closeEnchantmentMenu();
+            this.cancelHotbarDrag();
             this.stopAxeWhirlwind();
             this.stopAllCasterChargeSounds();
             this.destroyDebugRoundControls();
@@ -566,7 +631,7 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8, align: 'center',
         }).setOrigin(0.5).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.timerText = this.add.text(20, 20, '00:00', {
+        this.waveText = this.add.text(20, 20, 'Wave: 0', {
             fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
         }).setDepth(UI_DEPTH).setScrollFactor(0);
@@ -585,6 +650,11 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 16, color: '#ffe27a',
             stroke: '#000000', strokeThickness: 5, align: 'right',
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.skillPointText = this.add.text(this.scale.width - 20, this.scale.height - 74, '(0 skill points available)', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5, align: 'right',
+        }).setOrigin(1, 1).setDepth(UI_DEPTH).setScrollFactor(0);
 
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nRestarting in 10', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
@@ -629,7 +699,7 @@ export class Game extends Phaser.Scene {
             .setInteractive({ useHandCursor: true });
         this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
 
-        if (IS_DEVELOPMENT_BUILD) {
+        if (ENABLE_DEBUG_ROUND) {
             this.initDebugRoundControls();
         }
 
@@ -638,12 +708,14 @@ export class Game extends Phaser.Scene {
         this.initHotbar();
         this.initOutfitColorPicker();
         this.initVolumeSlider();
+        this.updateSkillPointText();
         this.registerFixedUi(
             this.tutorialText,
-            this.timerText,
+            this.waveText,
             this.killsText,
             this.playerCountText,
             this.buffListText,
+            this.skillPointText,
             this.gameOverText,
             this.quitButton,
             this.roomCodeText,
@@ -702,7 +774,7 @@ export class Game extends Phaser.Scene {
     }
 
     setDebugRoundControlsVisible(visible) {
-        if (!IS_DEVELOPMENT_BUILD || !this.debugRoundInput) return;
+        if (!ENABLE_DEBUG_ROUND || !this.debugRoundInput) return;
         this.debugRoundInput.node.style.visibility = visible ? 'visible' : 'hidden';
         this.debugRoundInput.node.style.pointerEvents = visible ? 'auto' : 'none';
         this.debugRoundStatusText?.setVisible(visible && !!this.debugRoundStatusText.text);
@@ -710,7 +782,7 @@ export class Game extends Phaser.Scene {
 
     submitDebugRound(rawRound) {
         const round = Number(rawRound);
-        const currentRound = Math.floor((RoomClient.room?.state?.elapsedSeconds || 0) / 60) + 1;
+        const currentRound = Math.max(0, RoomClient.room?.state?.waveNumber || 0);
         if (!Number.isInteger(round) || round < 2 || round > DEBUG_MAX_ROUND) {
             this.setDebugRoundStatus(`Enter a whole round from 2 to ${DEBUG_MAX_ROUND}.`);
             return;
@@ -751,6 +823,12 @@ export class Game extends Phaser.Scene {
             .map(({ label, stacks }) => `${label} x${stacks}`);
 
         this.buffListText.setText(buffs.length > 0 ? `BUFFS\n${buffs.join('\n')}` : '');
+    }
+
+    updateSkillPointText() {
+        if (!this.skillPointText) return;
+        const points = Math.max(0, this.localPendingUpgradeChoices || 0);
+        this.skillPointText.setText(`(${points} skill points available)`);
     }
 
     initOutfitColorPicker() {
@@ -856,11 +934,14 @@ export class Game extends Phaser.Scene {
     }
 
     initHotbar() {
+        this.cancelHotbarDrag();
         this.hotbarSlots.forEach((slot) => {
             slot.box?.destroy();
             slot.icon?.destroy();
             slot.label?.destroy();
             slot.countLabel?.destroy();
+            slot.cooldownOverlay?.destroy();
+            slot.activeOverlay?.destroy();
         });
         this.hotbarSlots = [];
 
@@ -875,7 +956,12 @@ export class Game extends Phaser.Scene {
                 .setOrigin(0.5)
                 .setStrokeStyle(2, HOTBAR_SLOT_FILL_COLOR, 0.5)
                 .setDepth(UI_DEPTH + 3)
-                .setScrollFactor(0);
+                .setScrollFactor(0)
+                .setInteractive({ useHandCursor: true });
+            box.on('pointerdown', (pointer, _localX, _localY, event) => {
+                event?.stopPropagation?.();
+                this.beginHotbarDrag(slot, pointer);
+            });
             const label = this.add.text(x - HOTBAR_SLOT_SIZE * 0.5 + 5, y - HOTBAR_SLOT_SIZE * 0.5 + 3, `${slot}`, {
                 fontFamily: 'Arial Black', fontSize: 10, color: '#ffffff',
                 stroke: '#000000', strokeThickness: 3,
@@ -898,12 +984,150 @@ export class Game extends Phaser.Scene {
                     stroke: '#000000', strokeThickness: 3,
                 }).setOrigin(1, 0.5).setDepth(UI_DEPTH + 6).setScrollFactor(0)
                 : null;
+            const cooldownOverlay = this.add.graphics()
+                .setDepth(UI_DEPTH + 7)
+                .setScrollFactor(0);
+            const activeOverlay = this.add.graphics()
+                .setDepth(UI_DEPTH + 8)
+                .setScrollFactor(0);
 
-            this.hotbarSlots.push({ box, icon, label, countLabel, slot });
-            this.registerFixedUi(box, icon, label, countLabel);
+            this.hotbarSlots.push({ box, icon, label, countLabel, cooldownOverlay, activeOverlay, slot });
+            this.registerFixedUi(box, icon, label, countLabel, cooldownOverlay, activeOverlay);
         }
 
         this.updateHotbarSelection();
+        this.updateHotbarAxeOverlays();
+    }
+
+    beginHotbarDrag(slot, pointer) {
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT || !pointer?.leftButtonDown?.()) return;
+        if (!this.getItemForHotbarSlot(slot)) {
+            this.equipHotbarSlot(slot);
+            this.selectEnchantmentHotbarSlot(slot);
+            return;
+        }
+        this.hotbarDrag = {
+            pointerId: pointer.id,
+            fromSlot: slot,
+            startX: pointer.x,
+            startY: pointer.y,
+            hasDragged: false,
+            ghost: null,
+        };
+    }
+
+    updateHotbarDrag(pointer) {
+        const drag = this.hotbarDrag;
+        if (!drag || drag.pointerId !== pointer.id) return false;
+        if (!pointer.leftButtonDown()) return false;
+
+        const dx = pointer.x - drag.startX;
+        const dy = pointer.y - drag.startY;
+        if (!drag.hasDragged && Math.hypot(dx, dy) < HOTBAR_DRAG_START_DISTANCE) return true;
+
+        if (!drag.hasDragged) {
+            drag.hasDragged = true;
+            drag.ghost = this.createHotbarDragGhost(drag.fromSlot, pointer.x, pointer.y);
+        }
+        drag.ghost?.setPosition(pointer.x, pointer.y);
+        return true;
+    }
+
+    finishHotbarDrag(pointer) {
+        const drag = this.hotbarDrag;
+        if (!drag || drag.pointerId !== pointer.id) return false;
+
+        if (drag.hasDragged) {
+            if (this.tryDropHotbarItemIntoEnchantmentSlot(drag.fromSlot, pointer)) {
+                this.cancelHotbarDrag();
+                return true;
+            }
+            const targetSlot = this.getHotbarSlotAt(pointer.x, pointer.y);
+            if (targetSlot && targetSlot !== drag.fromSlot) {
+                RoomClient.sendSwapHotbarSlots(drag.fromSlot, targetSlot);
+            }
+        } else {
+            this.equipHotbarSlot(drag.fromSlot);
+            this.selectEnchantmentHotbarSlot(drag.fromSlot);
+        }
+        this.cancelHotbarDrag();
+        return true;
+    }
+
+    cancelHotbarDrag() {
+        this.hotbarDrag?.ghost?.destroy(true);
+        this.hotbarDrag = null;
+    }
+
+    createHotbarDragGhost(slot, x, y) {
+        const item = this.getItemForHotbarSlot(slot);
+        const count = this.hotbarSlotCounts[slot - 1] || 0;
+        const container = this.add.container(x, y)
+            .setDepth(UI_DEPTH + 30)
+            .setScrollFactor(0)
+            .setAlpha(0.86);
+        const background = this.add.rectangle(0, 0, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_ACTIVE_COLOR, 0.28)
+            .setOrigin(0.5)
+            .setStrokeStyle(2, HOTBAR_SLOT_ACTIVE_COLOR, 0.8);
+        container.add(background);
+
+        const iconKey = this.getHotbarIconKey(item);
+        if (iconKey) {
+            const icon = this.add.image(0, 2, iconKey).setOrigin(0.5);
+            if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+            if (item === ITEM_WOOD_CALTROPS) icon.setFrame(CALTROPS_FRAME);
+            icon.setDisplaySize(HOTBAR_ICON_SIZE, HOTBAR_ICON_SIZE);
+            container.add(icon);
+        }
+        if (count > 0) {
+            const countLabel = this.add.text(HOTBAR_SLOT_SIZE * 0.5 - 5, HOTBAR_SLOT_SIZE * 0.5 - 15, `${count}`, {
+                fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 3,
+            }).setOrigin(1, 0.5);
+            container.add(countLabel);
+        }
+        this.registerFixedUi(container, container.list);
+        return container;
+    }
+
+    getHotbarSlotAt(x, y) {
+        const slot = this.hotbarSlots.find(({ box }) => box?.getBounds().contains(x, y));
+        return slot?.slot || 0;
+    }
+
+    updateHotbarAxeOverlays() {
+        const activeProgress = Phaser.Math.Clamp(this.localAxeWhirlwindProgress || 0, 0, 1);
+        const cooldownProgress = Phaser.Math.Clamp(this.localAxeWhirlwindCooldownProgress || 0, 0, 1);
+        this.hotbarSlots.forEach(({ box, cooldownOverlay, activeOverlay, slot }) => {
+            if (!cooldownOverlay) return;
+            cooldownOverlay.clear();
+            activeOverlay?.clear();
+            if (!box || this.getItemForHotbarSlot(slot) !== ITEM_WOOD_AXE) return;
+
+            const x = box.x - HOTBAR_SLOT_SIZE * 0.5;
+            const bottomY = box.y + HOTBAR_SLOT_SIZE * 0.5;
+            if (cooldownProgress > 0) {
+                const height = HOTBAR_SLOT_SIZE * cooldownProgress;
+                cooldownOverlay.fillStyle(HOTBAR_COOLDOWN_OVERLAY_COLOR, HOTBAR_COOLDOWN_OVERLAY_ALPHA);
+                cooldownOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
+            }
+            if (activeOverlay && activeProgress > 0) {
+                const height = HOTBAR_SLOT_SIZE * activeProgress;
+                activeOverlay.fillStyle(HOTBAR_ACTIVE_OVERLAY_COLOR, HOTBAR_ACTIVE_OVERLAY_ALPHA);
+                activeOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
+            }
+        });
+    }
+
+    isHotbarGameObject(gameObject) {
+        return this.hotbarSlots.some(({ box, icon, label, countLabel, cooldownOverlay, activeOverlay }) => (
+            gameObject === box
+            || gameObject === icon
+            || gameObject === label
+            || gameObject === countLabel
+            || gameObject === cooldownOverlay
+            || gameObject === activeOverlay
+        ));
     }
 
     getHotbarIconKey(item) {
@@ -929,6 +1153,337 @@ export class Game extends Phaser.Scene {
         this.initHotbar();
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
+        this.updateHotbarAxeOverlays();
+        this.validateEnchantmentSelection();
+    }
+
+    selectEnchantmentHotbarSlot(slot) {
+        if (!this.enchantmentUi) return;
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
+
+        const item = this.getItemForHotbarSlot(slot);
+        this.enchantmentSelectedItem = item || '';
+        this.enchantmentSelectedSlot = item ? slot : 0;
+        this.renderEnchantmentUi();
+    }
+
+    selectEquippedItemForEnchantment() {
+        const slot = this.localActiveSlot || 1;
+        const item = this.getItemForHotbarSlot(slot);
+        this.enchantmentSelectedItem = item || '';
+        this.enchantmentSelectedSlot = item ? slot : 0;
+    }
+
+    createInventoryItemIcon(item, x, y, size, depth = UI_DEPTH + 36) {
+        const iconKey = this.getHotbarIconKey(item);
+        if (!iconKey) return null;
+        const icon = this.add.image(x, y, iconKey)
+            .setOrigin(0.5)
+            .setDisplaySize(size, size)
+            .setDepth(depth)
+            .setScrollFactor(0);
+        if (item === ITEM_CAMPFIRE) icon.setFrame(CAMPFIRE_ICON_FRAME);
+        if (item === ITEM_WOOD_CALTROPS) icon.setFrame(CALTROPS_FRAME);
+        return icon;
+    }
+
+    getInventoryItemDisplayName(item) {
+        return ENCHANTMENT_SKILL_TREES[item]?.displayName || {
+            [ITEM_CAMPFIRE]: 'Campfire',
+            [ITEM_WOOD_CALTROPS]: 'Wood Caltrops',
+            [ITEM_WOOD]: 'Wood',
+        }[item] || 'Item';
+    }
+
+    addEnchantmentUiObject(object) {
+        if (!object) return object;
+        this.enchantmentUiObjects.add(object);
+        this.registerFixedUi(object);
+        return object;
+    }
+
+    addEnchantmentDynamicObject(object) {
+        if (!object) return object;
+        this.enchantmentUi?.dynamicObjects?.add(object);
+        return this.addEnchantmentUiObject(object);
+    }
+
+    clearEnchantmentDynamicObjects() {
+        this.enchantmentUi?.dynamicObjects?.forEach((object) => {
+            object?.destroy?.();
+            this.enchantmentUiObjects.delete(object);
+        });
+        if (this.enchantmentUi) this.enchantmentUi.dynamicObjects = new Set();
+    }
+
+    openEnchantmentMenu() {
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyEnchantmentTable()) return;
+        if (this.enchantmentUi) {
+            this.selectEquippedItemForEnchantment();
+            this.renderEnchantmentUi();
+            return;
+        }
+
+        this.stopHeldAttack();
+        this.cancelBowCharge();
+        this.stopAxeWhirlwind();
+
+        const panelWidth = Math.min(CRAFTING_PANEL_WIDTH, Math.max(320, this.scale.width - 48));
+        const panelHeight = Math.min(CRAFTING_PANEL_HEIGHT, Math.max(280, this.scale.height - 48));
+        const panelX = this.centreX - panelWidth * 0.5;
+        const panelY = this.centreY - panelHeight * 0.5;
+        const slotSize = 84;
+        const slotX = this.centreX;
+        const slotY = panelY + panelHeight - 58;
+        const slotRect = new Phaser.Geom.Rectangle(slotX - slotSize * 0.5, slotY - slotSize * 0.5, slotSize, slotSize);
+        const objects = [];
+
+        const addObject = (object) => {
+            objects.push(object);
+            this.addEnchantmentUiObject(object);
+            return object;
+        };
+
+        const panel = addObject(this.add.graphics().setDepth(UI_DEPTH + 30).setScrollFactor(0));
+        panel.fillStyle(0x4a4a4a, 0.78);
+        panel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.lineStyle(2, 0xbcbcbc, 0.78);
+        panel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
+        panel.setInteractive(new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight), Phaser.Geom.Rectangle.Contains);
+
+        addObject(this.add.text(panelX + CRAFTING_PANEL_PADDING, panelY + 22, 'Enchantment', {
+            fontFamily: 'Arial Black', fontSize: 28, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const closeButton = addObject(this.add.text(panelX + panelWidth - 28, panelY + 20, 'X', {
+            fontFamily: 'Arial Black', fontSize: 24, color: '#ff3333',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0).setInteractive({ useHandCursor: true }));
+        closeButton.on('pointerdown', (_pointer, _x, _y, event) => {
+            event?.stopPropagation();
+            this.closeEnchantmentMenu();
+        });
+
+        addObject(this.add.rectangle(slotX, slotY, slotSize, slotSize, 0x181818, 0.86)
+            .setOrigin(0.5)
+            .setDepth(UI_DEPTH + 34)
+            .setScrollFactor(0)
+            .setStrokeStyle(3, 0xffffff, 0.64)
+            .setInteractive({ useHandCursor: true }));
+
+        this.enchantmentUi = {
+            objects,
+            dynamicObjects: new Set(),
+            panel: new Phaser.Geom.Rectangle(panelX, panelY, panelWidth, panelHeight),
+            slotRect,
+            slotX,
+            slotY,
+            slotSize,
+            treeTopY: panelY + 94,
+            treeBottomY: slotY - 96,
+        };
+        this.selectEquippedItemForEnchantment();
+        this.renderEnchantmentUi();
+    }
+
+    closeEnchantmentMenu() {
+        if (!this.enchantmentUi && this.enchantmentUiObjects.size <= 0) return;
+        this.enchantmentSelectedItem = '';
+        this.enchantmentSelectedSlot = 0;
+        this.clearEnchantmentDynamicObjects();
+        this.enchantmentUi?.objects?.forEach((object) => object?.destroy?.());
+        this.enchantmentUiObjects.clear();
+        this.enchantmentUi = null;
+    }
+
+    renderEnchantmentUi() {
+        const ui = this.enchantmentUi;
+        if (!ui) return;
+        this.clearEnchantmentDynamicObjects();
+
+        const points = Math.max(0, this.localPendingUpgradeChoices || 0);
+        const item = this.enchantmentSelectedItem;
+        const slotX = ui.slotX;
+        const slotY = ui.slotY;
+        const tree = ENCHANTMENT_SKILL_TREES[item];
+
+        if (item) {
+            const icon = this.createInventoryItemIcon(item, slotX, slotY, 54, UI_DEPTH + 36);
+            this.addEnchantmentDynamicObject(icon);
+            this.addEnchantmentDynamicObject(this.add.text(slotX, slotY + 34, this.getInventoryItemDisplayName(item), {
+                fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 3,
+            }).setOrigin(0.5, 0.5).setDepth(UI_DEPTH + 37).setScrollFactor(0));
+        }
+
+        this.addEnchantmentDynamicObject(this.add.text(ui.panel.x + ui.panel.width - CRAFTING_PANEL_PADDING, ui.panel.y + 56, `${points} skill points`, {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(1, 0).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        if (!item) {
+            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'No equipped item selected', {
+                fontFamily: 'Arial Black', fontSize: 20, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+            return;
+        }
+
+        if (!tree) {
+            this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + ui.panel.height * 0.45, 'No skills for this item', {
+                fontFamily: 'Arial Black', fontSize: 22, color: '#cccccc',
+                stroke: '#000000', strokeThickness: 4, align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+            return;
+        }
+
+        this.addEnchantmentDynamicObject(this.add.text(this.centreX, ui.panel.y + 66, tree.title, {
+            fontFamily: 'Arial Black', fontSize: 21, color: '#ffd37a',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH + 34).setScrollFactor(0));
+
+        const hasColumns = tree.nodes.some((node) => Number.isInteger(node.column));
+        const nodeColumns = hasColumns
+            ? [...new Set(tree.nodes.map((node) => Number.isInteger(node.column) ? node.column : 0))].sort((a, b) => a - b)
+            : [0];
+        const rowCount = hasColumns
+            ? Math.max(1, Math.max(...tree.nodes.map((node) => Number.isInteger(node.row) ? node.row : 0)) + 1)
+            : tree.nodes.length;
+        const columnGap = hasColumns ? 36 : 0;
+        const nodeWidth = hasColumns
+            ? Math.min(270, (ui.panel.width - CRAFTING_PANEL_PADDING * 4 - columnGap * (nodeColumns.length - 1)) / nodeColumns.length)
+            : Math.min(330, ui.panel.width - CRAFTING_PANEL_PADDING * 4);
+        const nodeHeight = hasColumns ? 68 : 56;
+        const nodeGap = rowCount > 1
+            ? Math.min(108, (ui.treeBottomY - ui.treeTopY) / (rowCount - 1))
+            : 0;
+        const totalNodeWidth = nodeColumns.length * nodeWidth + Math.max(0, nodeColumns.length - 1) * columnGap;
+        const startX = this.centreX - totalNodeWidth * 0.5 + nodeWidth * 0.5;
+        const columnIndexByValue = nodeColumns.reduce((lookup, column, index) => {
+            lookup[column] = index;
+            return lookup;
+        }, {});
+        const positions = tree.nodes.map((node, index) => {
+            const column = hasColumns && Number.isInteger(node.column) ? node.column : 0;
+            const row = hasColumns && Number.isInteger(node.row) ? node.row : index;
+            const columnIndex = columnIndexByValue[column] ?? 0;
+            return {
+                x: hasColumns ? startX + columnIndex * (nodeWidth + columnGap) : this.centreX,
+                y: ui.treeBottomY - row * nodeGap,
+            };
+        });
+        const positionById = tree.nodes.reduce((lookup, node, index) => {
+            lookup[node.id] = positions[index];
+            return lookup;
+        }, {});
+
+        const connector = this.add.graphics().setDepth(UI_DEPTH + 32).setScrollFactor(0);
+        connector.lineStyle(4, 0xffffff, 0.35);
+        tree.nodes.forEach((node, index) => {
+            if (!node.prerequisite) return;
+            const from = positionById[node.prerequisite];
+            const to = positions[index];
+            if (!from || !to) return;
+            connector.beginPath();
+            connector.moveTo(from.x, from.y - nodeHeight * 0.5);
+            connector.lineTo(to.x, to.y + nodeHeight * 0.5);
+            connector.strokePath();
+        });
+        this.addEnchantmentDynamicObject(connector);
+
+        tree.nodes.forEach((node, index) => {
+            const position = positions[index];
+            const rank = this.getUpgradeRankForNode(node);
+            const maxRank = this.getUpgradeMaxRankForNode(node);
+            const unlocked = this.isEnchantmentNodeUnlocked(node);
+            const capped = maxRank !== null && rank >= maxRank;
+            const canSpend = unlocked && points > 0 && !capped;
+            const fillColor = unlocked ? 0xf2f2f2 : 0x505050;
+            const fillAlpha = unlocked ? 0.92 : 0.52;
+            const strokeColor = canSpend ? 0xffd37a : 0xffffff;
+            const textColor = unlocked ? '#111111' : '#999999';
+
+            const oval = this.add.ellipse(position.x, position.y, nodeWidth, nodeHeight, fillColor, fillAlpha)
+                .setOrigin(0.5)
+                .setDepth(UI_DEPTH + 34)
+                .setScrollFactor(0)
+                .setStrokeStyle(canSpend ? 4 : 2, strokeColor, canSpend ? 0.95 : 0.38);
+            this.addEnchantmentDynamicObject(oval);
+
+            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y - 7, node.label, {
+                fontFamily: 'Arial Black', fontSize: hasColumns ? 13 : 16, color: textColor,
+                align: 'center',
+                wordWrap: { width: nodeWidth - 18, useAdvancedWrap: true },
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
+            const rankLabel = maxRank !== null ? `Rank: ${rank}/${maxRank}` : `Rank: ${rank}`;
+            this.addEnchantmentDynamicObject(this.add.text(position.x, position.y + (hasColumns ? 22 : 15), rankLabel, {
+                fontFamily: 'Arial Black', fontSize: 12, color: textColor,
+                align: 'center',
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 35).setScrollFactor(0));
+
+            if (canSpend) {
+                const zone = this.add.zone(position.x, position.y, nodeWidth, nodeHeight)
+                    .setOrigin(0.5)
+                    .setDepth(UI_DEPTH + 36)
+                    .setScrollFactor(0)
+                    .setInteractive({ useHandCursor: true });
+                zone.on('pointerdown', (_pointer, _x, _y, event) => {
+                    event?.stopPropagation?.();
+                    this.selectEnchantmentUpgrade(node);
+                });
+                this.addEnchantmentDynamicObject(zone);
+            }
+        });
+    }
+
+    getUpgradeRankForNode(node) {
+        const player = this.localPlayerState || RoomClient.room?.state?.players?.get(this.localSessionId);
+        if (!player || !node?.field) return 0;
+        return Math.max(0, player[node.field] || 0);
+    }
+
+    getUpgradeMaxRankForNode(node) {
+        return Number.isFinite(node?.maxRank) ? Math.max(0, Math.floor(node.maxRank)) : null;
+    }
+
+    getUpgradeRankById(upgradeId) {
+        const node = ENCHANTMENT_NODE_BY_ID[upgradeId];
+        return node ? this.getUpgradeRankForNode(node) : 0;
+    }
+
+    isEnchantmentNodeUnlocked(node) {
+        if (!node?.prerequisite) return true;
+        return this.getUpgradeRankById(node.prerequisite) > 0;
+    }
+
+    selectEnchantmentUpgrade(node) {
+        if (!node || !this.enchantmentSelectedItem || !this.enchantmentSelectedSlot) return;
+        if (!this.isEnchantmentNodeUnlocked(node)) return;
+        const maxRank = this.getUpgradeMaxRankForNode(node);
+        if (maxRank !== null && this.getUpgradeRankForNode(node) >= maxRank) return;
+        RoomClient.sendSelectUpgrade(node.id, this.enchantmentSelectedItem, this.enchantmentSelectedSlot);
+    }
+
+    tryDropHotbarItemIntoEnchantmentSlot(slot, pointer) {
+        const ui = this.enchantmentUi;
+        if (!ui || !pointer || !ui.slotRect.contains(pointer.x, pointer.y)) return false;
+        const item = this.getItemForHotbarSlot(slot);
+        if (!item) return false;
+        this.selectEnchantmentHotbarSlot(slot);
+        return true;
+    }
+
+    validateEnchantmentSelection() {
+        if (!this.enchantmentUi) return;
+        if (!this.enchantmentSelectedSlot || !this.enchantmentSelectedItem) {
+            this.selectEquippedItemForEnchantment();
+            this.renderEnchantmentUi();
+            return;
+        }
+        if (this.getItemForHotbarSlot(this.enchantmentSelectedSlot) === this.enchantmentSelectedItem) return;
+        this.selectEquippedItemForEnchantment();
+        this.renderEnchantmentUi();
     }
 
     addCraftingUiObject(object) {
@@ -1101,7 +1656,12 @@ export class Game extends Phaser.Scene {
     }
 
     handleInteractPressed(event) {
-        if (this.craftingUi) return;
+        if (this.craftingUi || this.enchantmentUi) return;
+        if (this.getNearbyEnchantmentTable()) {
+            event?.preventDefault?.();
+            this.openEnchantmentMenu();
+            return;
+        }
         if (!this.getNearbyWorkbench()) return;
         event?.preventDefault?.();
         this.openCraftingMenu();
@@ -1114,167 +1674,11 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    updateUpgradeUi() {
-        this.clearUpgradeUi();
-        if (this.localPendingUpgradeChoices <= 0) return;
-
-        const root = this.upgradeUiMode === 'root';
-        const width = this.scale.width;
-        const height = this.scale.height;
-        const baseX = width - 156;
-        const baseY = height - 98;
-        const topY = baseY - 118;
-        const leftX = baseX - 72;
-        const rightX = baseX + 72;
-
-        this.createUpgradeText(baseX, topY - 58, 'UPGRADE AVAILABLE', 24);
-
-        if (root) {
-            this.createUpgradeHex(baseX, topY, 44, { iconKey: ASSETS.image.woodAxeIcon.key, onClick: () => this.openUpgradeCategory('axe') });
-            this.createUpgradeHex(leftX, baseY, 44, { iconKey: ASSETS.image.woodBowIcon.key, onClick: () => this.openUpgradeCategory('bow') });
-            this.createUpgradeHex(rightX, baseY, 44, { iconKey: ASSETS.image.hammerIcon.key, onClick: () => this.openUpgradeCategory('hammer') });
-            return;
+    updateEnchantmentMenuProximity() {
+        if (!this.enchantmentUi) return;
+        if (this.isMapEditor || !this.gameStarted || !this.getNearbyEnchantmentTable()) {
+            this.closeEnchantmentMenu();
         }
-
-        const options = this.getUpgradeOptions(this.upgradeUiMode);
-        this.createUpgradeHex(baseX, topY, 58, options[0]);
-        this.createUpgradeHex(leftX, baseY, 58, options[1]);
-        this.createUpgradeHex(rightX, baseY, 58, options[2]);
-        this.createUpgradeCategoryIcon(baseX, baseY - 40, this.upgradeUiMode);
-        this.createUpgradeBackButton(rightX + 34, topY + 8);
-    }
-
-    getUpgradeOptions(category) {
-        if (category === 'axe') {
-            return [
-                { text: '+25% swing\nspeed', upgradeId: 'axe_swing_speed' },
-                { text: '+1 dmg\nto wood', upgradeId: 'axe_tree_damage' },
-                { text: '+1 dmg\nto enemies', upgradeId: 'axe_enemy_damage' },
-            ];
-        }
-        if (category === 'bow') {
-            return [
-                { text: '+1 damage', upgradeId: 'bow_damage' },
-                { text: '+1 pierce', upgradeId: 'bow_pierce' },
-                { text: '-25% charge\ntime', upgradeId: 'bow_charge_time' },
-            ];
-        }
-        return [
-            { text: '+5 barricade\nHP', upgradeId: 'hammer_barricade_hp' },
-            { text: '+50% wood\ngather', upgradeId: 'hammer_wood_gather' },
-            { text: '+1 campfire', upgradeId: 'hammer_campfire' },
-        ];
-    }
-
-    openUpgradeCategory(category) {
-        this.upgradeUiMode = category;
-        this.updateUpgradeUi();
-    }
-
-    createUpgradeCategoryIcon(x, y, category) {
-        const iconKey = {
-            axe: ASSETS.image.woodAxeIcon.key,
-            bow: ASSETS.image.woodBowIcon.key,
-            hammer: ASSETS.image.hammerIcon.key,
-        }[category];
-        if (!iconKey) return;
-
-        const icon = this.add.image(x, y, iconKey)
-            .setOrigin(0.5)
-            .setDisplaySize(40, 40)
-            .setDepth(UI_DEPTH + 21)
-            .setScrollFactor(0);
-        this.upgradeUiObjects.push(icon);
-        this.registerFixedUi(icon);
-    }
-
-    selectUpgrade(upgradeId) {
-        RoomClient.sendSelectUpgrade(upgradeId);
-        this.upgradeUiMode = 'root';
-    }
-
-    createUpgradeText(x, y, text, size = 22) {
-        const label = this.add.text(x, y, text, {
-            fontFamily: 'Arial',
-            fontSize: size,
-            color: '#ffffff',
-            align: 'center',
-        }).setOrigin(0.5).setDepth(UI_DEPTH + 20).setScrollFactor(0);
-        this.upgradeUiObjects.push(label);
-        this.registerFixedUi(label);
-        return label;
-    }
-
-    createUpgradeHex(x, y, radius, config) {
-        const points = [];
-        for (let i = 0; i < 6; i++) {
-            const angle = Phaser.Math.DegToRad(30 + i * 60);
-            points.push(new Phaser.Geom.Point(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius));
-        }
-
-        const graphics = this.add.graphics().setDepth(UI_DEPTH + 18).setScrollFactor(0);
-        graphics.fillStyle(0x000000, 0.35);
-        graphics.fillPoints(points, true);
-        graphics.lineStyle(4, 0x000000, 1);
-        graphics.strokePoints(points, true);
-        this.upgradeUiObjects.push(graphics);
-        this.registerFixedUi(graphics);
-
-        if (config.iconKey) {
-            const icon = this.add.image(x, y, config.iconKey)
-                .setOrigin(0.5)
-                .setDisplaySize(radius * 1.08, radius * 1.08)
-                .setDepth(UI_DEPTH + 21)
-                .setScrollFactor(0);
-            this.upgradeUiObjects.push(icon);
-            this.registerFixedUi(icon);
-        }
-
-        if (config.text) {
-            this.createUpgradeText(x, y, config.text, 18);
-        }
-
-        const zone = this.add.zone(x, y, radius * 1.75, radius * 1.75)
-            .setOrigin(0.5)
-            .setDepth(UI_DEPTH + 22)
-            .setScrollFactor(0)
-            .setInteractive({ useHandCursor: true });
-        zone.on('pointerdown', (pointer, _localX, _localY, event) => {
-            event?.stopPropagation?.();
-            if (config.upgradeId) this.selectUpgrade(config.upgradeId);
-            else config.onClick?.();
-        });
-        this.upgradeUiObjects.push(zone);
-        this.registerFixedUi(zone);
-    }
-
-    createUpgradeBackButton(x, y) {
-        const background = this.add.circle(x, y, 25, 0x000000, 1)
-            .setDepth(UI_DEPTH + 24)
-            .setScrollFactor(0);
-        const label = this.add.text(x, y, 'BACK', {
-            fontFamily: 'Arial Black',
-            fontSize: 11,
-            color: '#ffffff',
-            align: 'center',
-        }).setOrigin(0.5).setDepth(UI_DEPTH + 25).setScrollFactor(0);
-        const button = this.add.zone(x, y, 50, 50)
-            .setOrigin(0.5)
-            .setDepth(UI_DEPTH + 26)
-            .setScrollFactor(0)
-            .setInteractive({ useHandCursor: true });
-        button.on('pointerdown', (pointer, _localX, _localY, event) => {
-            event?.stopPropagation?.();
-            this.upgradeUiMode = 'root';
-            this.updateUpgradeUi();
-        });
-        this.upgradeUiObjects.push(background, label, button);
-        this.registerFixedUi(background, label, button);
-    }
-
-    clearUpgradeUi() {
-        this.upgradeUiObjects.forEach((object) => object?.destroy());
-        this.upgradeUiObjects = [];
     }
 
     updateHotbarSelection() {
@@ -1388,6 +1792,26 @@ export class Game extends Phaser.Scene {
                 repeat: -1,
             });
         }
+        if (!this.anims.exists(ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY)) {
+            this.anims.create({
+                key: ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY,
+                frames: this.anims.generateFrameNumbers(ASSETS.spritesheet.enchantIdle.key, {
+                    frames: [0, 1, 2, 3, 4, 5],
+                }),
+                frameRate: 8,
+                repeat: -1,
+            });
+        }
+        if (!this.anims.exists(ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY)) {
+            this.anims.create({
+                key: ENCHANTMENT_TABLE_EFFECT_ANIMATION_KEY,
+                frames: this.anims.generateFrameNumbers(ASSETS.spritesheet.enchantEffect.key, {
+                    frames: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                }),
+                frameRate: 12,
+                repeat: 0,
+            });
+        }
     }
 
     // ─── Input ────────────────────────────────────────────────────────────────
@@ -1425,6 +1849,18 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
             backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 5, bottom: 5 },
         }).setInteractive({ useHandCursor: true }), 378, 12);
+        const layer3Button = addPaletteUi(this.add.text(0, 38, 'LAYER 3', {
+            fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 5, bottom: 5 },
+        }).setInteractive({ useHandCursor: true }), 100, 38);
+        const enchantToolButton = addPaletteUi(this.add.text(0, 38, 'ENCHANT', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 4, bottom: 4 },
+        }).setInteractive({ useHandCursor: true }), 198, 38);
+        const craftingToolButton = addPaletteUi(this.add.text(0, 38, 'CRAFT', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            backgroundColor: '#4b4b4b', padding: { left: 8, right: 8, top: 4, bottom: 4 },
+        }).setInteractive({ useHandCursor: true }), 292, 38);
         this.mapPaletteSideButton = addPaletteUi(this.add.text(0, 38, 'MOVE →', {
             fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
             backgroundColor: '#5d5d5d', padding: { left: 8, right: 8, top: 4, bottom: 4 },
@@ -1432,9 +1868,17 @@ export class Game extends Phaser.Scene {
         this.mapLayerButtons = [
             { layer: 1, button: layer1Button },
             { layer: 2, button: layer2Button },
+            { layer: 3, button: layer3Button },
         ];
         layer1Button.on('pointerdown', () => this.setActiveMapLayer(1));
         layer2Button.on('pointerdown', () => this.setActiveMapLayer(2));
+        layer3Button.on('pointerdown', () => this.setActiveMapLayer(3));
+        this.mapToolButtons = [
+            { tool: 'enchantment', button: enchantToolButton },
+            { tool: 'crafting', button: craftingToolButton },
+        ];
+        enchantToolButton.on('pointerdown', () => this.setActiveMapTool('enchantment'));
+        craftingToolButton.on('pointerdown', () => this.setActiveMapTool('crafting'));
         this.mapPaletteSideButton.on('pointerdown', () => this.toggleMapPaletteSide());
         addPaletteUi(this.add.image(0, MAP_PALETTE_Y, ASSETS.image.topdownTilesetPalette.key).setOrigin(0), MAP_PALETTE_MARGIN_X, MAP_PALETTE_Y);
 
@@ -1492,6 +1936,7 @@ export class Game extends Phaser.Scene {
         this.updateMapPaletteLayout();
         this.selectMapFrame(0);
         this.setActiveMapLayer(1);
+        this.setActiveMapTool('tiles');
     }
 
     getMapPalettePanelX() {
@@ -1560,14 +2005,44 @@ export class Game extends Phaser.Scene {
     }
 
     setActiveMapLayer(layer) {
-        this.activeMapLayer = layer === 2 ? 2 : 1;
+        this.activeMapLayer = layer === 3 ? 3 : layer === 2 ? 2 : 1;
+        this.activeMapTool = this.activeMapLayer === 3 ? this.activeLayer3Tool : 'tiles';
         this.mapLayerButtons.forEach(({ layer: buttonLayer, button }) => {
             button.setBackgroundColor(buttonLayer === this.activeMapLayer ? '#2468a8' : '#4b4b4b');
+        });
+        this.mapToolButtons.forEach(({ tool: buttonTool, button }) => {
+            button.setBackgroundColor(buttonTool === this.activeMapTool ? '#2468a8' : '#4b4b4b');
+        });
+        this.updateMapEditorStatus();
+    }
+
+    setActiveMapTool(tool) {
+        this.activeMapTool = tool === 'crafting' ? 'crafting' : tool === 'enchantment' ? 'enchantment' : 'tiles';
+        if (this.activeMapTool === 'crafting' || this.activeMapTool === 'enchantment') {
+            this.activeLayer3Tool = this.activeMapTool;
+            this.activeMapLayer = 3;
+        } else {
+            this.activeMapLayer = Math.min(this.activeMapLayer || 1, 2);
+        }
+        this.mapLayerButtons.forEach(({ layer: buttonLayer, button }) => {
+            button.setBackgroundColor(buttonLayer === this.activeMapLayer ? '#2468a8' : '#4b4b4b');
+        });
+        this.mapToolButtons.forEach(({ tool: buttonTool, button }) => {
+            button.setBackgroundColor(buttonTool === this.activeMapTool ? '#2468a8' : '#4b4b4b');
         });
         this.updateMapEditorStatus();
     }
 
     updateMapEditorStatus() {
+        if (this.activeMapTool === 'enchantment') {
+            this.setMapEditorStatus('Layer 3 · Enchantment table tool. Left-click places a 1x2 row object; right-click removes one.');
+            return;
+        }
+        if (this.activeMapTool === 'crafting') {
+            this.setMapEditorStatus('Layer 3 · Crafting table tool. Left-click places a 1x2 row workbench; right-click removes one.');
+            return;
+        }
+
         const { width, height } = this.selectedMapPattern;
         this.setMapEditorStatus(
             'Layer ' + this.activeMapLayer + ' · ' + width + '×' + height
@@ -1609,6 +2084,17 @@ export class Game extends Phaser.Scene {
 
     stampMapPattern(col, row) {
         this.markMapDirty();
+        if (this.activeMapTool === 'enchantment') {
+            if (!this.isMapCellInsideEditorBoundary(col + 1, row)) return;
+            RoomClient.sendPlaceEnchantmentTable(col, row);
+            return;
+        }
+        if (this.activeMapTool === 'crafting') {
+            if (!this.isMapCellInsideEditorBoundary(col + 1, row)) return;
+            RoomClient.sendPlaceCraftingTable(col, row);
+            return;
+        }
+
         const { frames, width, height } = this.selectedMapPattern;
         for (let patternRow = 0; patternRow < height; patternRow++) {
             for (let patternCol = 0; patternCol < width; patternCol++) {
@@ -1621,6 +2107,12 @@ export class Game extends Phaser.Scene {
 
     eraseMapTile(col, row) {
         this.markMapDirty();
+        if (this.activeMapTool === 'enchantment' || this.activeMapTool === 'crafting') {
+            RoomClient.sendRemoveEnchantmentTable(col, row);
+            RoomClient.sendRemoveCraftingTable(col, row);
+            return;
+        }
+
         RoomClient.sendRemoveMapTile(col, row, this.activeMapLayer);
     }
 
@@ -1817,6 +2309,31 @@ export class Game extends Phaser.Scene {
         return values[localRow * MAP_CHUNK_SIZE + localCol] || 0;
     }
 
+    isSolidMapFrame(frame) {
+        if (!Number.isInteger(frame)) return false;
+        const col = frame % MAP_PALETTE_COLUMNS;
+        const row = Math.floor(frame / MAP_PALETTE_COLUMNS);
+        const isCastle = col >= 0 && col < 6 && row >= 0 && row < 3;
+        const isWater = col >= 8 && col < 14 && row >= 7 && row < 10;
+        const isTree = col >= 11 && col < 14 && row >= 11 && row < 14;
+        return isCastle
+            || isWater
+            || isTree
+            || frame === WORKBENCH_LEFT_FRAME
+            || frame === WORKBENCH_RIGHT_FRAME;
+    }
+
+    getMapTileCollider(col, row, frame) {
+        const topHalfCollider = CASTLE_TOP_PARTIAL_SUPPORT_FRAMES.has(frame);
+        const narrowCollider = topHalfCollider || CASTLE_FULL_HEIGHT_PARTIAL_SUPPORT_FRAMES.has(frame);
+        return {
+            x: col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+            y: row * MAP_TILE_SIZE + (topHalfCollider ? MAP_TILE_SIZE * 0.25 : MAP_TILE_SIZE * 0.5),
+            halfWidth: MAP_TILE_SIZE * (narrowCollider ? 0.25 : 0.5),
+            halfHeight: MAP_TILE_SIZE * (topHalfCollider ? 0.25 : 0.5),
+        };
+    }
+
     isWorkbenchLeftCell(col, row, layer = 1) {
         return this.getMapTileValue(col, row, layer) === WORKBENCH_LEFT_FRAME + 1
             && this.getMapTileValue(col + 1, row, layer) === WORKBENCH_RIGHT_FRAME + 1;
@@ -1846,6 +2363,36 @@ export class Game extends Phaser.Scene {
                     const dy = footY - centerY;
                     if (dx * dx + dy * dy <= rangeSq) return { col, row, layer, x: centerX, y: centerY };
                 }
+            }
+        }
+
+        for (const [id, entry] of this.craftingTableSprites) {
+            const table = entry.table;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            if (dx * dx + dy * dy <= rangeSq) {
+                return { id, col: table.col, row: table.row, layer: 3, x: table.x, y: table.y };
+            }
+        }
+
+        return null;
+    }
+
+    getNearbyEnchantmentTable() {
+        if (this.isMapEditor || !this.localSessionId) return null;
+        const player = this.localPlayerState || RoomClient.room?.state?.players?.get(this.localSessionId);
+        if (!player || player.isDead) return null;
+
+        const footX = player.x;
+        const footY = player.y + PLAYER_FOOT_Y_OFFSET;
+        const rangeSq = WORKBENCH_INTERACT_RANGE * WORKBENCH_INTERACT_RANGE;
+
+        for (const [id, entry] of this.enchantmentTableSprites) {
+            const table = entry.table;
+            const dx = footX - table.x;
+            const dy = footY - table.y;
+            if (dx * dx + dy * dy <= rangeSq) {
+                return { id, col: table.col, row: table.row, layer: 3, x: table.x, y: table.y };
             }
         }
 
@@ -1948,6 +2495,7 @@ export class Game extends Phaser.Scene {
                 if (
                     gameObjects.includes(this.quitButton)
                     || gameObjects.includes(this.hitboxToggleButton)
+                    || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 ) {
                     return;
                 }
@@ -1981,9 +2529,10 @@ export class Game extends Phaser.Scene {
             if (
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
+                || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 || gameObjects.some(gameObject => this.craftingUiObjects.has(gameObject))
+                || gameObjects.some(gameObject => this.enchantmentUiObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.outfitColorButtonObjects.has(gameObject))
-                || gameObjects.some(gameObject => this.upgradeUiObjects.includes(gameObject))
             ) {
                 return;
             }
@@ -2017,6 +2566,7 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointermove', (pointer) => {
+            if (this.updateHotbarDrag(pointer)) return;
             if (this.isMapEditor) {
                 if (this.paletteDragPointerId === pointer.id && pointer.leftButtonDown()) {
                     const cell = this.getPaletteCellFromPointer(pointer);
@@ -2052,6 +2602,7 @@ export class Game extends Phaser.Scene {
         });
 
         this.input.on('pointerup', (pointer) => {
+            if (this.finishHotbarDrag(pointer)) return;
             if (this.isMapEditor) {
                 if (this.paletteDragPointerId === pointer.id) {
                     this.paletteDragPointerId = null;
@@ -2092,6 +2643,7 @@ export class Game extends Phaser.Scene {
         if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
         this.localActiveSlot = slot;
         this.updateHotbarSelection();
+        this.selectEnchantmentHotbarSlot(slot);
         RoomClient.sendEquipSlot(slot);
 
         const sessionId = this.localSessionId;
@@ -2125,7 +2677,7 @@ export class Game extends Phaser.Scene {
     }
 
     syncBuildModeForActiveItem(item) {
-        const shouldBuild = item === ITEM_WOOD || item === ITEM_HAMMER || item === ITEM_CAMPFIRE || item === ITEM_WOOD_CALTROPS;
+        const shouldBuild = item === ITEM_HAMMER || item === ITEM_CAMPFIRE || item === ITEM_WOOD_CALTROPS;
         if (this.isBuildModeActive === shouldBuild && this.buildPreviewKind === item) return;
 
         this.isBuildModeActive = shouldBuild;
@@ -2287,7 +2839,7 @@ export class Game extends Phaser.Scene {
             });
         });
 
-        if (IS_DEVELOPMENT_BUILD) {
+        if (ENABLE_DEBUG_ROUND) {
             room.onMessage('debugRoundResult', (result) => {
                 if (result?.accepted) {
                     this.setDebugRoundStatus(`Started round ${result.round}.`, '#aaffaa');
@@ -2312,6 +2864,7 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
+            this.closeEnchantmentMenu();
             this.createGrassNoiseLayer();
         });
 
@@ -2355,6 +2908,14 @@ export class Game extends Phaser.Scene {
                 player,
             });
             this.registerWorldObject(playerBowChargeFill);
+            const playerDashCooldownFill = this.add.graphics()
+                .setDepth(PLAYER_DASH_COOLDOWN_BAR_DEPTH)
+                .setVisible(false);
+            this.playerDashCooldownBars.set(playerSessionId, {
+                fill: playerDashCooldownFill,
+                player,
+            });
+            this.registerWorldObject(playerDashCooldownFill);
             const playerReviveBackground = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH);
             const playerReviveFill = this.add.graphics().setDepth(PLAYER_REVIVE_BAR_DEPTH + 1);
             this.playerReviveBars.set(playerSessionId, {
@@ -2389,9 +2950,14 @@ export class Game extends Phaser.Scene {
                 attackItem: player.attackItem || ITEM_WOOD_AXE,
                 lastAttackSeq: player.attackSeq || 0,
                 axeAttackHitboxActive: !!player.axeAttackHitboxActive,
+                dashing: !!player.dashing,
+                dashCooldownProgress: player.dashCooldownProgress || 0,
                 axeWhirlwind: !!player.axeWhirlwind,
+                axeWhirlwindProgress: player.axeWhirlwindProgress || 0,
+                axeWhirlwindCooldownProgress: player.axeWhirlwindCooldownProgress || 0,
                 lastAxeWhirlwindHitSeq: player.axeWhirlwindHitSeq || 0,
                 axeWhirlwindHitboxUntil: 0,
+                axeWhirlwindAoeUpgrades: player.axeWhirlwindAoeUpgrades || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
@@ -2480,6 +3046,8 @@ export class Game extends Phaser.Scene {
                 if (isLocal) {
                     this.localActiveSlot = slot || 1;
                     this.updateHotbarSelection();
+                    if (this.enchantmentUi) this.selectEquippedItemForEnchantment();
+                    this.renderEnchantmentUi();
                 }
             });
 
@@ -2496,7 +3064,13 @@ export class Game extends Phaser.Scene {
                     if (isLocal) this.stopAxeWhirlwind();
                     this.clearAxeWhirlwindPresentationState(playerSessionId, { updateAnimation: false });
                 }
-                if (isLocal) this.syncBuildModeForActiveItem(animationState.activeItem);
+                if (isLocal) {
+                    this.syncBuildModeForActiveItem(animationState.activeItem);
+                    if (this.enchantmentUi) {
+                        this.selectEquippedItemForEnchantment();
+                        this.renderEnchantmentUi();
+                    }
+                }
                 if (!animationState.attacking && !animationState.dead) {
                     this.updatePlayerWeaponIdleFrame(playerSessionId, animationState.direction || DEFAULT_PLAYER_DIRECTION);
                 }
@@ -2510,6 +3084,17 @@ export class Game extends Phaser.Scene {
             player.listen('axeAttackHitboxActive', (active) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeAttackHitboxActive = !!active;
+            });
+
+            player.listen('dashing', (dashing) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.dashing = !!dashing;
+            });
+
+            player.listen('dashCooldownProgress', (progress) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.dashCooldownProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                this.updatePlayerDashCooldownBar(playerSessionId);
             });
 
             player.listen('axeWhirlwind', (active) => {
@@ -2537,6 +3122,26 @@ export class Game extends Phaser.Scene {
                 if (!animationState || player.axeWhirlwindHitSeq <= animationState.lastAxeWhirlwindHitSeq) return;
                 animationState.lastAxeWhirlwindHitSeq = player.axeWhirlwindHitSeq;
                 animationState.axeWhirlwindHitboxUntil = this.time.now + PLAYER_AXE_WHIRLWIND_HITBOX_DEBUG_MS;
+            });
+
+            player.listen('axeWhirlwindProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localAxeWhirlwindProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
+            });
+
+            player.listen('axeWhirlwindCooldownProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindCooldownProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localAxeWhirlwindCooldownProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
             });
 
             player.listen('bowCharging', (charging) => {
@@ -2644,6 +3249,10 @@ export class Game extends Phaser.Scene {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeSwingSpeedUpgrades = stacks || 0;
             });
+            player.listen('axeWhirlwindAoeUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindAoeUpgrades = stacks || 0;
+            });
 
             if (player.isDead) {
                 this.playPlayerDeathAnimation(playerSessionId);
@@ -2656,14 +3265,20 @@ export class Game extends Phaser.Scene {
                 this.updateHudHealthBar(player.health, player.maxHealth);
                 this.localPendingUpgradeChoices = player.pendingUpgradeChoices || 0;
                 this.localActiveSlot = player.activeSlot || 1;
+                this.localAxeWhirlwindProgress = Phaser.Math.Clamp(player.axeWhirlwindProgress || 0, 0, 1);
+                this.localAxeWhirlwindCooldownProgress = Phaser.Math.Clamp(player.axeWhirlwindCooldownProgress || 0, 0, 1);
                 this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
-                this.updateUpgradeUi();
+                this.updateSkillPointText();
+                this.renderEnchantmentUi();
                 this.updateBuffList(player);
 
                 PLAYER_BUFFS.forEach(({ field }) => {
-                    player.listen(field, () => this.updateBuffList(player));
+                    player.listen(field, () => {
+                        this.updateBuffList(player);
+                        this.renderEnchantmentUi();
+                    });
                 });
 
                 if (player.hotbarItems) {
@@ -2691,8 +3306,8 @@ export class Game extends Phaser.Scene {
 
                 player.listen('pendingUpgradeChoices', (choices) => {
                     this.localPendingUpgradeChoices = choices || 0;
-                    if (this.localPendingUpgradeChoices <= 0) this.upgradeUiMode = 'root';
-                    this.updateUpgradeUi();
+                    this.updateSkillPointText();
+                    this.renderEnchantmentUi();
                 });
             }
 
@@ -2719,6 +3334,8 @@ export class Game extends Phaser.Scene {
             }
             const bowChargeBar = this.playerBowChargeBars.get(sessionId);
             if (bowChargeBar) bowChargeBar.fill.destroy();
+            const dashCooldownBar = this.playerDashCooldownBars.get(sessionId);
+            if (dashCooldownBar) dashCooldownBar.fill.destroy();
             const reviveBar = this.playerReviveBars.get(sessionId);
             if (reviveBar) {
                 reviveBar.background.destroy();
@@ -2736,8 +3353,9 @@ export class Game extends Phaser.Scene {
                 this.localPlayerState = null;
                 this.localExperienceState = null;
                 this.localPendingUpgradeChoices = 0;
+                this.updateSkillPointText();
+                this.closeEnchantmentMenu();
                 this.buffListText?.setText('');
-                this.clearUpgradeUi();
                 this.updateExperienceBar(0, 5, 1);
                 this.updateHudHealthBar(PLAYER_MAX_HEALTH);
             }
@@ -2747,6 +3365,7 @@ export class Game extends Phaser.Scene {
             this.axeWhirlwindSoundNextAt.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
             this.playerBowChargeBars.delete(sessionId);
+            this.playerDashCooldownBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
             this.playerNameLabels.delete(sessionId);
             this.playerLevelLabels.delete(sessionId);
@@ -2850,60 +3469,6 @@ export class Game extends Phaser.Scene {
             this.logSprites.delete(id);
         });
 
-        const addWoodBlock = (block, id) => {
-            const blockId = id || block.id;
-            if (!blockId || this.woodBlockSprites.has(blockId)) return;
-
-            const fill = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, WOOD_BLOCK_FILL_COLOR, 1)
-                .setOrigin(0.5)
-                .setDepth(80);
-            const outline = this.add.rectangle(block.x, block.y, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE)
-                .setOrigin(0.5)
-                .setStrokeStyle(2, WOOD_BLOCK_STROKE_COLOR, 0.85)
-                .setDepth(81);
-            const healthBackground = this.add.graphics().setDepth(82);
-            const healthFill = this.add.graphics().setDepth(83);
-            this.registerWorldObject(fill, outline, healthBackground, healthFill);
-
-            this.woodBlockSprites.set(blockId, {
-                fill,
-                outline,
-                healthBackground,
-                healthFill,
-                block,
-                lastHealth: block.health ?? block.maxHealth ?? 5,
-                flashEvent: null,
-            });
-            this.updateWoodBlockHealthBar(blockId);
-
-            block.onChange(() => {
-                const sprites = this.woodBlockSprites.get(blockId);
-                if (!sprites) return;
-                sprites.fill.setPosition(block.x, block.y);
-                sprites.outline.setPosition(block.x, block.y);
-                const health = block.health ?? block.maxHealth ?? 5;
-                if (health < sprites.lastHealth) {
-                    this.flashWoodBlockHit(blockId);
-                }
-                sprites.lastHealth = health;
-                this.updateWoodBlockHealthBar(blockId);
-            });
-        };
-
-        state.woodBlocks.onAdd(addWoodBlock);
-        state.woodBlocks.forEach(addWoodBlock);
-
-        state.woodBlocks.onRemove((_block, id) => {
-            const sprites = this.woodBlockSprites.get(id);
-            if (!sprites) return;
-            sprites.fill.destroy();
-            sprites.outline.destroy();
-            sprites.healthBackground.destroy();
-            sprites.healthFill.destroy();
-            sprites.flashEvent?.remove(false);
-            this.woodBlockSprites.delete(id);
-        });
-
         const addCampfire = (campfire, id) => {
             const campfireId = id || campfire.id;
             if (!campfireId || this.campfireSprites.has(campfireId)) return;
@@ -2977,6 +3542,63 @@ export class Game extends Phaser.Scene {
             if (!entry) return;
             entry.sprite.destroy();
             this.caltropSprites.delete(id);
+        });
+
+        const addEnchantmentTable = (table, id) => {
+            const tableId = id || table.id;
+            if (!tableId || this.enchantmentTableSprites.has(tableId)) return;
+
+            const sprite = this.add.sprite(table.x, table.y + ENCHANTMENT_TABLE_VISUAL_Y_OFFSET, ASSETS.spritesheet.enchantIdle.key, ENCHANTMENT_TABLE_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(ENCHANTMENT_TABLE_DISPLAY_SIZE, ENCHANTMENT_TABLE_DISPLAY_SIZE)
+                .setDepth(ENCHANTMENT_TABLE_DEPTH);
+            sprite.play(ENCHANTMENT_TABLE_IDLE_ANIMATION_KEY);
+            this.registerWorldObject(sprite);
+            this.enchantmentTableSprites.set(tableId, { sprite, table });
+
+            table.onChange(() => {
+                const entry = this.enchantmentTableSprites.get(tableId);
+                if (!entry) return;
+                entry.sprite.setPosition(table.x, table.y + ENCHANTMENT_TABLE_VISUAL_Y_OFFSET);
+            });
+        };
+
+        state.enchantmentTables?.onAdd(addEnchantmentTable);
+        state.enchantmentTables?.forEach(addEnchantmentTable);
+
+        state.enchantmentTables?.onRemove((_table, id) => {
+            const entry = this.enchantmentTableSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            this.enchantmentTableSprites.delete(id);
+        });
+
+        const addCraftingTable = (table, id) => {
+            const tableId = id || table.id;
+            if (!tableId || this.craftingTableSprites.has(tableId)) return;
+
+            const sprite = this.add.sprite(table.x, table.y + CRAFTING_TABLE_VISUAL_Y_OFFSET, ASSETS.spritesheet.craftingTable.key, CRAFTING_TABLE_FRAME)
+                .setOrigin(0.5)
+                .setDisplaySize(CRAFTING_TABLE_DISPLAY_SIZE, CRAFTING_TABLE_DISPLAY_SIZE)
+                .setDepth(CRAFTING_TABLE_DEPTH);
+            this.registerWorldObject(sprite);
+            this.craftingTableSprites.set(tableId, { sprite, table });
+
+            table.onChange(() => {
+                const entry = this.craftingTableSprites.get(tableId);
+                if (!entry) return;
+                entry.sprite.setPosition(table.x, table.y + CRAFTING_TABLE_VISUAL_Y_OFFSET);
+            });
+        };
+
+        state.craftingTables?.onAdd(addCraftingTable);
+        state.craftingTables?.forEach(addCraftingTable);
+
+        state.craftingTables?.onRemove((_table, id) => {
+            const entry = this.craftingTableSprites.get(id);
+            if (!entry) return;
+            entry.sprite.destroy();
+            this.craftingTableSprites.delete(id);
         });
 
         const addEnemy = (enemy, id) => {
@@ -3199,9 +3821,9 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Root state listeners ─────────────────────────────────────────────
-        this.timerText.setText(this.formatElapsedTime(state.elapsedSeconds || 0));
-        state.listen('elapsedSeconds', (elapsedSeconds) => {
-            this.timerText.setText(this.formatElapsedTime(elapsedSeconds || 0));
+        this.updateWaveText(state.waveNumber || 0);
+        state.listen('waveNumber', (waveNumber) => {
+            this.updateWaveText(waveNumber || 0);
         });
 
         state.listen('gameOverCountdown', (countdown) => {
@@ -3224,6 +3846,7 @@ export class Game extends Phaser.Scene {
                 this.stopHeldAttack();
                 this.cancelBowCharge();
                 this.closeCraftingMenu();
+                this.closeEnchantmentMenu();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
                 this.quitButton
@@ -3262,11 +3885,10 @@ export class Game extends Phaser.Scene {
         });
     }
 
-    formatElapsedTime(elapsedSeconds) {
-        const safeSeconds = Math.max(0, Math.floor(elapsedSeconds || 0));
-        const minutes = Math.floor(safeSeconds / 60);
-        const seconds = safeSeconds % 60;
-        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    updateWaveText(waveNumber) {
+        if (!this.waveText) return;
+        const safeWaveNumber = Math.max(0, Math.floor(waveNumber || 0));
+        this.waveText.setText(`Wave: ${safeWaveNumber}`);
     }
 
     updateGameOverCountdown(countdown) {
@@ -3467,7 +4089,7 @@ export class Game extends Phaser.Scene {
                 .setDepth(CALTROPS_DEPTH)
                 .setVisible(false);
         } else {
-            this.buildPreview = this.add.rectangle(0, 0, WOOD_BLOCK_SIZE, WOOD_BLOCK_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
+            this.buildPreview = this.add.rectangle(0, 0, BUILD_GRID_SIZE, BUILD_GRID_SIZE, BUILD_PREVIEW_FILL_COLOR, 0.28)
                 .setOrigin(0.5)
                 .setStrokeStyle(1, BUILD_PREVIEW_STROKE_COLOR, 0.75)
                 .setDepth(82)
@@ -3584,9 +4206,7 @@ export class Game extends Phaser.Scene {
         this.activeBuildPointer = pointer;
 
         const now = this.time.now;
-        const activeItem = this.getLocalActiveItem();
-        const minInterval = activeItem === ITEM_HAMMER && this.activeBuildButton === 0 ? HAMMER_REPAIR_TICK_MS : BUILD_DRAG_SEND_INTERVAL_MS;
-        if (now - this.lastBuildDragSentAt < minInterval) return;
+        if (now - this.lastBuildDragSentAt < BUILD_DRAG_SEND_INTERVAL_MS) return;
         this.sendBuildIntentAtPointer(pointer, this.activeBuildButton, false);
     }
 
@@ -3605,23 +4225,17 @@ export class Game extends Phaser.Scene {
         if (!cell) return;
 
         const activeItem = this.getLocalActiveItem();
-        const isRepairTick = button === 0 && activeItem === ITEM_HAMMER;
-        if (isRepairTick && !force && this.time.now - this.lastBuildDragSentAt < HAMMER_REPAIR_TICK_MS) return;
-        if (!force && !isRepairTick && cell.id === this.lastBuildDragCellId) return;
+        if (!force && cell.id === this.lastBuildDragCellId) return;
 
         this.lastBuildDragCellId = cell.id;
         this.lastBuildDragSentAt = this.time.now;
 
-        if (button === 0 && activeItem === ITEM_WOOD) {
-            RoomClient.sendBuildWoodBlock(cell.x, cell.y);
-        } else if (button === 0 && activeItem === ITEM_HAMMER) {
-            RoomClient.sendRepairWoodBlock(cell.x, cell.y);
-        } else if (button === 0 && activeItem === ITEM_CAMPFIRE) {
+        if (button === 0 && activeItem === ITEM_CAMPFIRE) {
             RoomClient.sendPlaceCampfire(cell.x, cell.y);
         } else if (button === 0 && activeItem === ITEM_WOOD_CALTROPS) {
             RoomClient.sendPlaceCaltrops(cell.x, cell.y);
-        } else if (button === 2 && (activeItem === ITEM_HAMMER || activeItem === ITEM_WOOD)) {
-            RoomClient.sendRemoveWoodBlock(cell.x, cell.y);
+        } else if (button === 2 && activeItem === ITEM_HAMMER) {
+            RoomClient.sendRemoveDeployable(cell.x, cell.y);
         }
     }
 
@@ -3738,6 +4352,7 @@ export class Game extends Phaser.Scene {
         const g = this.hitboxGraphics;
         g.clear();
 
+        this.drawMapSolidHitboxes(g);
         this.drawPlayerHitboxes(g);
         this.drawPlayerBulletHitboxes(g);
         this.drawEnemyBulletHitboxes(g);
@@ -3745,6 +4360,33 @@ export class Game extends Phaser.Scene {
         this.drawTreeHitboxes(g);
         this.drawCampfireHitboxes(g);
         this.drawCaltropsHitboxes(g);
+    }
+
+    drawMapSolidHitboxes(graphics) {
+        if (!this.mapTileCache || this.mapTileCache.size <= 0) return;
+
+        graphics.lineStyle(1, 0x55ccff, 0.72);
+        this.mapTileCache.forEach((chunk) => {
+            for (let localRow = 0; localRow < MAP_CHUNK_SIZE; localRow++) {
+                for (let localCol = 0; localCol < MAP_CHUNK_SIZE; localCol++) {
+                    const index = localRow * MAP_CHUNK_SIZE + localCol;
+                    const col = chunk.col * MAP_CHUNK_SIZE + localCol;
+                    const row = chunk.row * MAP_CHUNK_SIZE + localRow;
+                    for (const value of [chunk.layer1[index] || 0, chunk.layer2[index] || 0]) {
+                        if (value <= 0) continue;
+                        const frame = value - 1;
+                        if (!this.isSolidMapFrame(frame)) continue;
+                        const collider = this.getMapTileCollider(col, row, frame);
+                        graphics.strokeRect(
+                            collider.x - collider.halfWidth,
+                            collider.y - collider.halfHeight,
+                            collider.halfWidth * 2,
+                            collider.halfHeight * 2,
+                        );
+                    }
+                }
+            }
+        });
     }
 
     drawPlayerHitboxes(graphics) {
@@ -3763,7 +4405,7 @@ export class Game extends Phaser.Scene {
                 this.drawPlayerAttackHitbox(graphics, x, y, animationState);
             }
             if ((animationState?.axeWhirlwindHitboxUntil || 0) > this.time.now) {
-                this.drawPlayerAxeWhirlwindHitbox(graphics, x, y);
+                this.drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState);
             }
         });
     }
@@ -3858,9 +4500,11 @@ export class Game extends Phaser.Scene {
         graphics.lineBetween(startX, startY, endX, endY);
     }
 
-    drawPlayerAxeWhirlwindHitbox(graphics, x, y) {
+    drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState) {
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
+        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + 0.25 * rank);
         graphics.lineStyle(2, 0x66ffff, 0.95);
-        graphics.strokeCircle(x, y, PLAYER_AXE_WHIRLWIND_HIT_RADIUS);
+        graphics.strokeCircle(x, y, radius);
     }
 
     drawPlayerBulletHitboxes(graphics) {
@@ -3954,12 +4598,13 @@ export class Game extends Phaser.Scene {
 
     updatePlayerVisualPositions(deltaMs = 0) {
         const dtSec = Math.max(0, deltaMs) / 1000;
-        const maxStep = PLAYER_VISUAL_MOVE_SPEED * dtSec;
 
         this.playerSprites.forEach((sprite, sessionId) => {
             const animationState = this.playerAnimationState.get(sessionId);
             const weapon = this.playerWeaponSprites.get(sessionId);
             if (!animationState) return;
+            const visualMoveSpeed = animationState.dashing ? PLAYER_DASH_VISUAL_MOVE_SPEED : PLAYER_VISUAL_MOVE_SPEED;
+            const maxStep = visualMoveSpeed * dtSec;
 
             const targetX = Number.isFinite(animationState.visualTargetX) ? animationState.visualTargetX : sprite.x;
             const targetY = Number.isFinite(animationState.visualTargetY) ? animationState.visualTargetY : sprite.y;
@@ -4036,33 +4681,19 @@ export class Game extends Phaser.Scene {
         const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.dead || this.isBuildModeActive) return;
         if (animationState.activeItem !== ITEM_WOOD_AXE) return;
+        if ((animationState.axeWhirlwindCooldownProgress || this.localAxeWhirlwindCooldownProgress || 0) > 0) return;
         if (animationState.axeWhirlwind) {
             this.axeWhirlwindPointerId = pointer.id;
             this.axeWhirlwindPointer = pointer;
             return;
         }
-        if (this.time.now < this.nextAxeWhirlwindAt) return;
 
         this.stopHeldAttack();
         this.cancelBowCharge();
 
-        const worldPoint = this.getPointerWorldPoint(pointer);
-        const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
-        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
-
         this.axeWhirlwindPointerId = pointer.id;
         this.axeWhirlwindPointer = pointer;
-        animationState.axeWhirlwind = true;
-        animationState.attackItem = ITEM_WOOD_AXE;
-        animationState.attacking = false;
-        animationState.attackTargetX = null;
-        animationState.attackTargetY = null;
-        sprite.anims.stop();
-        this.playerWeaponSprites.get(sessionId)?.anims?.stop();
-        this.axeWhirlwindSoundNextAt.set(sessionId, 0);
-        this.nextAxeWhirlwindAt = this.time.now + AXE_WHIRLWIND_RESTART_COOLDOWN_MS;
         RoomClient.sendAxeWhirlwind(true);
-        this.playPlayerAxeWhirlwindAnimation(sessionId, direction);
     }
 
     stopAxeWhirlwind() {
@@ -5141,6 +5772,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerDashCooldownBars() {
+        this.playerDashCooldownBars.forEach((_dashBar, sessionId) => {
+            this.updatePlayerDashCooldownBar(sessionId);
+        });
+    }
+
     updatePlayerReviveBars() {
         this.playerReviveBars.forEach((_reviveBar, sessionId) => {
             this.updatePlayerReviveBar(sessionId);
@@ -5335,6 +5972,23 @@ export class Game extends Phaser.Scene {
         chargeBar.fill.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH * progress, PLAYER_HEALTH_BAR_HEIGHT);
     }
 
+    updatePlayerDashCooldownBar(sessionId) {
+        const dashBar = this.playerDashCooldownBars.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!dashBar || !sprite || !animationState) return;
+
+        const progress = Phaser.Math.Clamp(animationState.dashCooldownProgress || 0, 0, 1);
+        dashBar.fill.clear();
+        dashBar.fill.setVisible(progress > 0 && !animationState.dead);
+        if (!dashBar.fill.visible) return;
+
+        const x = sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprite.y + PLAYER_DASH_COOLDOWN_BAR_Y_OFFSET;
+        dashBar.fill.fillStyle(PLAYER_DASH_COOLDOWN_BAR_COLOR, PLAYER_DASH_COOLDOWN_BAR_ALPHA);
+        dashBar.fill.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH * progress, PLAYER_HEALTH_BAR_HEIGHT);
+    }
+
     updatePlayerReviveBar(sessionId) {
         const reviveBar = this.playerReviveBars.get(sessionId);
         const sprite = this.playerSprites.get(sessionId);
@@ -5385,43 +6039,6 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    updateWoodBlockHealthBar(blockId) {
-        const sprites = this.woodBlockSprites.get(blockId);
-        if (!sprites) return;
-
-        const maxHealth = Math.max(1, sprites.block.maxHealth || 5);
-        const health = Phaser.Math.Clamp(sprites.block.health ?? maxHealth, 0, maxHealth);
-        sprites.healthBackground.clear();
-        sprites.healthFill.clear();
-        if (health >= maxHealth) return;
-
-        const x = sprites.block.x - WOOD_BLOCK_HEALTH_BAR_WIDTH * 0.5;
-        const y = sprites.block.y + WOOD_BLOCK_HEALTH_BAR_Y_OFFSET;
-        const fillWidth = (health / maxHealth) * WOOD_BLOCK_HEALTH_BAR_WIDTH;
-
-        sprites.healthBackground.fillStyle(0x050505, 1);
-        sprites.healthBackground.fillRect(x, y, WOOD_BLOCK_HEALTH_BAR_WIDTH, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
-
-        if (fillWidth > 0) {
-            sprites.healthFill.fillStyle(WOOD_BLOCK_HEALTH_BAR_FILL_COLOR, 1);
-            sprites.healthFill.fillRect(x, y, fillWidth, WOOD_BLOCK_HEALTH_BAR_HEIGHT);
-        }
-    }
-
-    flashWoodBlockHit(blockId) {
-        const sprites = this.woodBlockSprites.get(blockId);
-        if (!sprites) return;
-
-        sprites.flashEvent?.remove(false);
-        sprites.fill.setFillStyle(0xffffff, 1);
-        sprites.flashEvent = this.time.delayedCall(WOOD_BLOCK_HIT_FLASH_MS, () => {
-            const current = this.woodBlockSprites.get(blockId);
-            if (!current) return;
-            current.fill.setFillStyle(WOOD_BLOCK_FILL_COLOR, 1);
-            current.flashEvent = null;
-        });
-    }
-
     addExplosion(x, y) {
         const explosion = new Explosion(this, x, y);
         this.registerWorldObject(explosion);
@@ -5436,6 +6053,9 @@ export class Game extends Phaser.Scene {
             fill.destroy();
         });
         this.playerBowChargeBars.forEach(({ fill }) => {
+            fill.destroy();
+        });
+        this.playerDashCooldownBars.forEach(({ fill }) => {
             fill.destroy();
         });
         this.playerReviveBars.forEach(({ background, fill }) => {
@@ -5467,19 +6087,14 @@ export class Game extends Phaser.Scene {
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
         });
-        this.woodBlockSprites.forEach(({ fill, outline, healthBackground, healthFill, flashEvent }) => {
-            flashEvent?.remove(false);
-            fill.destroy();
-            outline.destroy();
-            healthBackground.destroy();
-            healthFill.destroy();
-        });
         this.campfireSprites.forEach(({ sprite, radius, healBar }) => {
             sprite.destroy();
             radius?.destroy();
             healBar?.destroy();
         });
         this.caltropSprites.forEach(({ sprite }) => sprite.destroy());
+        this.enchantmentTableSprites.forEach(({ sprite }) => sprite.destroy());
+        this.craftingTableSprites.forEach(({ sprite }) => sprite.destroy());
         this.playerBulletSprites.forEach(({ sprite }) => sprite.destroy());
         this.enemyBulletSprites.forEach(({ sprite }) => sprite.destroy());
         if (this.grassNoiseLayer) {
@@ -5531,32 +6146,37 @@ export class Game extends Phaser.Scene {
         }
         this.setDebugRoundControlsVisible(false);
         this.closeCraftingMenu();
+        this.closeEnchantmentMenu();
         this.isBuildModeActive = false;
         this.resetBuildDragState();
         this.stopHeldAttack();
         this.cancelBowCharge();
-        this.nextAxeWhirlwindAt = 0;
+        this.localAxeWhirlwindProgress = 0;
+        this.localAxeWhirlwindCooldownProgress = 0;
+        this.updateHotbarAxeOverlays();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
         this.playerBowChargeBars.clear();
+        this.playerDashCooldownBars.clear();
         this.playerReviveBars.clear();
         this.playerNameLabels.clear();
         this.playerLevelLabels.clear();
         this.offscreenPlayerIndicators.clear();
         this.localExperienceState = null;
         this.localPendingUpgradeChoices = 0;
-        this.clearUpgradeUi();
+        this.updateSkillPointText();
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.casterChargeEffects.clear();
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
-        this.woodBlockSprites.clear();
         this.campfireSprites.clear();
         this.caltropSprites.clear();
+        this.enchantmentTableSprites.clear();
+        this.craftingTableSprites.clear();
         this.playerBulletSprites.clear();
         this.enemyBulletSprites.clear();
     }

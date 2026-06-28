@@ -58,7 +58,7 @@ The Colyseus server is responsible for:
 
 - Creating and disposing game rooms.
 - Assigning process-local 4-letter room codes.
-- Owning player, enemy, bullet, tree, log, score, timer, revive, and game-over state.
+- Owning player, enemy, bullet, tree, log, score, timer, wave counter, revive, and game-over state.
 - Validating and applying player input.
 - Applying movement, attacks, enemy behavior, collision, resource pickup, revives, and cleanup.
 - Broadcasting synced schema patches and one-shot event messages.
@@ -98,17 +98,17 @@ Important server files:
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
 | `"dash"` | `RoomClient.sendDash()` | One-shot dash request; the server owns cooldown, facing direction, movement, and collision resolution. |
 | `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
-| `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state. |
+| `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
-| `"buildWoodBlock"`, `"removeWoodBlock"`, `"repairWoodBlock"` | Building helpers | Requests server-authoritative wood block placement, removal, or repair. |
-| `"placeCampfire"`, `"placeCaltrops"` | Placement helpers | Requests server-authoritative deployable placement. |
+| `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
+| `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"` | Placement helpers | Requests server-authoritative deployable placement or hammer removal. |
 | `"craftItem"` | `RoomClient.sendCraftItem()` | Requests crafting by recipe ID. |
-| `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Applies one pending level-up upgrade choice. |
+| `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Requests an enchantment-table skill spend with `{ upgradeId, item, slot }`; the server validates skill points, table range, item tree, hotbar slot contents, prerequisites, and max ranks. |
 | `"setOutfitColor"` | `RoomClient.sendSetOutfitColor()` | Requests player presentation color changes. |
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
-| `"debugSetRound"` | Escape-menu debug controls | Development only: starts a later round (2–99) for the room. Round 1 is the initial wave; round N begins at elapsed minute N-1. |
+| `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -124,7 +124,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"craftResult"` | Acceptance or rejection feedback for a crafting request. |
 | `"itemCrafted"` | One-shot presentation for successful crafting. |
 | `"levelReset"` | One-shot presentation/state reset after a room-level reset. |
-| `"playerLevelUp"` | One-shot level-up presentation and upgrade-choice prompt. |
+| `"playerLevelUp"` | One-shot level-up presentation; the synced pending upgrade count is displayed as available skill points. |
 | `"enemyWaveStarted"` | One-shot wave-start presentation. |
 | `"mapImported"` | Legacy map-import acceptance feedback. |
 | `"mapList"` | Saved map names returned to the map editor. |
@@ -132,7 +132,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"mapSaveConflict"` | Save rejected because the map name already exists. |
 | `"mapSaved"` | Save success confirmation. |
 | `"mapLoaded"` | Load success confirmation, including whether data was trimmed. |
-| `"debugRoundResult"` | Development-only acceptance or validation feedback for a `"debugSetRound"` request. |
+| `"debugRoundResult"` | Acceptance or validation feedback for a `"debugSetRound"` request. |
 
 Durable game facts should usually be schema state, not transient messages.
 
@@ -150,12 +150,12 @@ Durable game facts should usually be schema state, not transient messages.
 | `enemyBullets` | `MapSchema<EnemyBulletState>` | Server-owned enemy bullet positions. |
 | `trees` | `MapSchema<TreeState>` | Active harvestable trees. |
 | `logs` | `MapSchema<LogState>` | Dropped wood pickups. |
-| `woodBlocks` | `MapSchema<WoodBlockState>` | Player-built barricades with server-owned health. |
 | `campfires` | `MapSchema<CampfireState>` | Player-placed healing deployables. |
 | `caltrops` | `MapSchema<CaltropState>` | Player-placed slowing/damage deployables. |
 | `mapChunks` | `MapSchema<MapChunkState>` | Sparse server-owned map tile chunks rendered by editor and saved-map game rooms. |
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
+| `waveNumber` | `int32` | Current 1-based enemy wave displayed by the client HUD. |
 | `teamScore` | `int32` | Shared score. |
 | `gameStarted` | `boolean` | Whether simulation has started. |
 | `gameOver` | `boolean` | Whether the room is in game-over state. |
@@ -165,7 +165,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, bow/axe state, upgrade counters, outfit color, and hotbar inventory.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include wood gain, max campfires, whirlwind cooldown, and whirlwind AOE size.
 
 ### Enemy State
 
@@ -177,11 +177,11 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Deployable State
 
-`WoodBlockState`, `CampfireState`, and `CaltropState` sync renderable deployables created by server-authoritative building and crafting systems.
+`CampfireState` and `CaltropState` sync renderable deployables created by server-authoritative crafting and placement systems.
 
 ### Private Server State
 
-Not every simulation detail is synced. `ShmupRoom.ts` keeps private server-only maps for things like player velocity, cooldowns, revive targets, enemy modes, bullet velocity, and tree health.
+Not every simulation detail is synced. `ShmupRoom.ts` keeps private server-only maps for things like player velocity, cooldowns, revive targets, enemy modes, bullet velocity, tree health, and campfire ownership.
 
 Use schema state only for data clients need to render or display.
 
@@ -193,10 +193,13 @@ Current server-owned systems include:
 
 - Player join/leave and room reset after game over.
 - World bounds and tree generation.
-- Player movement, facing direction, attack lockout, attack cooldown, and interaction input.
+- Player movement, facing direction, smooth dash movement with a 2-second cooldown, attack lockout, attack cooldown, and interaction input. Dash cooldown progress is synced for the under-player cooldown bar.
+- Axe left-click attacks and active axe whirlwind reduce server-authoritative player movement speed by 25%. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades can reduce the 10-second base cooldown by 1 second per rank and increase the 56px base AOE radius by 25% per rank, with server-enforced max rank 3.
+- Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites and server-enforced max ranks.
 - Tree damage, tree removal, and log spawning.
-- Wood pickup.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal.
+- Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.
+- Player-placed campfires with a per-player active cap of 1 plus axe max-campfire upgrade ranks.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.
@@ -210,11 +213,11 @@ Development builds expose a `CREATE MAP` action in the lobby. It creates a `shmu
 
 Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no trees or enemies, and retain only player movement plus server-authoritative map-tile collision. A red 3840×2160 boundary marks the original game-world size; players and map tiles are authoritatively constrained inside it. The `mapChunks` schema field holds sparse 16×16 tile chunks as base64-encoded uint16 frame values. Clients send `placeMapTile` and `removeMapTile`; the room validates all coordinates, frame values, and size limits.
 
-`Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
+`Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Selected Castle_1 upper vertical support frames use centered, 50%-wide top-half solid colliders, while the lower and corner supports use centered, 50%-wide full-height colliders. Other solid map frames use full-tile colliders. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
 
 Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
-Enemy navigation treats player-built wood blocks and solid saved-map tiles as blocked cells, so pathing routes around authored colliders instead of walking through them.
+Enemy navigation uses a server-private 40px nav grid built from solid saved-map tiles and layer-3 table objects. A nav cell is blocked when its center cannot hold an enemy foot, and nav edges are precomputed when topology changes by rejecting center-to-center capsule steps that clip authored solid geometry. The room caches heap-built Dijkstra flow fields per player target cell and map topology version, so enemies choose reachable players by path cost and follow the shortest available route around walls without rechecking every wall edge during normal enemy ticks. Direct chasing is used only when the enemy has a clear segment to the player. Caltrops are not route blockers; they only apply their server-side slow when enemies physically cross them. Map tile and layer-3 table topology changes invalidate the private nav cache.
 
 In saved-map regular rooms, wood drops relocate to nearby green/walkable authored tiles and are not spawned on non-green tiles. Player projectiles are removed when their movement segment crosses a solid authored tile.
 
@@ -248,6 +251,8 @@ npm run server:start
 The server listens on `process.env.PORT` or `2567`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
+
+Live lag testing currently exposes the Escape-menu round jump controls and enemy simulation diagnostics in production. The map editor remains development-only.
 
 ---
 

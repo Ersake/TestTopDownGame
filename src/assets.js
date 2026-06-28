@@ -115,6 +115,27 @@ export default {
                 frameHeight: 640,
             }]
         },
+        enchantIdle: {
+            key: 'enchant-idle',
+            args: ['assets/enchantidle.png', {
+                frameWidth: 32,
+                frameHeight: 32,
+            }]
+        },
+        enchantEffect: {
+            key: 'enchant-effect',
+            args: ['assets/enchanteffect.png', {
+                frameWidth: 32,
+                frameHeight: 32,
+            }]
+        },
+        craftingTable: {
+            key: 'crafting-table',
+            args: ['assets/craftingtable.png', {
+                frameWidth: 32,
+                frameHeight: 32,
+            }]
+        },
         ships: {
             key: 'ships',
             args: ['assets/ships.png', {

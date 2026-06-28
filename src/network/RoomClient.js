@@ -178,19 +178,14 @@ class RoomClient {
         this.room.send("equipSlot", { slot });
     }
 
-    sendBuildWoodBlock(x, y) {
+    sendSwapHotbarSlots(fromSlot, toSlot) {
         if (!this.room) return;
-        this.room.send("buildWoodBlock", { x, y });
+        this.room.send("swapHotbarSlots", { fromSlot, toSlot });
     }
 
-    sendRemoveWoodBlock(x, y) {
+    sendRemoveDeployable(x, y) {
         if (!this.room) return;
-        this.room.send("removeWoodBlock", { x, y });
-    }
-
-    sendRepairWoodBlock(x, y) {
-        if (!this.room) return;
-        this.room.send("repairWoodBlock", { x, y });
+        this.room.send("removeDeployable", { x, y });
     }
 
     sendPlaceCampfire(x, y) {
@@ -208,9 +203,9 @@ class RoomClient {
         this.room.send("craftItem", { recipeId });
     }
 
-    sendSelectUpgrade(upgradeId) {
+    sendSelectUpgrade(upgradeId, item = '', slot = 0) {
         if (!this.room) return;
-        this.room.send("selectUpgrade", { upgradeId });
+        this.room.send("selectUpgrade", { upgradeId, item, slot });
     }
 
     sendSetOutfitColor(outfitColor) {
@@ -228,9 +223,29 @@ class RoomClient {
         this.room.send("removeMapTile", { col, row, layer });
     }
 
-    sendReplaceMap(chunks) {
+    sendPlaceEnchantmentTable(col, row) {
+        if (!this.room) return;
+        this.room.send("placeEnchantmentTable", { col, row });
+    }
+
+    sendRemoveEnchantmentTable(col, row) {
+        if (!this.room) return;
+        this.room.send("removeEnchantmentTable", { col, row });
+    }
+
+    sendPlaceCraftingTable(col, row) {
+        if (!this.room) return;
+        this.room.send("placeCraftingTable", { col, row });
+    }
+
+    sendRemoveCraftingTable(col, row) {
+        if (!this.room) return;
+        this.room.send("removeCraftingTable", { col, row });
+    }
+
+    sendReplaceMap(chunks, enchantmentTables = [], craftingTables = []) {
         if (!this.room) return false;
-        const payload = { chunks };
+        const payload = { chunks, enchantmentTables, craftingTables };
         const payloadSize = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
         if (payloadSize > MAX_MAP_REPLACE_PAYLOAD_BYTES) {
             console.error('[RoomClient] refusing oversized replaceMap payload:', payloadSize);

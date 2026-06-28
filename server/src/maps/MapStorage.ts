@@ -7,6 +7,8 @@ export interface StoredMapDocument {
     width: number;
     height: number;
     chunks: unknown[];
+    enchantmentTables?: unknown[];
+    craftingTables?: unknown[];
 }
 
 export function normalizeMapName(value: unknown): string | null {

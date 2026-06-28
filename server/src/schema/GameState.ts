@@ -22,7 +22,11 @@ export class PlayerState extends Schema {
     @type("string")  attackItem: string = "wood_axe";
     @type("int32")   attackSeq: number = 0;
     @type("boolean") axeAttackHitboxActive: boolean = false;
+    @type("boolean") dashing: boolean = false;
+    @type("float32") dashCooldownProgress: number = 0;
     @type("boolean") axeWhirlwind: boolean = false;
+    @type("float32") axeWhirlwindProgress: number = 0;
+    @type("float32") axeWhirlwindCooldownProgress: number = 0;
     @type("int32")   axeWhirlwindHitSeq: number = 0;
     @type("boolean") bowCharging: boolean = false;
     @type("float32") bowChargeProgress: number = 0;
@@ -31,10 +35,13 @@ export class PlayerState extends Schema {
     @type("int16")   axeSwingSpeedUpgrades: number = 0;
     @type("int16")   axeTreeDamageUpgrades: number = 0;
     @type("int16")   axeEnemyDamageUpgrades: number = 0;
+    @type("int16")   axeWoodGainUpgrades: number = 0;
+    @type("int16")   axeCampfireMaxUpgrades: number = 0;
+    @type("int16")   axeWhirlwindCooldownUpgrades: number = 0;
+    @type("int16")   axeWhirlwindAoeUpgrades: number = 0;
     @type("int16")   bowDamageUpgrades: number = 0;
     @type("int16")   bowPierceUpgrades: number = 0;
     @type("int16")   bowChargeTimeUpgrades: number = 0;
-    @type("int16")   barricadeHealthUpgrades: number = 0;
     @type("int16")   woodGatherUpgrades: number = 0;
     @type("int16")   campfireUpgrades: number = 0;
     @type("int16")   pendingCampfireCharges: number = 0;
@@ -92,14 +99,6 @@ export class LogState extends Schema {
     @type("int8")    amount: number = 5;
 }
 
-export class WoodBlockState extends Schema {
-    @type("string")  id: string = "";
-    @type("float32") x: number = 0;
-    @type("float32") y: number = 0;
-    @type("int8")    health: number = 5;
-    @type("int8")    maxHealth: number = 5;
-}
-
 export class CampfireState extends Schema {
     @type("string")  id: string = "";
     @type("float32") x: number = 0;
@@ -109,6 +108,22 @@ export class CampfireState extends Schema {
 
 export class CaltropState extends Schema {
     @type("string")  id: string = "";
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
+export class EnchantmentTableState extends Schema {
+    @type("string") id: string = "";
+    @type("int16")  col: number = 0;
+    @type("int16")  row: number = 0;
+    @type("float32") x: number = 0;
+    @type("float32") y: number = 0;
+}
+
+export class CraftingTableState extends Schema {
+    @type("string") id: string = "";
+    @type("int16")  col: number = 0;
+    @type("int16")  row: number = 0;
     @type("float32") x: number = 0;
     @type("float32") y: number = 0;
 }
@@ -126,9 +141,10 @@ export class GameRoomState extends Schema {
     @type({ map: EnemyBulletState })  enemyBullets  = new MapSchema<EnemyBulletState>();
     @type({ map: TreeState })         trees         = new MapSchema<TreeState>();
     @type({ map: LogState })          logs          = new MapSchema<LogState>();
-    @type({ map: WoodBlockState })    woodBlocks    = new MapSchema<WoodBlockState>();
     @type({ map: CampfireState })     campfires     = new MapSchema<CampfireState>();
     @type({ map: CaltropState })      caltrops      = new MapSchema<CaltropState>();
+    @type({ map: EnchantmentTableState }) enchantmentTables = new MapSchema<EnchantmentTableState>();
+    @type({ map: CraftingTableState }) craftingTables = new MapSchema<CraftingTableState>();
     @type({ map: MapChunkState })     mapChunks     = new MapSchema<MapChunkState>();
 
     @type("int32")  worldWidth:  number = 4800;
@@ -137,6 +153,7 @@ export class GameRoomState extends Schema {
     @type("string") activeMapName: string = "";
 
     @type("int32")   elapsedSeconds: number = 0;
+    @type("int32")   waveNumber: number = 0;
     @type("int32")   teamScore:   number  = 0;
     @type("boolean") gameStarted: boolean = false;
     @type("boolean") gameOver:    boolean = false;
