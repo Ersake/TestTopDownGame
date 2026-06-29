@@ -42,12 +42,14 @@ While editing:
 
 - Preserve server authority for gameplay and map truth.
 - Keep changes scoped to the requested behavior.
+- Treat server tick work as performance-sensitive. Be careful with changes that add per-player, per-enemy, per-projectile, per-tile, or per-schema-update work, especially in enemy AI, pathfinding, collision checks, map traversal, logging, and network sync.
 - Update `ARCHITECTURE.md` when changing room flow, schema fields, room messages, deployment, map storage, or major gameplay systems.
 - Prefer extending existing helpers and message paths over adding parallel systems.
 
 When finishing:
 
 - Run the verification commands that match the files touched.
+- For gameplay, enemy AI, pathfinding, collision, map, or networking changes, include a lag-risk check: confirm expensive loops are bounded, cached, budgeted, or gated from production logging, and note any multiplayer/performance checks that could not be run.
 - Report any manual multiplayer or map-editor checks that could not be run.
 
 ---
@@ -245,6 +247,8 @@ npm run client:dev
 
 Create a room in one tab, join with the displayed room code in a second tab, and verify remote rendering plus shared state changes.
 
+For changes that touch enemy AI, pathfinding, collision, spawning, map tiles, projectiles, schema update frequency, or server logs, also sanity-check server tick cost under a realistic enemy count or wave. Production rooms may load saved maps automatically, so test or reason about saved-map pathfinding and collision paths, not only empty local rooms.
+
 ### Map Editor Changes
 
 In development, verify the map-editor path:
@@ -306,6 +310,7 @@ Use `NODE_ENV=production` in production so the Colyseus monitor is not exposed.
 - Use compact schema types where practical, such as `float32`, `int8`, and `int32`.
 - Clamp positions, directions, and target coordinates received from clients.
 - Clean up Colyseus schema objects and matching private server state together.
+- Keep per-tick server work bounded. Cache or budget expensive AI/pathfinding/collision work, avoid broad scans inside enemy/player/projectile loops, and keep verbose diagnostics disabled in production unless explicitly gated by an environment flag.
 
 ### Client
 

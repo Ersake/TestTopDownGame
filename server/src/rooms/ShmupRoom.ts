@@ -122,7 +122,7 @@ const ENEMY_NEXT_WAVE_DELAY_MS = 3000;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
-const ENABLE_ENEMY_DIAGNOSTICS = true;
+const ENABLE_ENEMY_DIAGNOSTICS = process.env.ENEMY_DIAGNOSTICS === "1";
 const SLOW_TICK_LOG_THRESHOLD_MS = 75;
 const TICK_PHASE_LOG_MIN_MS = 1;
 const INITIAL_MELEE_WAVE_COUNT = 5;
@@ -176,6 +176,7 @@ const ENEMY_PATH_MAX_BUILDS_PER_TICK = 3;
 const ENEMY_PATH_MAX_EXPANSIONS = 2000;
 const ENEMY_PATH_TARGET_SEARCH_RADIUS = 6;
 const ENEMY_PATH_DIAGONAL_COST = Math.SQRT2;
+const ENEMY_DIRECT_PATH_RECHECK_MS = 250;
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
@@ -425,6 +426,11 @@ interface ServerEnemy {
     pathTargetCell: PathCell | null;
     pathTopologyVersion: number;
     repathMs: number;
+    directPathFromCell: PathCell | null;
+    directPathTargetCell: PathCell | null;
+    directPathTopologyVersion: number;
+    directPathCheckMs: number;
+    directPathClear: boolean;
     caltropsSlowMs: number;
     caltropsCheckMs: number;
 }
@@ -1050,6 +1056,11 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.pathTargetCell = null;
             se.pathTopologyVersion = this.mapTopologyVersion;
             se.repathMs = 0;
+            se.directPathFromCell = null;
+            se.directPathTargetCell = null;
+            se.directPathTopologyVersion = this.mapTopologyVersion;
+            se.directPathCheckMs = 0;
+            se.directPathClear = false;
         });
     }
 
@@ -4164,6 +4175,11 @@ export class ShmupRoom extends Room<GameRoomState> {
             pathTargetCell: null,
             pathTopologyVersion: this.mapTopologyVersion,
             repathMs: 0,
+            directPathFromCell: null,
+            directPathTargetCell: null,
+            directPathTopologyVersion: this.mapTopologyVersion,
+            directPathCheckMs: 0,
+            directPathClear: false,
             caltropsSlowMs: 0,
             caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
         });
@@ -4183,6 +4199,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             try {
                 this.tickEnemyCaltropsSlow(enemy, se, dtMs);
                 se.repathMs = Math.max(0, se.repathMs - dtMs);
+                se.directPathCheckMs = Math.max(0, se.directPathCheckMs - dtMs);
                 if (se.mode === "stun") {
                     enemy.action = "idle";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -4269,19 +4286,10 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
 
                 const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
-                if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+                if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
                     se.path = [];
                     se.pathTargetCell = null;
-                    const prevX = enemy.x;
-                    const prevY = enemy.y;
-                    const resolved = this.moveEnemyWithWorldColliders(
-                        enemy,
-                        enemy.x + (dx / distance) * move,
-                        enemy.y + (dy / distance) * move,
-                    );
-                    enemy.x = resolved.x;
-                    enemy.y = resolved.y;
-                    this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+                    this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
                     return;
                 }
 
@@ -4378,19 +4386,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+        if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
             se.path = [];
             se.pathTargetCell = null;
-            const prevX = enemy.x;
-            const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWorldColliders(
-                enemy,
-                enemy.x + (dx / distance) * move,
-                enemy.y + (dy / distance) * move,
-            );
-            enemy.x = resolved.x;
-            enemy.y = resolved.y;
-            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+            this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
             return;
         }
 
@@ -4463,19 +4462,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (distance <= 0) return;
 
         const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
-        if (this.hasDirectEnemyPath(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET, target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET)) {
+        if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
             se.path = [];
             se.pathTargetCell = null;
-            const prevX = enemy.x;
-            const prevY = enemy.y;
-            const resolved = this.moveEnemyWithWorldColliders(
-                enemy,
-                enemy.x + (dx / distance) * move,
-                enemy.y + (dy / distance) * move,
-            );
-            enemy.x = resolved.x;
-            enemy.y = resolved.y;
-            this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+            this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
             return;
         }
 
@@ -4569,6 +4559,61 @@ export class ShmupRoom extends Room<GameRoomState> {
 
             return { x: resolvedX, y: resolvedY };
         });
+    }
+
+    private moveEnemyDirectlyToward(
+        enemy: EnemyState,
+        se: ServerEnemy,
+        dx: number,
+        dy: number,
+        distance: number,
+        move: number,
+    ): void {
+        const prevX = enemy.x;
+        const prevY = enemy.y;
+        const resolved = this.moveEnemyWithWorldColliders(
+            enemy,
+            enemy.x + (dx / distance) * move,
+            enemy.y + (dy / distance) * move,
+        );
+        const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
+        enemy.x = resolved.x;
+        enemy.y = resolved.y;
+        this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+        if (!moved) {
+            se.directPathClear = false;
+            se.directPathCheckMs = 0;
+        }
+    }
+
+    private shouldUseDirectEnemyPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
+        const fromCell = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
+        const targetCell = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
+        const topologyChanged = se.directPathTopologyVersion !== this.mapTopologyVersion;
+        const fromChanged = !se.directPathFromCell
+            || se.directPathFromCell.col !== fromCell.col
+            || se.directPathFromCell.row !== fromCell.row;
+        const targetChanged = !se.directPathTargetCell
+            || se.directPathTargetCell.col !== targetCell.col
+            || se.directPathTargetCell.row !== targetCell.row;
+
+        if (!topologyChanged && !fromChanged && !targetChanged && se.directPathCheckMs > 0) {
+            this.incrementEnemyCounter(se.directPathClear ? "directPathCacheClear" : "directPathCacheBlocked");
+            return se.directPathClear;
+        }
+
+        const clear = this.hasDirectEnemyPath(
+            enemy.x,
+            enemy.y + ENEMY_FOOT_Y_OFFSET,
+            target.x,
+            target.y + PLAYER_TREE_Y_OFFSET,
+        );
+        se.directPathFromCell = fromCell;
+        se.directPathTargetCell = targetCell;
+        se.directPathTopologyVersion = this.mapTopologyVersion;
+        se.directPathCheckMs = ENEMY_DIRECT_PATH_RECHECK_MS;
+        se.directPathClear = clear;
+        return clear;
     }
 
     private hasDirectEnemyPath(fromX: number, fromY: number, toX: number, toY: number): boolean {

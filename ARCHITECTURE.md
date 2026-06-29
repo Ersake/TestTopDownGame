@@ -205,6 +205,12 @@ Current server-owned systems include:
 - Player health, death, revive progress, revive completion, and game-over checks.
 - Team score, player kills, and elapsed round time.
 
+### Performance Sensitivity
+
+The room tick runs on the server and directly affects every connected player. Changes to enemy AI, pathfinding, map collision, projectile collision, spawning, schema update frequency, and production logging must be treated as lag-sensitive. Per-entity and per-tile work should be bounded, cached, spatially indexed, rate-limited, or otherwise budgeted before it is added to the 50ms simulation loop.
+
+Production games may load saved maps automatically, so performance checks should consider authored solid tiles and layer-3 objects, not only empty local rooms. Enemy pathfinding uses direct-path checks as a fast path, bounded A* as a fallback, and cache invalidation on map topology changes; changes in this area should preserve those limits.
+
 ---
 
 ## Development Map Editor
@@ -217,7 +223,7 @@ Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no t
 
 Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
-Enemy movement uses direct server-authoritative chasing toward the nearest alive player as a fast path. When a solid saved-map tile or layer-3 table blocks the direct segment, melee enemies, caster repositioning, and Dark Knight walking use a bounded per-enemy A* path on the 40px map grid. Enemy navigation treats any solid map frame as a fully blocked tile, ignores partial visual collider shapes for pathfinding, prevents diagonal corner cutting, limits path builds per tick, and reuses valid paths until the target tile changes, topology changes, the path empties, or movement gets blocked. Dark Knight rush remains direct collision-resolved movement. Caltrops are not route blockers; they only apply their server-side slow when enemies physically cross them. Map tile and layer-3 table topology changes invalidate enemy path and collision caches.
+Enemy movement uses direct server-authoritative chasing toward the nearest alive player as a fast path. Direct-path checks are cached briefly per enemy and invalidated when relevant grid cells or map topology change, avoiding full segment scans every simulation tick. When a solid saved-map tile or layer-3 table blocks the direct segment, melee enemies, caster repositioning, and Dark Knight walking use a bounded per-enemy A* path on the 40px map grid. Enemy navigation treats any solid map frame as a fully blocked tile, ignores partial visual collider shapes for pathfinding, prevents diagonal corner cutting, limits path builds per tick, and reuses valid paths until the target tile changes, topology changes, the path empties, or movement gets blocked. Dark Knight rush remains direct collision-resolved movement. Caltrops are not route blockers; they only apply their server-side slow when enemies physically cross them. Map tile and layer-3 table topology changes invalidate enemy path and collision caches.
 
 In saved-map regular rooms, wood drops relocate to nearby green/walkable authored tiles and are not spawned on non-green tiles. Player projectiles are removed when their movement segment crosses a solid authored tile.
 
@@ -252,7 +258,7 @@ The server listens on `process.env.PORT` or `2567`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 
-Live lag testing currently exposes the Escape-menu round jump controls and enemy simulation diagnostics in production. The map editor remains development-only.
+Live lag testing currently exposes the Escape-menu round jump controls in production. Enemy simulation diagnostics default to off and can be enabled with `ENEMY_DIAGNOSTICS=1`. The map editor remains development-only.
 
 ---
 
@@ -261,6 +267,7 @@ Live lag testing currently exposes the Escape-menu round jump controls and enemy
 - `RoomClient.js` is the only client-side module that imports `colyseus.js`.
 - `Game.js` renders synced state but does not decide authoritative gameplay outcomes.
 - `ShmupRoom.ts` is the source of truth for gameplay rules.
+- `ShmupRoom.ts` tick work must stay bounded and production-safe; avoid unbounded scans or verbose production diagnostics in enemy, pathfinding, collision, map, projectile, and sync paths.
 - `GameState.ts` contains only synced schema data.
 - Private room maps contain server-only simulation details.
 - Client asset loading flows through `src/assets.js` and `Preloader`.
