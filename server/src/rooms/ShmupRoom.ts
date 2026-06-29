@@ -98,6 +98,9 @@ const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
 const BUILD_GRID_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
 const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
+const BUILD_PATH_COLUMNS = Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE);
+const BUILD_PATH_ROWS = Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
+const BUILD_PATH_CELL_COUNT = BUILD_PATH_COLUMNS * BUILD_PATH_ROWS;
 const BUILD_RANGE = 192;
 const FIRST_LEVEL_UP_KILLS = 5;
 const REVIVE_DURATION_MS = 2500;
@@ -178,12 +181,14 @@ const ENEMY_PATH_MAX_EXPANSIONS = 2000;
 const ENEMY_PATH_TARGET_SEARCH_RADIUS = 6;
 const ENEMY_PATH_DIAGONAL_COST = Math.SQRT2;
 const ENEMY_DIRECT_PATH_RECHECK_MS = 250;
-const ENEMY_FLOW_FIELD_REFRESH_MS = 250;
+const ENEMY_FLOW_FIELD_MAX_BUILDS_PER_TICK = 1;
 const ENEMY_LOS_RECHECK_MS = 200;
 const ENEMY_FLOW_DIRECTIONS: Array<[number, number]> = [
     [0, -1], [1, 0], [0, 1], [-1, 0],
     [1, -1], [1, 1], [-1, 1], [-1, -1],
 ];
+const ENEMY_FLOW_DIRECTION_COLS = new Int8Array([0, 1, 0, -1, 1, 1, -1, -1]);
+const ENEMY_FLOW_DIRECTION_ROWS = new Int8Array([-1, 0, 1, 0, -1, 1, 1, -1]);
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
@@ -426,7 +431,6 @@ type EnemyLineOfSightKind = "melee" | "caster" | "darkKnight";
 interface EnemyFlowField {
     targetCell: PathCell;
     topologyVersion: number;
-    refreshAtMs: number;
     dirX: Int8Array;
     dirY: Int8Array;
     distance: Int16Array;
@@ -674,13 +678,16 @@ export class ShmupRoom extends Room<GameRoomState> {
     private mapTileCount = 0;
     private caltropsByBuildCell = new Map<string, CaltropsPoint[]>();
     private buildPathBlockedCells = new Set<string>();
+    private buildPathBlockedGrid = new Uint8Array(BUILD_PATH_CELL_COUNT);
     private mapTopologyVersion = 0;
     private solidSegmentCache = new Map<string, boolean>();
     private enemyFlowFields = new Map<string, EnemyFlowField>();
+    private enemyFlowBuildQueue = new Int32Array(BUILD_PATH_CELL_COUNT);
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
     private recordingEnemyMetrics = false;
     private enemyPathBuildsThisTick = 0;
+    private enemyFlowBuildsThisTick = 0;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -1162,12 +1169,14 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private rebuildBuildPathBlockedCells(): void {
         this.buildPathBlockedCells.clear();
+        this.buildPathBlockedGrid.fill(0);
         const columns = this.buildPathColumnCount();
         const rows = this.buildPathRowCount();
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < columns; col++) {
                 if (this.computeBuildPathCellBlocked(col, row)) {
                     this.buildPathBlockedCells.add(this.buildCellKey(col, row));
+                    this.buildPathBlockedGrid[this.buildCellIndex(col, row)] = 1;
                 }
             }
         }
@@ -1178,21 +1187,24 @@ export class ShmupRoom extends Room<GameRoomState> {
             for (let col = mapCol - 1; col <= mapCol + 1; col++) {
                 if (!this.isBuildPathCellInside(col, row)) continue;
                 const key = this.buildCellKey(col, row);
+                const index = this.buildCellIndex(col, row);
                 if (this.computeBuildPathCellBlocked(col, row)) {
                     this.buildPathBlockedCells.add(key);
+                    this.buildPathBlockedGrid[index] = 1;
                 } else {
                     this.buildPathBlockedCells.delete(key);
+                    this.buildPathBlockedGrid[index] = 0;
                 }
             }
         }
     }
 
     private buildPathColumnCount(): number {
-        return Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE);
+        return BUILD_PATH_COLUMNS;
     }
 
     private buildPathRowCount(): number {
-        return Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
+        return BUILD_PATH_ROWS;
     }
 
     private placeMapTile(data: unknown): void {
@@ -4315,6 +4327,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickEnemies(dtSec: number, dtMs: number) {
         const dead: string[] = [];
         this.enemyPathBuildsThisTick = 0;
+        this.enemyFlowBuildsThisTick = 0;
         this.pruneEnemyFlowFields();
         this.state.enemies.forEach((enemy, id) => {
             this.incrementEnemyCounter("enemyLoops");
@@ -4815,30 +4828,43 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (existing
             && existing.topologyVersion === this.mapTopologyVersion
             && existing.targetCell.col === targetCell.col
-            && existing.targetCell.row === targetCell.row
-            && this.elapsedMs < existing.refreshAtMs) {
+            && existing.targetCell.row === targetCell.row) {
             this.incrementEnemyCounter("flowFieldCacheHits");
             return existing;
         }
 
-        const field = this.buildEnemyFlowField(targetCell);
+        if (this.enemyFlowBuildsThisTick >= ENEMY_FLOW_FIELD_MAX_BUILDS_PER_TICK) {
+            if (existing && existing.topologyVersion === this.mapTopologyVersion) {
+                this.incrementEnemyCounter("flowFieldStaleBudgetHits");
+                return existing;
+            }
+            this.incrementEnemyCounter("flowFieldBuildSkippedBudget");
+            return null;
+        }
+
+        this.enemyFlowBuildsThisTick++;
+        const field = this.buildEnemyFlowField(targetCell, existing);
         this.enemyFlowFields.set(target.id, field);
         return field;
     }
 
-    private buildEnemyFlowField(targetCell: PathCell): EnemyFlowField {
+    private buildEnemyFlowField(targetCell: PathCell, reusable?: EnemyFlowField): EnemyFlowField {
         return this.measureEnemySubphase("flowBuild", () => {
             this.incrementEnemyCounter("flowFieldBuilds");
-            const columns = this.buildPathColumnCount();
-            const rows = this.buildPathRowCount();
-            const totalCells = columns * rows;
-            const distance = new Int16Array(totalCells);
+            const columns = BUILD_PATH_COLUMNS;
+            const rows = BUILD_PATH_ROWS;
+            const totalCells = BUILD_PATH_CELL_COUNT;
+            const blocked = this.buildPathBlockedGrid;
+            const distance = reusable?.distance ?? new Int16Array(totalCells);
             distance.fill(-1);
-            const dirX = new Int8Array(totalCells);
-            const dirY = new Int8Array(totalCells);
-            const queue = new Int32Array(totalCells);
+            const dirX = reusable?.dirX ?? new Int8Array(totalCells);
+            const dirY = reusable?.dirY ?? new Int8Array(totalCells);
+            dirX.fill(0);
+            dirY.fill(0);
+            const queue = this.enemyFlowBuildQueue;
             let readIndex = 0;
             let writeIndex = 0;
+            let visited = 0;
 
             const targetIndex = this.buildCellIndex(targetCell.col, targetCell.row);
             distance[targetIndex] = 0;
@@ -4849,15 +4875,21 @@ export class ShmupRoom extends Room<GameRoomState> {
                 const currentCol = currentIndex % columns;
                 const currentRow = Math.floor(currentIndex / columns);
                 const currentDistance = distance[currentIndex];
-                this.incrementEnemyCounter("flowFieldCellsVisited");
+                visited++;
 
-                for (const [offsetCol, offsetRow] of ENEMY_FLOW_DIRECTIONS) {
+                for (let directionIndex = 0; directionIndex < ENEMY_FLOW_DIRECTION_COLS.length; directionIndex++) {
+                    const offsetCol = ENEMY_FLOW_DIRECTION_COLS[directionIndex];
+                    const offsetRow = ENEMY_FLOW_DIRECTION_ROWS[directionIndex];
                     const nextCol = currentCol + offsetCol;
                     const nextRow = currentRow + offsetRow;
-                    if (!this.isBuildPathCellInside(nextCol, nextRow) || this.isBuildPathCellBlocked(nextCol, nextRow)) continue;
-                    if (!this.isBuildPathStepAllowed(nextCol, nextRow, currentCol, currentRow)) continue;
-
-                    const nextIndex = this.buildCellIndex(nextCol, nextRow);
+                    if (nextCol < 0 || nextRow < 0 || nextCol >= columns || nextRow >= rows) continue;
+                    const nextIndex = nextRow * columns + nextCol;
+                    if (blocked[nextIndex] !== 0) continue;
+                    if (offsetCol !== 0 && offsetRow !== 0
+                        && (blocked[nextRow * columns + currentCol] !== 0
+                            || blocked[currentRow * columns + nextCol] !== 0)) {
+                        continue;
+                    }
                     if (distance[nextIndex] >= 0) continue;
 
                     distance[nextIndex] = currentDistance + 1;
@@ -4866,11 +4898,11 @@ export class ShmupRoom extends Room<GameRoomState> {
                     queue[writeIndex++] = nextIndex;
                 }
             }
+            this.incrementEnemyCounter("flowFieldCellsVisited", visited);
 
             return {
                 targetCell,
                 topologyVersion: this.mapTopologyVersion,
-                refreshAtMs: this.elapsedMs + ENEMY_FLOW_FIELD_REFRESH_MS,
                 dirX,
                 dirY,
                 distance,
@@ -5375,17 +5407,17 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private buildCellIndex(col: number, row: number): number {
-        return row * this.buildPathColumnCount() + col;
+        return row * BUILD_PATH_COLUMNS + col;
     }
 
     private isBuildPathCellInside(col: number, row: number): boolean {
         return col >= 0 && row >= 0
-            && col < this.buildPathColumnCount()
-            && row < this.buildPathRowCount();
+            && col < BUILD_PATH_COLUMNS
+            && row < BUILD_PATH_ROWS;
     }
 
     private isBuildPathCellBlocked(col: number, row: number): boolean {
-        return this.buildPathBlockedCells.has(this.buildCellKey(col, row));
+        return this.buildPathBlockedGrid[this.buildCellIndex(col, row)] !== 0;
     }
 
     private isBuildPathStepAllowed(fromCol: number, fromRow: number, toCol: number, toRow: number): boolean {
