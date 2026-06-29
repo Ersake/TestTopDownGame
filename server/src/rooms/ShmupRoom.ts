@@ -168,7 +168,7 @@ const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
 const ENEMY_FOOT_Y_OFFSET = 34;
-const ENEMY_SEPARATION_ITERATIONS = 2;
+const ENEMY_SEPARATION_ITERATIONS = 1;
 const ENEMY_SEPARATION_GRID_CELL_SIZE = 64;
 const ENEMY_PATH_WAYPOINT_RADIUS = 12;
 const ENEMY_PATH_REPATH_MS = 250;
@@ -178,6 +178,12 @@ const ENEMY_PATH_MAX_EXPANSIONS = 2000;
 const ENEMY_PATH_TARGET_SEARCH_RADIUS = 6;
 const ENEMY_PATH_DIAGONAL_COST = Math.SQRT2;
 const ENEMY_DIRECT_PATH_RECHECK_MS = 250;
+const ENEMY_FLOW_FIELD_REFRESH_MS = 250;
+const ENEMY_LOS_RECHECK_MS = 200;
+const ENEMY_FLOW_DIRECTIONS: Array<[number, number]> = [
+    [0, -1], [1, 0], [0, 1], [-1, 0],
+    [1, -1], [1, 1], [-1, 1], [-1, -1],
+];
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
@@ -416,6 +422,15 @@ interface EnemyTarget {
     player: PlayerState;
     distanceSq: number;
 }
+type EnemyLineOfSightKind = "melee" | "caster" | "darkKnight";
+interface EnemyFlowField {
+    targetCell: PathCell;
+    topologyVersion: number;
+    refreshAtMs: number;
+    dirX: Int8Array;
+    dirY: Int8Array;
+    distance: Int16Array;
+}
 interface ServerEnemy {
     mode: EnemyMode;
     modeMs: number;
@@ -432,6 +447,13 @@ interface ServerEnemy {
     directPathTopologyVersion: number;
     directPathCheckMs: number;
     directPathClear: boolean;
+    lineOfSightFromCell: PathCell | null;
+    lineOfSightTargetCell: PathCell | null;
+    lineOfSightTopologyVersion: number;
+    lineOfSightCheckMs: number;
+    lineOfSightClear: boolean;
+    lineOfSightTargetId: string | null;
+    lineOfSightKind: EnemyLineOfSightKind | null;
     caltropsSlowMs: number;
     caltropsCheckMs: number;
 }
@@ -654,6 +676,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private buildPathBlockedCells = new Set<string>();
     private mapTopologyVersion = 0;
     private solidSegmentCache = new Map<string, boolean>();
+    private enemyFlowFields = new Map<string, EnemyFlowField>();
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
     private recordingEnemyMetrics = false;
@@ -1075,6 +1098,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private invalidateNavigationCaches(): void {
         this.mapTopologyVersion++;
         this.solidSegmentCache.clear();
+        this.enemyFlowFields.clear();
         this.serverEnemies.forEach((se) => {
             se.path = [];
             se.pathTargetCell = null;
@@ -1085,6 +1109,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.directPathTopologyVersion = this.mapTopologyVersion;
             se.directPathCheckMs = 0;
             se.directPathClear = false;
+            se.lineOfSightFromCell = null;
+            se.lineOfSightTargetCell = null;
+            se.lineOfSightTopologyVersion = this.mapTopologyVersion;
+            se.lineOfSightCheckMs = 0;
+            se.lineOfSightClear = false;
+            se.lineOfSightTargetId = null;
+            se.lineOfSightKind = null;
         });
     }
 
@@ -4269,6 +4300,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             directPathTopologyVersion: this.mapTopologyVersion,
             directPathCheckMs: 0,
             directPathClear: false,
+            lineOfSightFromCell: null,
+            lineOfSightTargetCell: null,
+            lineOfSightTopologyVersion: this.mapTopologyVersion,
+            lineOfSightCheckMs: 0,
+            lineOfSightClear: false,
+            lineOfSightTargetId: null,
+            lineOfSightKind: null,
             caltropsSlowMs: 0,
             caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
         });
@@ -4277,6 +4315,7 @@ export class ShmupRoom extends Room<GameRoomState> {
     private tickEnemies(dtSec: number, dtMs: number) {
         const dead: string[] = [];
         this.enemyPathBuildsThisTick = 0;
+        this.pruneEnemyFlowFields();
         this.state.enemies.forEach((enemy, id) => {
             this.incrementEnemyCounter("enemyLoops");
             if (enemy.isDead) return;
@@ -4289,6 +4328,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 this.tickEnemyCaltropsSlow(enemy, se, dtMs);
                 se.repathMs = Math.max(0, se.repathMs - dtMs);
                 se.directPathCheckMs = Math.max(0, se.directPathCheckMs - dtMs);
+                se.lineOfSightCheckMs = Math.max(0, se.lineOfSightCheckMs - dtMs);
                 if (se.mode === "stun") {
                     enemy.action = "idle";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
@@ -4334,7 +4374,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
 
                 if (isInAttackRange) {
-                    if (this.hasEnemyLineOfSightToPlayer(enemy, target.player)) {
+                    if (this.hasEnemyLineOfSightToPlayer(enemy, se, target)) {
                         this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
                     }
                     enemy.action = "idle";
@@ -4375,14 +4415,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 }
 
                 const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
-                if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
-                    se.path = [];
-                    se.pathTargetCell = null;
-                    this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
-                    return;
-                }
-
-                if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+                if (!this.moveEnemyUsingFlowField(enemy, se, target, move, dx, dy, distance)) {
                     enemy.action = "idle";
                 }
             } finally {
@@ -4390,6 +4423,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
+    }
+
+    private pruneEnemyFlowFields(): void {
+        for (const playerId of this.enemyFlowFields.keys()) {
+            if (!this.state.players.has(playerId)) this.enemyFlowFields.delete(playerId);
+        }
     }
 
     private tickCasterEnemy(
@@ -4404,7 +4443,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         dtMs: number,
     ) {
         const isInCastRange = distance <= CASTER_CAST_RANGE;
-        const hasLineOfSight = this.hasCasterLineOfSightToPlayer(enemy, target.player);
+        const hasLineOfSight = this.hasCasterLineOfSightToPlayer(enemy, se, target);
         const canStartCast = isInCastRange && hasLineOfSight;
 
         if (se.mode === "casterAttack") {
@@ -4429,7 +4468,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                 se.modeMs = Math.max(0, se.modeMs - dtMs);
                 if (se.modeMs === 0) {
                     const launchTarget = this.findNearestAlivePlayer(enemy.x, enemy.y);
-                    if (!launchTarget || !this.hasCasterLineOfSightToPlayer(enemy, launchTarget.player)) {
+                    if (!launchTarget || !this.hasCasterLineOfSightToPlayer(enemy, se, launchTarget)) {
                         se.mode = "chase";
                         enemy.action = "run";
                         return;
@@ -4475,29 +4514,13 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
-        if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
-            se.path = [];
-            se.pathTargetCell = null;
-            this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
-            return;
-        }
-
-        if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+        if (!this.moveEnemyUsingFlowField(enemy, se, target, move, dx, dy, distance)) {
             enemy.action = "idle";
         }
     }
 
-    private hasCasterLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
-        return this.measureEnemySubphase("lineOfSight", () => {
-            this.incrementEnemyCounter("lineOfSightChecks");
-            return !this.segmentOverlapsSolidMapTile(
-                enemy.x,
-                enemy.y,
-                player.x,
-                player.y + PLAYER_TREE_Y_OFFSET,
-                1,
-            );
-        });
+    private hasCasterLineOfSightToPlayer(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget): boolean {
+        return this.hasCachedEnemyLineOfSight(enemy, se, target, "caster");
     }
 
     private tickDarkKnightEnemy(
@@ -4540,7 +4563,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.darkKnightTargetKind = null;
         }
 
-        if (distance <= DARK_KNIGHT_DETECTION_RANGE && this.hasDarkKnightLineOfSightToPlayer(enemy, target.player)) {
+        if (distance <= DARK_KNIGHT_DETECTION_RANGE && this.hasDarkKnightLineOfSightToPlayer(enemy, se, target)) {
             this.startDarkKnightRush(enemy, se, target.player);
             return;
         }
@@ -4551,29 +4574,13 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (distance <= 0) return;
 
         const move = Math.min(DARK_KNIGHT_WALK_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, distance);
-        if (this.shouldUseDirectEnemyPath(enemy, se, target.player)) {
-            se.path = [];
-            se.pathTargetCell = null;
-            this.moveEnemyDirectlyToward(enemy, se, dx, dy, distance, move);
-            return;
-        }
-
-        if (!this.followEnemyPathToTarget(enemy, se, target.player, move)) {
+        if (!this.moveEnemyUsingFlowField(enemy, se, target, move, dx, dy, distance)) {
             enemy.action = "idle";
         }
     }
 
-    private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
-        return this.measureEnemySubphase("lineOfSight", () => {
-            this.incrementEnemyCounter("lineOfSightChecks");
-            return !this.segmentOverlapsSolidMapTile(
-                enemy.x,
-                enemy.y + ENEMY_FOOT_Y_OFFSET,
-                player.x,
-                player.y + PLAYER_TREE_Y_OFFSET,
-                1,
-            );
-        });
+    private hasDarkKnightLineOfSightToPlayer(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget): boolean {
+        return this.hasCachedEnemyLineOfSight(enemy, se, target, "darkKnight");
     }
 
     private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: PlayerState) {
@@ -4673,6 +4680,202 @@ export class ShmupRoom extends Room<GameRoomState> {
             se.directPathClear = false;
             se.directPathCheckMs = 0;
         }
+    }
+
+    private moveEnemyUsingFlowField(
+        enemy: EnemyState,
+        se: ServerEnemy,
+        target: EnemyTarget,
+        moveDistance: number,
+        directDx: number,
+        directDy: number,
+        directDistance: number,
+    ): boolean {
+        return this.measureEnemySubphase("flowMove", () => {
+            this.incrementEnemyCounter("flowMoveCalls");
+            if (se.path.length > 0) se.path.length = 0;
+            se.pathTargetCell = null;
+
+            const field = this.getEnemyFlowFieldForTarget(target);
+            if (field) {
+                const currentCell = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
+                const currentIndex = this.buildCellIndex(currentCell.col, currentCell.row);
+                const dirX = field.dirX[currentIndex] ?? 0;
+                const dirY = field.dirY[currentIndex] ?? 0;
+                if (dirX !== 0 || dirY !== 0) {
+                    const nextCell = { col: currentCell.col + dirX, row: currentCell.row + dirY };
+                    const waypoint = this.buildCellCenter(nextCell);
+                    if (this.moveEnemyTowardPoint(enemy, waypoint.x, waypoint.y - ENEMY_FOOT_Y_OFFSET, moveDistance)) {
+                        this.incrementEnemyCounter("flowMoveFieldMoves");
+                        return true;
+                    }
+                    this.incrementEnemyCounter("flowMoveFieldBlocked");
+                } else {
+                    this.incrementEnemyCounter("flowMoveNoDirection");
+                }
+
+                if (this.moveEnemyWithLocalFallback(enemy, field.targetCell, moveDistance, directDx, directDy, directDistance)) {
+                    return true;
+                }
+            }
+
+            return this.moveEnemyWithLocalFallback(
+                enemy,
+                this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET),
+                moveDistance,
+                directDx,
+                directDy,
+                directDistance,
+            );
+        });
+    }
+
+    private moveEnemyTowardPoint(enemy: EnemyState, targetX: number, targetY: number, moveDistance: number): boolean {
+        const dx = targetX - enemy.x;
+        const dy = targetY - enemy.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= 0 || moveDistance <= 0) return false;
+
+        const step = Math.min(moveDistance, distance);
+        const prevX = enemy.x;
+        const prevY = enemy.y;
+        const resolved = this.moveEnemyWithWorldColliders(
+            enemy,
+            enemy.x + (dx / distance) * step,
+            enemy.y + (dy / distance) * step,
+        );
+        const moved = Math.hypot(resolved.x - enemy.x, resolved.y - enemy.y) > 0.1;
+        enemy.x = resolved.x;
+        enemy.y = resolved.y;
+        this.setEnemyFacingFromMovement(enemy, prevX, prevY);
+        return moved;
+    }
+
+    private moveEnemyWithLocalFallback(
+        enemy: EnemyState,
+        targetCell: PathCell,
+        moveDistance: number,
+        directDx: number,
+        directDy: number,
+        directDistance: number,
+    ): boolean {
+        this.incrementEnemyCounter("flowMoveFallbackCalls");
+        if (directDistance > 0 && this.moveEnemyTowardPoint(enemy, enemy.x + directDx, enemy.y + directDy, moveDistance)) {
+            this.incrementEnemyCounter("flowMoveFallbackDirect");
+            return true;
+        }
+
+        const currentCell = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
+        let usedMask = 0;
+        for (let attempt = 0; attempt < ENEMY_FLOW_DIRECTIONS.length; attempt++) {
+            let bestDirectionIndex = -1;
+            let bestDistanceSq = Number.POSITIVE_INFINITY;
+            for (let index = 0; index < ENEMY_FLOW_DIRECTIONS.length; index++) {
+                if ((usedMask & (1 << index)) !== 0) continue;
+                const [dirX, dirY] = ENEMY_FLOW_DIRECTIONS[index];
+                const col = currentCell.col + dirX;
+                const row = currentCell.row + dirY;
+                if (!this.isBuildPathCellInside(col, row) || this.isBuildPathCellBlocked(col, row)) continue;
+                if (!this.isBuildPathStepAllowed(currentCell.col, currentCell.row, col, row)) continue;
+
+                const dx = targetCell.col - col;
+                const dy = targetCell.row - row;
+                const distanceSq = dx * dx + dy * dy;
+                if (distanceSq < bestDistanceSq) {
+                    bestDistanceSq = distanceSq;
+                    bestDirectionIndex = index;
+                }
+            }
+
+            if (bestDirectionIndex < 0) break;
+            usedMask |= 1 << bestDirectionIndex;
+            const [dirX, dirY] = ENEMY_FLOW_DIRECTIONS[bestDirectionIndex];
+            const waypoint = this.buildCellCenter({ col: currentCell.col + dirX, row: currentCell.row + dirY });
+            if (this.moveEnemyTowardPoint(enemy, waypoint.x, waypoint.y - ENEMY_FOOT_Y_OFFSET, moveDistance)) {
+                this.incrementEnemyCounter("flowMoveFallbackNeighbor");
+                return true;
+            }
+        }
+
+        this.incrementEnemyCounter("flowMoveFallbackBlocked");
+        return false;
+    }
+
+    private getEnemyFlowFieldForTarget(target: EnemyTarget): EnemyFlowField | null {
+        const targetCell = this.getNearestWalkableBuildCell(
+            this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET),
+            ENEMY_PATH_TARGET_SEARCH_RADIUS,
+        );
+        if (!targetCell) {
+            this.incrementEnemyCounter("flowFieldNoTargetCell");
+            return null;
+        }
+
+        const existing = this.enemyFlowFields.get(target.id);
+        if (existing
+            && existing.topologyVersion === this.mapTopologyVersion
+            && existing.targetCell.col === targetCell.col
+            && existing.targetCell.row === targetCell.row
+            && this.elapsedMs < existing.refreshAtMs) {
+            this.incrementEnemyCounter("flowFieldCacheHits");
+            return existing;
+        }
+
+        const field = this.buildEnemyFlowField(targetCell);
+        this.enemyFlowFields.set(target.id, field);
+        return field;
+    }
+
+    private buildEnemyFlowField(targetCell: PathCell): EnemyFlowField {
+        return this.measureEnemySubphase("flowBuild", () => {
+            this.incrementEnemyCounter("flowFieldBuilds");
+            const columns = this.buildPathColumnCount();
+            const rows = this.buildPathRowCount();
+            const totalCells = columns * rows;
+            const distance = new Int16Array(totalCells);
+            distance.fill(-1);
+            const dirX = new Int8Array(totalCells);
+            const dirY = new Int8Array(totalCells);
+            const queue = new Int32Array(totalCells);
+            let readIndex = 0;
+            let writeIndex = 0;
+
+            const targetIndex = this.buildCellIndex(targetCell.col, targetCell.row);
+            distance[targetIndex] = 0;
+            queue[writeIndex++] = targetIndex;
+
+            while (readIndex < writeIndex) {
+                const currentIndex = queue[readIndex++];
+                const currentCol = currentIndex % columns;
+                const currentRow = Math.floor(currentIndex / columns);
+                const currentDistance = distance[currentIndex];
+                this.incrementEnemyCounter("flowFieldCellsVisited");
+
+                for (const [offsetCol, offsetRow] of ENEMY_FLOW_DIRECTIONS) {
+                    const nextCol = currentCol + offsetCol;
+                    const nextRow = currentRow + offsetRow;
+                    if (!this.isBuildPathCellInside(nextCol, nextRow) || this.isBuildPathCellBlocked(nextCol, nextRow)) continue;
+                    if (!this.isBuildPathStepAllowed(nextCol, nextRow, currentCol, currentRow)) continue;
+
+                    const nextIndex = this.buildCellIndex(nextCol, nextRow);
+                    if (distance[nextIndex] >= 0) continue;
+
+                    distance[nextIndex] = currentDistance + 1;
+                    dirX[nextIndex] = currentCol - nextCol;
+                    dirY[nextIndex] = currentRow - nextRow;
+                    queue[writeIndex++] = nextIndex;
+                }
+            }
+
+            return {
+                targetCell,
+                topologyVersion: this.mapTopologyVersion,
+                refreshAtMs: this.elapsedMs + ENEMY_FLOW_FIELD_REFRESH_MS,
+                dirX,
+                dirY,
+                distance,
+            };
+        });
     }
 
     private shouldUseDirectEnemyPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
@@ -4780,16 +4983,49 @@ export class ShmupRoom extends Room<GameRoomState> {
         return false;
     }
 
-    private hasEnemyLineOfSightToPlayer(enemy: EnemyState, player: PlayerState): boolean {
+    private hasEnemyLineOfSightToPlayer(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget): boolean {
+        return this.hasCachedEnemyLineOfSight(enemy, se, target, "melee");
+    }
+
+    private hasCachedEnemyLineOfSight(
+        enemy: EnemyState,
+        se: ServerEnemy,
+        target: EnemyTarget,
+        kind: EnemyLineOfSightKind,
+    ): boolean {
+        const fromY = kind === "caster" ? enemy.y : enemy.y + ENEMY_FOOT_Y_OFFSET;
+        const fromCell = this.worldToBuildCell(enemy.x, fromY);
+        const targetCell = this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET);
+        const cacheValid = se.lineOfSightTopologyVersion === this.mapTopologyVersion
+            && se.lineOfSightTargetId === target.id
+            && se.lineOfSightKind === kind
+            && se.lineOfSightFromCell?.col === fromCell.col
+            && se.lineOfSightFromCell?.row === fromCell.row
+            && se.lineOfSightTargetCell?.col === targetCell.col
+            && se.lineOfSightTargetCell?.row === targetCell.row
+            && se.lineOfSightCheckMs > 0;
+        if (cacheValid) {
+            this.incrementEnemyCounter(se.lineOfSightClear ? "lineOfSightCacheClear" : "lineOfSightCacheBlocked");
+            return se.lineOfSightClear;
+        }
+
         return this.measureEnemySubphase("lineOfSight", () => {
             this.incrementEnemyCounter("lineOfSightChecks");
-            return !this.segmentOverlapsSolidMapTile(
+            const clear = !this.segmentOverlapsSolidMapTile(
                 enemy.x,
-                enemy.y + ENEMY_FOOT_Y_OFFSET,
-                player.x,
-                player.y + PLAYER_TREE_Y_OFFSET,
+                fromY,
+                target.player.x,
+                target.player.y + PLAYER_TREE_Y_OFFSET,
                 1,
             );
+            se.lineOfSightFromCell = fromCell;
+            se.lineOfSightTargetCell = targetCell;
+            se.lineOfSightTopologyVersion = this.mapTopologyVersion;
+            se.lineOfSightCheckMs = ENEMY_LOS_RECHECK_MS;
+            se.lineOfSightClear = clear;
+            se.lineOfSightTargetId = target.id;
+            se.lineOfSightKind = kind;
+            return clear;
         });
     }
 
@@ -5138,6 +5374,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         return `${col}:${row}`;
     }
 
+    private buildCellIndex(col: number, row: number): number {
+        return row * this.buildPathColumnCount() + col;
+    }
+
     private isBuildPathCellInside(col: number, row: number): boolean {
         return col >= 0 && row >= 0
             && col < this.buildPathColumnCount()
@@ -5146,6 +5386,17 @@ export class ShmupRoom extends Room<GameRoomState> {
 
     private isBuildPathCellBlocked(col: number, row: number): boolean {
         return this.buildPathBlockedCells.has(this.buildCellKey(col, row));
+    }
+
+    private isBuildPathStepAllowed(fromCol: number, fromRow: number, toCol: number, toRow: number): boolean {
+        const colOffset = toCol - fromCol;
+        const rowOffset = toRow - fromRow;
+        if (Math.abs(colOffset) > 1 || Math.abs(rowOffset) > 1) return false;
+        if (colOffset === 0 && rowOffset === 0) return true;
+        if (this.isBuildPathCellBlocked(toCol, toRow)) return false;
+        return colOffset === 0 || rowOffset === 0
+            || (!this.isBuildPathCellBlocked(fromCol + colOffset, fromRow)
+                && !this.isBuildPathCellBlocked(fromCol, fromRow + rowOffset));
     }
 
     private computeBuildPathCellBlocked(col: number, row: number): boolean {
