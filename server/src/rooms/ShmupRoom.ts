@@ -14,6 +14,7 @@ import {
     MapChunkState,
 } from "../schema/GameState";
 import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
+import { isProductionEnv } from "../env";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 255;   // px/s
@@ -638,6 +639,10 @@ export class ShmupRoom extends Room<GameRoomState> {
     private elapsedMs           = 0;
     private currentWaveIndex = -1;
     private pendingEnemySpawns: PendingEnemySpawn[] = [];
+    private currentWaveStartedAtMs = 0;
+    private currentWaveScheduledEnemyCount = 0;
+    private currentWaveSpawnedEnemyCount = 0;
+    private currentWaveMaxActiveEnemies = 0;
     private nextEnemySpawnAllowedAtMs = 0;
     private nextEnemyWaveStartMs: number | null = null;
     private nextEnemyDiagnosticAtMs = 0;
@@ -664,13 +669,22 @@ export class ShmupRoom extends Room<GameRoomState> {
         return code;
     }
 
+    private logRoomEvent(event: string, fields: Record<string, string | number | boolean | null | undefined> = {}): void {
+        const details = Object.entries(fields)
+            .filter(([, value]) => value !== undefined && value !== null)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(", ");
+        console.log(`[ShmupRoom ${this.roomId}] ${event}${details ? `: ${details}` : ""}`);
+    }
+
     async onCreate(options: { mode?: unknown; mapName?: unknown } = {}) {
         this.roomId = this.generateRoomCode();
         const state = new GameRoomState();
         const mapEditorRequested = options.mode === MAP_EDITOR_MODE;
-        const isMapEditor = mapEditorRequested && process.env.NODE_ENV !== "production";
+        const isProduction = isProductionEnv();
+        const isMapEditor = mapEditorRequested && !isProduction;
         const requestedMapName = !isMapEditor
-            ? process.env.NODE_ENV === "production"
+            ? isProduction
                 ? PRODUCTION_GAME_MAP_NAME
                 : normalizeMapName(options.mapName)
             : null;
@@ -687,6 +701,16 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
         }
         if (!isMapEditor) this.generateTrees();
+        this.logRoomEvent("room created", {
+            mode: state.mode,
+            map: this.state.activeMapName || "none",
+            requestedMap: requestedMapName || "none",
+            nodeEnv: process.env.NODE_ENV || "unset",
+            world: `${state.worldWidth}x${state.worldHeight}`,
+            mapChunks: this.state.mapChunks.size,
+            mapTiles: this.mapTileCount,
+            trees: this.state.trees.size,
+        });
         // 20 ticks per second
         this.setSimulationInterval((dt) => this.tick(dt), 50);
 
@@ -1498,22 +1522,35 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private async loadInitialGameMap(name: string): Promise<void> {
+        const loadStartedAt = performance.now();
         try {
             const document = await this.mapStorage.load(name) as Partial<StoredMapDocument>;
-            if (
-                !this.isStoredMapDocument(document, name)
-                || !this.canLoadDocumentIntoCurrentRoom(document)
-                || !this.applyMapChunks(document.chunks, true, {
-                    width: document.width,
-                    height: document.height,
-                    tileSize: this.getSavedMapTileSize(document),
-                }).accepted
-                || !this.applyEnchantmentTables(Array.isArray(document.enchantmentTables) ? document.enchantmentTables : [])
-                || !this.applyCraftingTables(Array.isArray(document.craftingTables) ? document.craftingTables : [])
-            ) {
+            if (!this.isStoredMapDocument(document, name) || !this.canLoadDocumentIntoCurrentRoom(document)) {
                 throw new Error(`Saved map '${name}' is invalid or incompatible.`);
             }
+
+            const chunkResult = this.applyMapChunks(document.chunks, true, {
+                width: document.width,
+                height: document.height,
+                tileSize: this.getSavedMapTileSize(document),
+            });
+            const appliedTables = chunkResult.accepted
+                && this.applyEnchantmentTables(Array.isArray(document.enchantmentTables) ? document.enchantmentTables : [])
+                && this.applyCraftingTables(Array.isArray(document.craftingTables) ? document.craftingTables : []);
+            if (!appliedTables) throw new Error(`Saved map '${name}' is invalid or incompatible.`);
+
             this.state.activeMapName = name;
+            this.logRoomEvent("map loaded", {
+                name,
+                sourceSize: `${document.width}x${document.height}`,
+                sourceChunks: document.chunks.length,
+                activeChunks: this.state.mapChunks.size,
+                filledTiles: this.mapTileCount,
+                enchantmentTables: this.state.enchantmentTables.size,
+                craftingTables: this.state.craftingTables.size,
+                trimmed: chunkResult.trimmed,
+                ms: Math.round(performance.now() - loadStartedAt),
+            });
         } catch (error) {
             console.error(`Unable to create room with map '${name}':`, error);
             throw new Error(`Unable to load saved map '${name}'.`);
@@ -2506,11 +2543,31 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.state.waveNumber = 0;
             this.state.gameOverCountdown = 0;
             if (!this.isMapEditor()) this.startEnemyWaveSchedule();
+            this.logRoomEvent("game started", {
+                players: this.state.players.size,
+                mode: this.state.mode,
+                map: this.state.activeMapName || "none",
+            });
         }
+        this.logRoomEvent("player joined", {
+            playerId: client.sessionId,
+            players: this.state.players.size,
+            gameStarted: this.state.gameStarted,
+            gameOver: this.state.gameOver,
+        });
     }
 
     // ─── Reset game state (called when a player rejoins after game over) ──────
     private resetLevel() {
+        this.logRoomEvent("level reset", {
+            players: this.state.players.size,
+            previousWave: this.currentWaveIndex + 1,
+            elapsedSeconds: this.state.elapsedSeconds,
+            enemies: this.state.enemies.size,
+            playerBullets: this.state.playerBullets.size,
+            enemyBullets: this.state.enemyBullets.size,
+            score: this.state.teamScore,
+        });
         this.broadcast("levelReset", {});
         this.state.enemies.clear();
         this.serverEnemies.clear();
@@ -2617,10 +2674,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.cancelRevivesTargeting(client.sessionId);
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
+        this.logRoomEvent("player left", {
+            playerId: client.sessionId,
+            players: this.state.players.size,
+            gameStarted: this.state.gameStarted,
+            gameOver: this.state.gameOver,
+        });
         this.checkAllDead();
     }
 
     onDispose() {
+        this.logRoomEvent("room disposed", {
+            players: this.state.players.size,
+            elapsedSeconds: this.state.elapsedSeconds,
+            wave: this.currentWaveIndex + 1,
+            enemies: this.state.enemies.size,
+            map: this.state.activeMapName || "none",
+        });
         _usedCodes.delete(this.roomId);
     }
 
@@ -3981,6 +4051,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.serverEnemies.clear();
         this.pendingEnemySpawns = [];
         this.currentWaveIndex = -1;
+        this.currentWaveStartedAtMs = 0;
+        this.currentWaveScheduledEnemyCount = 0;
+        this.currentWaveSpawnedEnemyCount = 0;
+        this.currentWaveMaxActiveEnemies = 0;
         this.nextEnemyWaveStartMs = null;
         this.nextEnemyDiagnosticAtMs = 0;
         this.state.waveNumber = 0;
@@ -4000,14 +4074,25 @@ export class ShmupRoom extends Room<GameRoomState> {
             if (pendingSpawn) {
                 this.spawnEnemy(pendingSpawn.enemyType, pendingSpawn.edgeIndex);
                 spawnedThisTick++;
+                this.currentWaveSpawnedEnemyCount++;
                 if (metrics) metrics.spawnedEnemies++;
                 this.nextEnemySpawnAllowedAtMs = this.elapsedMs + ENEMY_WAVE_SPAWN_INTERVAL_MS;
             }
         }
+        this.currentWaveMaxActiveEnemies = Math.max(this.currentWaveMaxActiveEnemies, this.state.enemies.size);
 
         if (this.pendingEnemySpawns.length > 0) return;
         if (this.hasLivingEnemies()) return;
         if (this.nextEnemyWaveStartMs === null) {
+            this.logRoomEvent("wave cleared", {
+                wave: this.currentWaveIndex + 1,
+                durationSeconds: Math.round((this.elapsedMs - this.currentWaveStartedAtMs) / 1000),
+                scheduledEnemies: this.currentWaveScheduledEnemyCount,
+                spawnedEnemies: this.currentWaveSpawnedEnemyCount,
+                maxActiveEnemies: this.currentWaveMaxActiveEnemies,
+                score: this.state.teamScore,
+                players: this.state.players.size,
+            });
             this.nextEnemyWaveStartMs = this.elapsedMs + ENEMY_NEXT_WAVE_DELAY_MS;
             return;
         }
@@ -4046,11 +4131,15 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs, spawnIndex++);
         }
 
+        const scheduledEnemyCount = spawnIndex;
         this.pendingEnemySpawns.sort((a, b) => a.spawnAtMs - b.spawnAtMs);
         this.currentWaveIndex = waveIndex;
+        this.currentWaveStartedAtMs = this.elapsedMs;
+        this.currentWaveScheduledEnemyCount = scheduledEnemyCount;
+        this.currentWaveSpawnedEnemyCount = 0;
+        this.currentWaveMaxActiveEnemies = this.state.enemies.size;
         this.nextEnemyWaveStartMs = null;
         this.nextEnemySpawnAllowedAtMs = waveStartMs;
-        const scheduledEnemyCount = spawnIndex;
         if (metrics) {
             metrics.scheduledWaveIndex = waveIndex;
             metrics.scheduledEnemyCount = scheduledEnemyCount;
@@ -5367,6 +5456,16 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private startGameOverCountdown() {
+        this.logRoomEvent("game over", {
+            players: this.state.players.size,
+            elapsedSeconds: this.state.elapsedSeconds,
+            wave: this.currentWaveIndex + 1,
+            score: this.state.teamScore,
+            enemies: this.state.enemies.size,
+            queuedEnemies: this.pendingEnemySpawns.length,
+            playerBullets: this.state.playerBullets.size,
+            enemyBullets: this.state.enemyBullets.size,
+        });
         this.state.gameOver = true;
         this.activeAxeAttacks = [];
         this.gameOverRestartMs = GAME_OVER_RESTART_SECONDS * 1000;

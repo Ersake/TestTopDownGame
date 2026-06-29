@@ -4,6 +4,7 @@ import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { monitor } from "@colyseus/monitor";
 import { ShmupRoom } from "./rooms/ShmupRoom";
+import { isProductionEnv } from "./env";
 
 const PORT = Number(process.env.PORT) || 2567;
 
@@ -22,7 +23,7 @@ gameServer.define("shmup_room", ShmupRoom);
 
 // Colyseus dashboard — only enabled in development
 // In production set NODE_ENV=production to disable it
-if (process.env.NODE_ENV !== "production") {
+if (!isProductionEnv()) {
     app.use("/colyseus", monitor());
     console.log(`Colyseus monitor → http://localhost:${PORT}/colyseus`);
 }
