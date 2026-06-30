@@ -187,6 +187,7 @@ const ENEMY1_WINDUP_MS = 175;
 const ENEMY1_ATTACK_MS = 850;
 const ENEMY_DEATH_REMOVE_MS = 850;
 const ENEMY_HIT_STUN_MS = 250;
+const DARK_KNIGHT_HIT_STUN_MULTIPLIER = 0.5;
 const ENEMY1_EDGE_OFFSET = 96;
 const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 450;
 const ENEMY1_ATTACK_DAMAGE = 1;
@@ -3483,9 +3484,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 enemy.damageSeq++;
                 const se = this.serverEnemies.get(enemyId);
                 if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
-                    se.mode = "stun";
-                    se.modeMs = ENEMY_HIT_STUN_MS;
-                    enemy.action = "idle";
+                    this.applyEnemyHitStun(enemy, se);
                 }
             }
 
@@ -3571,9 +3570,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 enemy.damageSeq++;
                 const se = this.serverEnemies.get(enemyId);
                 if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
-                    se.mode = "stun";
-                    se.modeMs = ENEMY_HIT_STUN_MS;
-                    enemy.action = "idle";
+                    this.applyEnemyHitStun(enemy, se);
                 }
             }
             hitPayloads.push({
@@ -3607,9 +3604,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             enemy.damageSeq++;
             const se = this.serverEnemies.get(enemyId);
             if (se && !this.shouldPreserveDarkKnightAttackCooldown(enemy)) {
-                se.mode = "stun";
-                se.modeMs = ENEMY_HIT_STUN_MS;
-                enemy.action = "idle";
+                this.applyEnemyHitStun(enemy, se);
             }
         }
 
@@ -3661,6 +3656,19 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (enemy.enemyType !== ENEMY_TYPE_DARK_KNIGHT) return false;
         const se = this.serverEnemies.get(enemy.id);
         return se?.mode === "dkRush" || se?.mode === "dkAttack" || se?.mode === "dkCooldown";
+    }
+
+    private applyEnemyHitStun(enemy: EnemyState, se: ServerEnemy): void {
+        se.mode = "stun";
+        se.modeMs = this.getEnemyHitStunMs(enemy);
+        enemy.action = "idle";
+    }
+
+    private getEnemyHitStunMs(enemy: EnemyState): number {
+        if (enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT) {
+            return Math.max(1, Math.round(ENEMY_HIT_STUN_MS * DARK_KNIGHT_HIT_STUN_MULTIPLIER));
+        }
+        return ENEMY_HIT_STUN_MS;
     }
 
     private findEnemyHitsByAttack(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): string[] {
