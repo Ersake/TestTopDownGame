@@ -614,7 +614,6 @@ export class Game extends Phaser.Scene {
                 window.setTimeout(() => this.cancelHotbarDrag(), 0);
             }
             if (event?.button === 2 || (typeof event?.buttons === 'number' && (event.buttons & 2) === 0)) {
-                this.stopAxeWhirlwind();
                 this.clearBowVolleyAutoRepeatIfReleased();
             }
         };
@@ -2702,9 +2701,6 @@ export class Game extends Phaser.Scene {
             }
             if (this.attackHeldPointerId === pointer.id) {
                 this.stopHeldAttack();
-            }
-            if (this.axeWhirlwindPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
-                this.stopAxeWhirlwind();
             }
             if (this.bowVolleyPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
                 this.clearBowVolleyAutoRepeatIfReleased(pointer);
@@ -4931,23 +4927,15 @@ export class Game extends Phaser.Scene {
         if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.dead || this.isBuildModeActive) return;
         if (animationState.activeItem !== ITEM_WOOD_AXE) return;
         if ((animationState.axeWhirlwindCooldownProgress || this.localAxeWhirlwindCooldownProgress || 0) > 0) return;
-        if (animationState.axeWhirlwind) {
-            this.axeWhirlwindPointerId = pointer.id;
-            this.axeWhirlwindPointer = pointer;
-            return;
-        }
+        if (animationState.axeWhirlwind) return;
 
         this.stopHeldAttack();
         this.cancelBowCharge();
-
-        this.axeWhirlwindPointerId = pointer.id;
-        this.axeWhirlwindPointer = pointer;
         RoomClient.sendAxeWhirlwind(true);
     }
 
     stopAxeWhirlwind() {
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
-        if (!this.axeWhirlwindPointer && this.axeWhirlwindPointerId === null && !animationState?.axeWhirlwind) return;
         RoomClient.sendAxeWhirlwind(false);
         this.axeWhirlwindPointerId = null;
         this.axeWhirlwindPointer = null;
@@ -5208,9 +5196,8 @@ export class Game extends Phaser.Scene {
     }
 
     updateAxeWhirlwind() {
-        if (!this.axeWhirlwindPointer) return;
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
-        if (!this.isRightMouseButtonDown(this.axeWhirlwindPointer) || animationState?.activeItem !== ITEM_WOOD_AXE || animationState?.dead) {
+        if (animationState?.axeWhirlwind && (animationState.activeItem !== ITEM_WOOD_AXE || animationState.dead)) {
             this.stopAxeWhirlwind();
         }
     }
