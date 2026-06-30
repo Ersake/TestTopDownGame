@@ -127,7 +127,8 @@ const AXE_WHIRLWIND_COOLDOWN_MS = 10000;
 const AXE_WHIRLWIND_COOLDOWN_MIN_MS = 1000;
 const AXE_WHIRLWIND_DAMAGE = 1;
 const UPGRADE_MAX_RANK = 3;
-const AXE_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 1;
+const AXE_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 10;
+const AXE_WHIRLWIND_AOE_UPGRADE_MAX_RANK = 2;
 const AXE_WHIRLWIND_DAMAGE_UPGRADE_MAX_RANK = 2;
 const BOW_PRIMARY_UPGRADE_MAX_RANK = 4;
 const BOW_PRIMARY_PIERCE_UPGRADE_MAX_RANK = 10;
@@ -255,7 +256,7 @@ const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
         { id: "axe_primary_attack_speed", maxRank: UPGRADE_MAX_RANK },
         { id: "axe_primary_damage", prerequisite: "axe_primary_attack_speed", maxRank: AXE_PRIMARY_DAMAGE_UPGRADE_MAX_RANK },
         { id: "axe_whirlwind_cooldown", maxRank: UPGRADE_MAX_RANK },
-        { id: "axe_whirlwind_aoe", prerequisite: "axe_whirlwind_cooldown", maxRank: UPGRADE_MAX_RANK },
+        { id: "axe_whirlwind_aoe", prerequisite: "axe_whirlwind_cooldown", maxRank: AXE_WHIRLWIND_AOE_UPGRADE_MAX_RANK },
         { id: "axe_whirlwind_damage", prerequisite: "axe_whirlwind_aoe", maxRank: AXE_WHIRLWIND_DAMAGE_UPGRADE_MAX_RANK },
     ],
     [ITEM_WOOD_BOW]: [
@@ -2554,7 +2555,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getPlayerAxeWhirlwindRadius(player: PlayerState): number {
-        const rank = clamp(Math.floor(player.axeWhirlwindAoeUpgrades || 0), 0, UPGRADE_MAX_RANK);
+        const rank = clamp(Math.floor(player.axeWhirlwindAoeUpgrades || 0), 0, AXE_WHIRLWIND_AOE_UPGRADE_MAX_RANK);
         return AXE_WHIRLWIND_RADIUS * (1 + 0.5 * rank);
     }
 

@@ -315,15 +315,17 @@ const PLAYER_BUFFS = [
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
 ];
 const ENCHANTMENT_MAX_RANK = 3;
+const AXE_PRIMARY_DAMAGE_MAX_RANK = 10;
+const AXE_WHIRLWIND_AOE_MAX_RANK = 2;
 const ENCHANTMENT_SKILL_TREES = {
     [ITEM_WOOD_AXE]: {
         title: 'Axe Skills',
         displayName: 'Axe',
         nodes: [
             { id: 'axe_primary_attack_speed', label: '+25% primary attack speed', field: 'axeSwingSpeedUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
-            { id: 'axe_primary_damage', label: '+1 primary DMG', field: 'axePrimaryDamageUpgrades', prerequisite: 'axe_primary_attack_speed', maxRank: 1, column: 0, row: 1 },
+            { id: 'axe_primary_damage', label: '+1 primary DMG', field: 'axePrimaryDamageUpgrades', prerequisite: 'axe_primary_attack_speed', maxRank: AXE_PRIMARY_DAMAGE_MAX_RANK, column: 0, row: 1 },
             { id: 'axe_whirlwind_cooldown', label: '-2 seconds whirlwind cooldown', field: 'axeWhirlwindCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
-            { id: 'axe_whirlwind_aoe', label: '+50% whirlwind size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 1 },
+            { id: 'axe_whirlwind_aoe', label: '+50% whirlwind size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: AXE_WHIRLWIND_AOE_MAX_RANK, column: 1, row: 1 },
             { id: 'axe_whirlwind_damage', label: '+1 whirlwind DMG', field: 'axeWhirlwindDamageUpgrades', prerequisite: 'axe_whirlwind_aoe', maxRank: 2, column: 1, row: 2 },
         ],
     },
@@ -4862,7 +4864,7 @@ export class Game extends Phaser.Scene {
     }
 
     drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState) {
-        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, AXE_WHIRLWIND_AOE_MAX_RANK);
         const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + PLAYER_AXE_WHIRLWIND_WEAPON_SCALE_PER_RANK * rank);
         graphics.lineStyle(2, 0x66ffff, 0.95);
         graphics.strokeCircle(x, y, radius);
@@ -5421,7 +5423,7 @@ export class Game extends Phaser.Scene {
     }
 
     getAxeWhirlwindWeaponScale(animationState) {
-        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, AXE_WHIRLWIND_AOE_MAX_RANK);
         return 1 + PLAYER_AXE_WHIRLWIND_WEAPON_SCALE_PER_RANK * rank;
     }
 
