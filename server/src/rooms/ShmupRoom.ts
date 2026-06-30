@@ -355,21 +355,62 @@ function pointSegmentDistanceSq(px: number, py: number, ax: number, ay: number, 
     return dx * dx + dy * dy;
 }
 
+function pointAabbDistanceSq(px: number, py: number, rectX: number, rectY: number, rectHw: number, rectHh: number): number {
+    const closestX = clamp(px, rectX - rectHw, rectX + rectHw);
+    const closestY = clamp(py, rectY - rectHh, rectY + rectHh);
+    const dx = px - closestX;
+    const dy = py - closestY;
+    return dx * dx + dy * dy;
+}
+
+function segmentPointSide(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+function pointOnSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): boolean {
+    return Math.min(ax, bx) <= px + 0.0001
+        && px <= Math.max(ax, bx) + 0.0001
+        && Math.min(ay, by) <= py + 0.0001
+        && py <= Math.max(ay, by) + 0.0001;
+}
+
+function segmentsIntersect(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+    const side1 = segmentPointSide(ax, ay, bx, by, cx, cy);
+    const side2 = segmentPointSide(ax, ay, bx, by, dx, dy);
+    const side3 = segmentPointSide(cx, cy, dx, dy, ax, ay);
+    const side4 = segmentPointSide(cx, cy, dx, dy, bx, by);
+    if (Math.abs(side1) < 0.0001 && pointOnSegment(cx, cy, ax, ay, bx, by)) return true;
+    if (Math.abs(side2) < 0.0001 && pointOnSegment(dx, dy, ax, ay, bx, by)) return true;
+    if (Math.abs(side3) < 0.0001 && pointOnSegment(ax, ay, cx, cy, dx, dy)) return true;
+    if (Math.abs(side4) < 0.0001 && pointOnSegment(bx, by, cx, cy, dx, dy)) return true;
+    return (side1 > 0) !== (side2 > 0) && (side3 > 0) !== (side4 > 0);
+}
+
+function segmentSegmentDistanceSq(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): number {
+    if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return 0;
+    return Math.min(
+        pointSegmentDistanceSq(ax, ay, cx, cy, dx, dy),
+        pointSegmentDistanceSq(bx, by, cx, cy, dx, dy),
+        pointSegmentDistanceSq(cx, cy, ax, ay, bx, by),
+        pointSegmentDistanceSq(dx, dy, ax, ay, bx, by),
+    );
+}
+
 function capsuleOverlapsAabb(ax: number, ay: number, bx: number, by: number, radius: number,
                              rectX: number, rectY: number, rectHw: number, rectHh: number): boolean {
-    const closestCenterX = clamp((ax + bx) * 0.5, rectX - rectHw, rectX + rectHw);
-    const closestCenterY = clamp((ay + by) * 0.5, rectY - rectHh, rectY + rectHh);
-
-    const candidates: [number, number][] = [
-        [closestCenterX, closestCenterY],
-        [rectX - rectHw, rectY - rectHh],
-        [rectX + rectHw, rectY - rectHh],
-        [rectX - rectHw, rectY + rectHh],
-        [rectX + rectHw, rectY + rectHh],
-    ];
-
     const radiusSq = radius * radius;
-    return candidates.some(([x, y]) => pointSegmentDistanceSq(x, y, ax, ay, bx, by) <= radiusSq);
+    if (segmentAabbIntersectionT(ax, ay, bx, by, rectX, rectY, rectHw, rectHh) !== null) return true;
+    if (pointAabbDistanceSq(ax, ay, rectX, rectY, rectHw, rectHh) <= radiusSq) return true;
+    if (pointAabbDistanceSq(bx, by, rectX, rectY, rectHw, rectHh) <= radiusSq) return true;
+
+    const left = rectX - rectHw;
+    const right = rectX + rectHw;
+    const top = rectY - rectHh;
+    const bottom = rectY + rectHh;
+    return segmentSegmentDistanceSq(ax, ay, bx, by, left, top, right, top) <= radiusSq
+        || segmentSegmentDistanceSq(ax, ay, bx, by, right, top, right, bottom) <= radiusSq
+        || segmentSegmentDistanceSq(ax, ay, bx, by, right, bottom, left, bottom) <= radiusSq
+        || segmentSegmentDistanceSq(ax, ay, bx, by, left, bottom, left, top) <= radiusSq;
 }
 
 function capsuleOverlapsCircle(ax: number, ay: number, bx: number, by: number, capsuleRadius: number,
@@ -5048,8 +5089,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         return;
                     }
 
-                    const launchDx = launchTarget.targetX - enemy.x;
-                    const launchDy = launchTarget.targetY - enemy.y;
+                    const launchX = launchTarget.player.x;
+                    const launchY = this.playerHitboxCenterY(launchTarget.player.y);
+                    const launchDx = launchX - enemy.x;
+                    const launchDy = launchY - enemy.y;
                     const launchDirection = directionFromInput(launchDx, launchDy);
                     if (launchDirection) enemy.facingDirection = launchDirection;
 
@@ -5057,7 +5100,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     se.modeMs = CASTER_ATTACK_MS;
                     enemy.action = "attack";
                     enemy.attackSeq++;
-                    this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.targetX, launchTarget.targetY);
+                    this.spawnCasterFireball(enemy.x, enemy.y, launchX, launchY);
                 }
                 return;
             }
@@ -5529,6 +5572,41 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
     }
 
+    private segmentOverlapsLayer3Table(fromX: number, fromY: number, toX: number, toY: number, radius: number): boolean {
+        let blocked = false;
+        const testTable = (table: EnchantmentTableState | CraftingTableState) => {
+            if (blocked) return;
+            blocked = capsuleOverlapsAabb(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                radius,
+                table.x,
+                table.y,
+                LAYER3_ROW_OBJECT_HALF_WIDTH,
+                LAYER3_ROW_OBJECT_HALF_HEIGHT,
+            );
+        };
+        this.state.enchantmentTables.forEach(testTable);
+        this.state.craftingTables.forEach(testTable);
+        return blocked;
+    }
+
+    private segmentOverlapsEnemyLineBlocker(
+        fromX: number,
+        fromY: number,
+        toX: number,
+        toY: number,
+        radius: number,
+    ): boolean {
+        if (this.segmentOverlapsLayer3Table(fromX, fromY, toX, toY, radius)) {
+            this.incrementEnemyCounter("lineOfSightBlockedByLayer3Object");
+            return true;
+        }
+        return this.segmentOverlapsSolidMapTile(fromX, fromY, toX, toY, radius, true);
+    }
+
     private segmentOverlapsSolidMapTile(
         fromX: number,
         fromY: number,
@@ -5611,22 +5689,29 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         return this.measureEnemySubphase("lineOfSight", () => {
             this.incrementEnemyCounter("lineOfSightChecks");
-            let clear = !this.segmentOverlapsSolidMapTile(
+            let clear = !this.segmentOverlapsEnemyLineBlocker(
                 enemy.x,
                 fromY,
                 target.targetFootX,
                 target.targetFootY,
                 1,
-                true,
             );
             if (clear && (kind === "melee" || kind === "caster")) {
-                clear = !this.segmentOverlapsSolidMapTile(
+                clear = !this.segmentOverlapsEnemyLineBlocker(
                     enemy.x,
                     fromY,
                     target.player.x,
                     this.playerHitboxCenterY(target.player.y),
                     1,
-                    true,
+                );
+            }
+            if (clear && (kind === "melee" || kind === "caster")) {
+                clear = !this.segmentOverlapsEnemyLineBlocker(
+                    enemy.x,
+                    fromY,
+                    target.player.x,
+                    target.player.y + PLAYER_TREE_Y_OFFSET,
+                    1,
                 );
             }
             se.lineOfSightFromCell = fromCell;
