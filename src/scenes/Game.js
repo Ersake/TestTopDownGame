@@ -681,10 +681,10 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 5, align: 'right',
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
-        this.skillPointText = this.add.text(this.scale.width - 20, this.scale.height - 74, '(0 skill points available)', {
+        this.skillPointText = this.add.text(this.scale.width - 20, this.scale.height - 74, '', {
             fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
             stroke: '#000000', strokeThickness: 5, align: 'right',
-        }).setOrigin(1, 1).setDepth(UI_DEPTH).setScrollFactor(0);
+        }).setOrigin(1, 1).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(false);
 
         this.gameOverText = this.add.text(this.centreX, this.centreY, 'Game Over\nRestarting in 10', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
@@ -707,6 +707,19 @@ export class Game extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ffaa00',
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.nextWaveCountdownText = this.add.text(this.centreX, 78, '', {
+            fontFamily: 'Arial Black', fontSize: 34, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 7,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(false);
+        this.nextWaveReadyText = this.add.text(this.centreX, 120, '', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(false);
+        this.nextWavePromptText = this.add.text(this.centreX, 144, 'Press R to ready up', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(false);
 
         const activeMapName = RoomClient.room?.state?.activeMapName || '';
         this.activeMapText = this.add.text(this.centreX, 50, activeMapName ? `Map: ${activeMapName}` : '', {
@@ -749,6 +762,9 @@ export class Game extends Phaser.Scene {
             this.gameOverText,
             this.quitButton,
             this.roomCodeText,
+            this.nextWaveCountdownText,
+            this.nextWaveReadyText,
+            this.nextWavePromptText,
             this.activeMapText,
             this.hitboxToggleButton,
             this.debugRoundStatusText,
@@ -858,7 +874,9 @@ export class Game extends Phaser.Scene {
     updateSkillPointText() {
         if (!this.skillPointText) return;
         const points = Math.max(0, this.localPendingUpgradeChoices || 0);
-        this.skillPointText.setText(`(${points} skill points available)`);
+        this.skillPointText
+            .setText(points > 0 ? `(${points} skill points available)` : '')
+            .setVisible(points > 0);
     }
 
     initOutfitColorPicker() {
@@ -1704,6 +1722,12 @@ export class Game extends Phaser.Scene {
         this.openCraftingMenu();
     }
 
+    handleReadyPressed(event) {
+        if (!this.isNextWaveReadyPromptVisible()) return;
+        event?.preventDefault?.();
+        RoomClient.sendReadyForNextWave();
+    }
+
     updateCraftingMenuProximity() {
         if (!this.craftingUi) return;
         if (this.isMapEditor || !this.gameStarted || !this.getNearbyWorkbench()) {
@@ -2496,6 +2520,7 @@ export class Game extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D,
             fire: Phaser.Input.Keyboard.KeyCodes.SPACE,
             interact: Phaser.Input.Keyboard.KeyCodes.F,
+            ready: Phaser.Input.Keyboard.KeyCodes.R,
             dash: Phaser.Input.Keyboard.KeyCodes.SHIFT,
             escape: Phaser.Input.Keyboard.KeyCodes.ESC,
             slot1: Phaser.Input.Keyboard.KeyCodes.ONE,
@@ -2515,6 +2540,9 @@ export class Game extends Phaser.Scene {
         });
         this.keys.interact.on('down', (_key, event) => {
             this.handleInteractPressed(event);
+        });
+        this.keys.ready.on('down', (_key, event) => {
+            this.handleReadyPressed(event);
         });
         this.keys.dash.on('down', (_key, event) => {
             event?.preventDefault?.();
@@ -3928,6 +3956,11 @@ export class Game extends Phaser.Scene {
             this.updateWaveText(waveNumber || 0);
         });
 
+        this.updateNextWaveReadyUi();
+        state.listen('nextWaveCountdown', () => this.updateNextWaveReadyUi());
+        state.listen('nextWaveReadyPlayers', () => this.updateNextWaveReadyUi());
+        state.listen('nextWaveTotalPlayers', () => this.updateNextWaveReadyUi());
+
         state.listen('gameOverCountdown', (countdown) => {
             if (state.gameOver) {
                 this.updateGameOverCountdown(countdown);
@@ -3949,6 +3982,7 @@ export class Game extends Phaser.Scene {
                 this.cancelBowCharge();
                 this.closeCraftingMenu();
                 this.closeEnchantmentMenu();
+                this.updateNextWaveReadyUi();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
                 this.quitButton
@@ -3963,6 +3997,7 @@ export class Game extends Phaser.Scene {
                 this.quitButton.setVisible(false);
                 this.hitboxToggleButton.setVisible(false);
                 this.setDebugRoundControlsVisible(false);
+                this.updateNextWaveReadyUi();
             }
         });
 
@@ -3991,6 +4026,23 @@ export class Game extends Phaser.Scene {
         if (!this.waveText) return;
         const safeWaveNumber = Math.max(0, Math.floor(waveNumber || 0));
         this.waveText.setText(`Wave: ${safeWaveNumber}`);
+    }
+
+    updateNextWaveReadyUi() {
+        if (!this.nextWaveCountdownText || !this.nextWaveReadyText || !this.nextWavePromptText) return;
+        const state = RoomClient.room?.state;
+        const countdown = Math.max(0, Math.ceil(state?.nextWaveCountdown || 0));
+        const readyPlayers = Math.max(0, Math.floor(state?.nextWaveReadyPlayers || 0));
+        const totalPlayers = Math.max(0, Math.floor(state?.nextWaveTotalPlayers || 0));
+        const visible = !this.isMapEditor && !state?.gameOver && countdown > 0 && totalPlayers > 0;
+
+        this.nextWaveCountdownText.setVisible(visible);
+        this.nextWaveReadyText.setVisible(visible);
+        this.nextWavePromptText.setVisible(visible);
+        if (!visible) return;
+
+        this.nextWaveCountdownText.setText(`Next wave in ${countdown}`);
+        this.nextWaveReadyText.setText(`${readyPlayers}/${totalPlayers}`);
     }
 
     updateGameOverCountdown(countdown) {
@@ -4235,6 +4287,15 @@ export class Game extends Phaser.Scene {
             graphics.arc(x, y, CAMPFIRE_HEAL_RADIUS, angle, endAngle, false);
             graphics.strokePath();
         }
+    }
+
+    isNextWaveReadyPromptVisible() {
+        const state = RoomClient.room?.state;
+        return !!state
+            && !this.isMapEditor
+            && !state.gameOver
+            && (state.nextWaveCountdown || 0) > 0
+            && (state.nextWaveTotalPlayers || 0) > 0;
     }
 
     drawDottedCircle(graphics, x, y, radius, color, alpha) {
@@ -6461,6 +6522,9 @@ export class Game extends Phaser.Scene {
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
         this.localBowVolleyCooldownProgress = 0;
+        this.nextWaveCountdownText?.setVisible(false);
+        this.nextWaveReadyText?.setVisible(false);
+        this.nextWavePromptText?.setVisible(false);
         this.updateHotbarAxeOverlays();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();

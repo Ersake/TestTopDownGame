@@ -101,6 +101,7 @@ Important server files:
 | `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
 | `"bowVolleyStart"`, `"bowVolleyAim"`, `"bowVolleyRelease"`, `"bowVolleyCancel"` | Bow Volley input helpers | Starts, updates, releases, or cancels server-owned bow secondary targeting. Volley reuses synced bow charge state and auto-releases after full charge. |
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
+| `"readyForNextWave"` | `RoomClient.sendReadyForNextWave()` | Marks the player ready when they press R during the server-owned wave countdown; if all connected players are ready, the next wave starts early. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
 | `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"` | Placement helpers | Requests server-authoritative deployable placement or hammer removal. |
@@ -162,6 +163,8 @@ Durable game facts should usually be schema state, not transient messages.
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
 | `waveNumber` | `int32` | Current 1-based enemy wave displayed by the client HUD. |
+| `nextWaveCountdown` | `int8` | Visible pre-wave/inter-wave countdown in seconds; 0 means no ready-up countdown is active. |
+| `nextWaveReadyPlayers`, `nextWaveTotalPlayers` | `int8` | Ready-up fraction displayed during the pre-wave/inter-wave countdown. |
 | `teamScore` | `int32` | Shared score. |
 | `gameStarted` | `boolean` | Whether simulation has started. |
 | `gameOver` | `boolean` | Whether the room is in game-over state. |
@@ -206,7 +209,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.
@@ -228,7 +231,7 @@ Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no t
 
 `Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Selected Castle_1 upper vertical support frames use centered, 50%-wide top-half solid colliders, while the lower and corner supports use centered, 50%-wide full-height colliders. Other solid map frames use full-tile colliders. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
 
-Development lobby builds also expose a normal-game map selector. Selecting a saved map such as `lvlone` sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
+Development lobby builds also expose a normal-game map selector that defaults to the saved `lvlone` map while keeping `DEFAULT` selectable. Selecting a saved map sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
 Enemy movement uses shared server-authoritative flow fields on the 40px build grid. For each alive player target, the room builds a reverse BFS direction field from the player's nearest walkable cell and reuses that field for all enemies targeting that player until the player changes grid cells or map topology changes. Flow-field rebuilds use numeric blocked-cell arrays, reuse build buffers, and are budgeted so at most one player field is rebuilt per tick; if the budget is spent, enemies can temporarily use a same-topology stale field or local fallback. Normal melee chase, caster repositioning, and Dark Knight walking read a direction from this shared field instead of running per-enemy direct-path checks or per-enemy A* paths. The navigation grid treats any solid map frame or layer-3 table cell as blocked, ignores partial visual collider shapes for routing, prevents diagonal corner cutting, and uses a cheap local fallback if an enemy is outside the field or temporarily blocked. Caster and Dark Knight line-of-sight checks are throttled per enemy for attack/rush decisions. Dark Knight rush remains direct collision-resolved movement. Caltrops are not route blockers; they only apply their server-side slow when enemies physically cross them. Map tile and layer-3 table topology changes invalidate enemy flow fields and collision caches.
 

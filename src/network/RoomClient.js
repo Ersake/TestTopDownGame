@@ -325,6 +325,11 @@ class RoomClient {
         this.room.send("debugSetRound", { round });
     }
 
+    sendReadyForNextWave() {
+        if (!this.room) return;
+        this.room.send("readyForNextWave", {});
+    }
+
     _lastInput = "";
 }
 

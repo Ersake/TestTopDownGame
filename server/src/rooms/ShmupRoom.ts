@@ -134,7 +134,7 @@ const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
 const ENEMY_WAVE_SPAWN_INTERVAL_MS = 900;
 const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 2;
-const ENEMY_NEXT_WAVE_DELAY_MS = 3000;
+const ENEMY_NEXT_WAVE_DELAY_MS = 30000;
 const DEBUG_MAX_ROUND = 99;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
@@ -706,6 +706,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private currentWaveMaxActiveEnemies = 0;
     private nextEnemySpawnAllowedAtMs = 0;
     private nextEnemyWaveStartMs: number | null = null;
+    private nextWaveReadyPlayerIds = new Set<string>();
     private nextEnemyDiagnosticAtMs = 0;
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
@@ -974,6 +975,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.onMessage("debugSetRound", (client, data) => {
             this.debugSetRound(client, data);
         });
+
+        this.onMessage("readyForNextWave", (client) => {
+            this.readyPlayerForNextWave(client.sessionId);
+        });
     }
 
     private debugSetRound(client: Client, data: unknown) {
@@ -1002,7 +1007,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.pendingEnemySpawns = [];
         this.currentWaveIndex = targetWaveIndex - 1;
         this.nextEnemySpawnAllowedAtMs = this.elapsedMs;
-        this.nextEnemyWaveStartMs = null;
+        this.clearNextWaveReadyState();
         this.nextEnemyDiagnosticAtMs = 0;
         this.scheduleEnemyWave(targetWaveIndex);
         client.send("debugRoundResult", { accepted: true, round });
@@ -2838,6 +2843,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             });
         }
         this.updateRoomListingMetadata();
+        if (this.nextEnemyWaveStartMs !== null) this.updateNextWaveReadyState();
         this.logRoomEvent("player joined", {
             playerId: client.sessionId,
             players: this.state.players.size,
@@ -2865,7 +2871,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.state.enemyBullets.clear();
         this.serverEnemyBullets.clear();
         this.activeAxeAttacks = [];
-        this.nextEnemyWaveStartMs = null;
+        this.clearNextWaveReadyState();
         this.state.logs.clear();
         this.state.campfires.clear();
         this.campfireOwners.clear();
@@ -2975,6 +2981,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.cancelRevivesTargeting(client.sessionId);
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
+        this.nextWaveReadyPlayerIds.delete(client.sessionId);
+        if (this.nextEnemyWaveStartMs !== null) {
+            this.updateNextWaveReadyState();
+            if (this.areAllPlayersReadyForNextWave()) {
+                this.nextEnemyWaveStartMs = this.elapsedMs;
+                this.state.nextWaveCountdown = 0;
+            }
+        }
         this.logRoomEvent("player left", {
             playerId: client.sessionId,
             players: this.state.players.size,
@@ -4413,10 +4427,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.currentWaveScheduledEnemyCount = 0;
         this.currentWaveSpawnedEnemyCount = 0;
         this.currentWaveMaxActiveEnemies = 0;
-        this.nextEnemyWaveStartMs = null;
+        this.clearNextWaveReadyState();
         this.nextEnemyDiagnosticAtMs = 0;
         this.state.waveNumber = 0;
-        this.scheduleEnemyWave(0);
+        this.startNextWaveReadyCountdown();
     }
 
     private tickEnemyWaves(metrics?: TickMetrics) {
@@ -4451,11 +4465,62 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 score: this.state.teamScore,
                 players: this.state.players.size,
             });
-            this.nextEnemyWaveStartMs = this.elapsedMs + ENEMY_NEXT_WAVE_DELAY_MS;
+            this.startNextWaveReadyCountdown();
             return;
         }
-        if (this.elapsedMs < this.nextEnemyWaveStartMs) return;
+        this.updateNextWaveReadyCountdown();
+        if (this.nextEnemyWaveStartMs !== null && this.elapsedMs < this.nextEnemyWaveStartMs) return;
         this.scheduleEnemyWave(this.currentWaveIndex + 1, metrics);
+    }
+
+    private startNextWaveReadyCountdown(): void {
+        this.nextEnemyWaveStartMs = this.elapsedMs + ENEMY_NEXT_WAVE_DELAY_MS;
+        this.nextWaveReadyPlayerIds.clear();
+        this.updateNextWaveReadyState();
+    }
+
+    private clearNextWaveReadyState(): void {
+        this.nextEnemyWaveStartMs = null;
+        this.nextWaveReadyPlayerIds.clear();
+        if (this.state.nextWaveCountdown !== 0) this.state.nextWaveCountdown = 0;
+        if (this.state.nextWaveReadyPlayers !== 0) this.state.nextWaveReadyPlayers = 0;
+        if (this.state.nextWaveTotalPlayers !== 0) this.state.nextWaveTotalPlayers = 0;
+    }
+
+    private readyPlayerForNextWave(sessionId: string): void {
+        if (this.nextEnemyWaveStartMs === null || this.isMapEditor() || this.state.gameOver) return;
+        if (!this.state.players.has(sessionId)) return;
+
+        this.nextWaveReadyPlayerIds.add(sessionId);
+        this.updateNextWaveReadyState();
+        if (this.areAllPlayersReadyForNextWave()) {
+            this.nextEnemyWaveStartMs = this.elapsedMs;
+            this.state.nextWaveCountdown = 0;
+        }
+    }
+
+    private updateNextWaveReadyCountdown(): void {
+        if (this.nextEnemyWaveStartMs === null) return;
+        this.updateNextWaveReadyState();
+    }
+
+    private updateNextWaveReadyState(): void {
+        for (const sessionId of this.nextWaveReadyPlayerIds) {
+            if (!this.state.players.has(sessionId)) this.nextWaveReadyPlayerIds.delete(sessionId);
+        }
+
+        const totalPlayers = this.state.players.size;
+        const readyPlayers = Math.min(this.nextWaveReadyPlayerIds.size, totalPlayers);
+        this.state.nextWaveTotalPlayers = Math.min(totalPlayers, 127);
+        this.state.nextWaveReadyPlayers = Math.min(readyPlayers, 127);
+        this.state.nextWaveCountdown = this.nextEnemyWaveStartMs === null
+            ? 0
+            : clamp(Math.ceil(Math.max(0, this.nextEnemyWaveStartMs - this.elapsedMs) / 1000), 0, 127);
+    }
+
+    private areAllPlayersReadyForNextWave(): boolean {
+        const totalPlayers = this.state.players.size;
+        return totalPlayers > 0 && this.nextWaveReadyPlayerIds.size >= totalPlayers;
     }
 
     private hasLivingEnemies(): boolean {
@@ -4496,7 +4561,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.currentWaveScheduledEnemyCount = scheduledEnemyCount;
         this.currentWaveSpawnedEnemyCount = 0;
         this.currentWaveMaxActiveEnemies = this.state.enemies.size;
-        this.nextEnemyWaveStartMs = null;
+        this.clearNextWaveReadyState();
         this.nextEnemySpawnAllowedAtMs = waveStartMs;
         if (metrics) {
             metrics.scheduledWaveIndex = waveIndex;

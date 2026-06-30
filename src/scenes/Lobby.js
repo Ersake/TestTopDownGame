@@ -6,7 +6,7 @@ const ACTIVE_ROOM_ROW_LIMIT = 5;
 const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
 const PLAYER_NAME_MAX_LENGTH = 12;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
-const DEV_GAME_MAP_OPTIONS = ['DEFAULT', 'lvlone'];
+const DEV_GAME_MAP_OPTIONS = ['lvlone', 'DEFAULT'];
 
 /**
  * Lobby scene — lets players create a new room or join an existing one
