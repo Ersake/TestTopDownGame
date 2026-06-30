@@ -19,6 +19,11 @@ import { isProductionEnv } from "../env";
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 200;   // px/s
 const PLAYER_MAX_HEALTH = 5;
+const PLAYER_HIT_INVULNERABILITY_MS = 150;
+const PLAYER_SPAWN_INVULNERABILITY_MS = 2000;
+const PLAYER_DAMAGE_FLASH_MS = PLAYER_HIT_INVULNERABILITY_MS;
+const PLAYER_DAMAGE_FLASH_BLINK_MS = 90;
+const PLAYER_INVULNERABILITY_FLASH_BLINK_MS = 220;
 const FIRE_RATE_MS    = 167;   // ≈ 10 frames at 60 fps
 const P_BULLET_VEL    = 1000;  // px/s upward
 const VIEW_WIDTH      = 1280;
@@ -449,6 +454,7 @@ interface ServerPlayer {
     axeWhirlwindElapsedMs: number;
     axeWhirlwindCooldownMs: number;
     revivingTargetId: string | null;
+    invulnerableUntilMs: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
@@ -2817,6 +2823,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         ps.y = spawn.y;
         ps.maxHealth = PLAYER_MAX_HEALTH;
         ps.health = PLAYER_MAX_HEALTH;
+        this.triggerPlayerDamageFlash(ps, PLAYER_SPAWN_INVULNERABILITY_MS, PLAYER_INVULNERABILITY_FLASH_BLINK_MS);
         ps.kills = 0;
         ps.level = 1;
         ps.experience = 0;
@@ -2871,6 +2878,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             axeWhirlwindElapsedMs: 0,
             axeWhirlwindCooldownMs: 0,
             revivingTargetId: null,
+            invulnerableUntilMs: this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
             alive: true,
         });
@@ -2933,6 +2941,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.y = spawn.y;
             player.maxHealth = PLAYER_MAX_HEALTH;
             player.health = PLAYER_MAX_HEALTH;
+            this.triggerPlayerDamageFlash(player, PLAYER_SPAWN_INVULNERABILITY_MS, PLAYER_INVULNERABILITY_FLASH_BLINK_MS);
             player.kills = 0;
             player.level = 1;
             player.experience = 0;
@@ -3008,6 +3017,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             sp.axeWhirlwindElapsedMs = 0;
             sp.axeWhirlwindCooldownMs = 0;
             sp.revivingTargetId = null;
+            sp.invulnerableUntilMs = PLAYER_SPAWN_INVULNERABILITY_MS;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.alive = true;
         });
@@ -4186,10 +4196,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         targetSp.axeWhirlwindTickMs = 0;
         targetSp.axeWhirlwindElapsedMs = 0;
         targetSp.axeWhirlwindCooldownMs = 0;
+        targetSp.invulnerableUntilMs = this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
         target.isDead = false;
         target.reviveProgress = 0;
+        this.triggerPlayerDamageFlash(target, PLAYER_SPAWN_INVULNERABILITY_MS, PLAYER_INVULNERABILITY_FLASH_BLINK_MS);
         target.axeAttackHitboxActive = false;
         target.dashing = false;
         target.dashCooldownProgress = 0;
@@ -6201,10 +6213,19 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     // ─── Player death ─────────────────────────────────────────────────────────
+    private triggerPlayerDamageFlash(player: PlayerState, durationMs: number, blinkMs: number = PLAYER_DAMAGE_FLASH_BLINK_MS) {
+        player.damageFlashSeq++;
+        player.damageFlashDurationMs = durationMs;
+        player.damageFlashBlinkMs = blinkMs;
+    }
+
     private damagePlayer(sid: string, sp: ServerPlayer, player: PlayerState, damage: number, attackerId: string): PlayerHurtPayload | null {
         if (!sp.alive || player.isDead || damage <= 0) return null;
+        if (this.elapsedMs < sp.invulnerableUntilMs) return null;
 
         player.health = Math.max(0, player.health - damage);
+        sp.invulnerableUntilMs = this.elapsedMs + PLAYER_HIT_INVULNERABILITY_MS;
+        this.triggerPlayerDamageFlash(player, PLAYER_DAMAGE_FLASH_MS);
         const payload = {
             playerId: sid,
             attackerId,
@@ -6229,6 +6250,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         sp.dashDirX = 0;
         sp.dashDirY = 0;
         sp.dashCooldownMs = 0;
+        sp.invulnerableUntilMs = 0;
         this.clearBowCharge(player, sp);
         this.clearBowVolley(sp);
         sp.bowVolleyCooldownMs = 0;
@@ -6295,6 +6317,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             sp.axeWhirlwindCooldownMs = 0;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.revivingTargetId = null;
+            sp.invulnerableUntilMs = 0;
         });
         this.state.players.forEach((player) => {
             player.axeAttackHitboxActive = false;

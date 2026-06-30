@@ -201,6 +201,7 @@ const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
 const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.495;
 const ANVIL_HIT_SOUND_VOLUME = 0.5;
 const ENEMY_DAMAGE_FLASH_MS = 90;
+const PLAYER_DAMAGE_FLASH_BLINK_MS = 90;
 const PLAYER_ATTACK_REPEAT_MS = 850;
 const PLAYER_ATTACK_REPEAT_BUFFER_MS = 60;
 const PLAYER_MAX_HEALTH = 5;
@@ -994,6 +995,47 @@ export class Game extends Phaser.Scene {
         } else {
             sprite.setTint(tint);
         }
+    }
+
+    restorePlayerOutfitTint(sessionId) {
+        const player = this.playerHealthBars.get(sessionId)?.player;
+        this.applyPlayerOutfitTint(sessionId, player?.outfitColor ?? OUTFIT_TAN_INDEX);
+    }
+
+    flashPlayerDamage(sessionId, durationMs, blinkMs = PLAYER_DAMAGE_FLASH_BLINK_MS) {
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!sprite || !animationState || animationState.dead) return;
+
+        if (animationState.damageFlashEvent) {
+            animationState.damageFlashEvent.remove(false);
+            animationState.damageFlashEvent = null;
+        }
+
+        const safeBlinkMs = Math.max(PLAYER_DAMAGE_FLASH_BLINK_MS, blinkMs || PLAYER_DAMAGE_FLASH_BLINK_MS);
+        const endAt = this.time.now + Math.max(safeBlinkMs, durationMs || safeBlinkMs);
+        animationState.damageFlashOn = false;
+        const tick = () => {
+            const currentSprite = this.playerSprites.get(sessionId);
+            const currentState = this.playerAnimationState.get(sessionId);
+            if (!currentSprite || !currentState || currentState.dead || this.time.now >= endAt) {
+                if (currentSprite) this.restorePlayerOutfitTint(sessionId);
+                if (currentState) {
+                    currentState.damageFlashEvent = null;
+                    currentState.damageFlashOn = false;
+                }
+                return;
+            }
+
+            if (currentState.damageFlashOn) {
+                this.restorePlayerOutfitTint(sessionId);
+            } else {
+                currentSprite.setTintFill(0xffffff);
+            }
+            currentState.damageFlashOn = !currentState.damageFlashOn;
+            currentState.damageFlashEvent = this.time.delayedCall(safeBlinkMs, tick);
+        };
+        tick();
     }
 
     initExperienceBar() {
@@ -3088,6 +3130,9 @@ export class Game extends Phaser.Scene {
                 activeItem: player.activeItem || '',
                 attackItem: player.attackItem || ITEM_WOOD_AXE,
                 lastAttackSeq: player.attackSeq || 0,
+                lastDamageFlashSeq: player.damageFlashSeq || 0,
+                damageFlashEvent: null,
+                damageFlashOn: false,
                 axeAttackHitboxActive: !!player.axeAttackHitboxActive,
                 dashing: !!player.dashing,
                 dashCooldownProgress: player.dashCooldownProgress || 0,
@@ -3116,6 +3161,9 @@ export class Game extends Phaser.Scene {
             });
             this.setPlayerAnimation(playerSessionId, false, DEFAULT_PLAYER_DIRECTION);
             this.updatePlayerWeaponIdleFrame(playerSessionId, DEFAULT_PLAYER_DIRECTION);
+            if ((player.damageFlashSeq || 0) > 0 && (player.damageFlashDurationMs || 0) > 0) {
+                this.flashPlayerDamage(playerSessionId, player.damageFlashDurationMs || 0, player.damageFlashBlinkMs || PLAYER_DAMAGE_FLASH_BLINK_MS);
+            }
             if (player.axeWhirlwind) {
                 this.playPlayerAxeWhirlwindAnimation(playerSessionId, player.facingDirection || DEFAULT_PLAYER_DIRECTION);
             }
@@ -3413,6 +3461,13 @@ export class Game extends Phaser.Scene {
                 });
             });
 
+            player.listen('damageFlashSeq', () => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (!animationState || player.damageFlashSeq <= animationState.lastDamageFlashSeq) return;
+                animationState.lastDamageFlashSeq = player.damageFlashSeq;
+                this.flashPlayerDamage(playerSessionId, player.damageFlashDurationMs || 0, player.damageFlashBlinkMs || PLAYER_DAMAGE_FLASH_BLINK_MS);
+            });
+
             player.listen('axeSwingSpeedUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeSwingSpeedUpgrades = stacks || 0;
@@ -3510,6 +3565,11 @@ export class Game extends Phaser.Scene {
         state.players.forEach(addPlayer);
 
         state.players.onRemove((_player, sessionId) => {
+            const animationState = this.playerAnimationState.get(sessionId);
+            if (animationState?.damageFlashEvent) {
+                animationState.damageFlashEvent.remove(false);
+                animationState.damageFlashEvent = null;
+            }
             const s = this.playerSprites.get(sessionId);
             if (s) s.destroy();
             const weapon = this.playerWeaponSprites.get(sessionId);
@@ -5628,12 +5688,18 @@ export class Game extends Phaser.Scene {
         animationState.axeWhirlwind = false;
         animationState.axeWhirlwindHitboxUntil = 0;
         animationState.moving = false;
+        if (animationState.damageFlashEvent) {
+            animationState.damageFlashEvent.remove(false);
+            animationState.damageFlashEvent = null;
+        }
+        animationState.damageFlashOn = false;
 
         const direction = animationState.direction || DEFAULT_PLAYER_DIRECTION;
         const animation = ANIMATION.player.die?.[direction];
         if (!animation) return;
 
         this.hidePlayerWeapon(sessionId);
+        sprite.clearTint();
         sprite.setVisible(true);
         sprite.anims.stop();
         sprite.play(animation.key);
@@ -5651,6 +5717,11 @@ export class Game extends Phaser.Scene {
         animationState.axeAttackHitboxActive = false;
         animationState.axeWhirlwind = false;
         animationState.axeWhirlwindHitboxUntil = 0;
+        if (animationState.damageFlashEvent) {
+            animationState.damageFlashEvent.remove(false);
+            animationState.damageFlashEvent = null;
+        }
+        animationState.damageFlashOn = false;
         animationState.moving = false;
         animationState.bowCharging = false;
         animationState.bowChargeProgress = 0;
@@ -5665,6 +5736,7 @@ export class Game extends Phaser.Scene {
         sprite.x = animationState.visualTargetX;
         sprite.y = animationState.visualTargetY;
         sprite.setVisible(true);
+        this.restorePlayerOutfitTint(sessionId);
         sprite.anims.stop();
         this.setPlayerAnimation(sessionId, false, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);
         this.updatePlayerWeaponIdleFrame(sessionId, animationState.direction || player?.facingDirection || DEFAULT_PLAYER_DIRECTION);

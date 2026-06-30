@@ -177,7 +177,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, bow Volley cooldown progress, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage. Bow upgrade counters include charge speed, primary pierce, primary damage, Volley cooldown, Volley AOE size, and Volley damage.
+`PlayerState` includes identity, position, health, damage-flash presentation sequence/timing, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, bow Volley cooldown progress, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage. Bow upgrade counters include charge speed, primary pierce, primary damage, Volley cooldown, Volley AOE size, and Volley damage.
 
 ### Enemy State
 
@@ -193,7 +193,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Private Server State
 
-Not every simulation detail is synced. `ShmupRoom.ts` keeps private server-only maps for things like player velocity, cooldowns, revive targets, enemy modes, bullet velocity, tree health, and campfire ownership.
+Not every simulation detail is synced. `ShmupRoom.ts` keeps private server-only maps for things like player velocity, cooldowns, revive targets, player invulnerability timers, enemy modes, bullet velocity, tree health, and campfire ownership.
 
 Use schema state only for data clients need to render or display.
 
@@ -215,7 +215,7 @@ Current server-owned systems include:
 - Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio. After clearing wave 9 and every 10 waves after that, the server tops living trees back up to 25 in valid random spots and broadcasts `"treesReplenished"` for the client toast.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
-- Player health, death, revive progress, revive completion, and game-over checks.
+- Player health, 150ms server-owned post-hit invulnerability, 2-second join/revive invulnerability, death, revive progress, revive completion, and game-over checks.
 - Team score, player kills, and elapsed round time.
 
 ### Performance Sensitivity
