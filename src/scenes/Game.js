@@ -47,6 +47,7 @@ const TREE_TRUNK_Y_OFFSET = -18;
 const PLAYER_ATTACK_HIT_RADIUS = 33;
 const PLAYER_AXE_WHIRLWIND_HIT_RADIUS = 56;
 const PLAYER_AXE_WHIRLWIND_HITBOX_DEBUG_MS = 120;
+const PLAYER_AXE_WHIRLWIND_WEAPON_SCALE_PER_RANK = 0.5;
 const PLAYER_ATTACK_HIT_START_OFFSET = 10;
 const PLAYER_ATTACK_HIT_END_OFFSET = 40;
 const PLAYER_ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
@@ -3376,6 +3377,7 @@ export class Game extends Phaser.Scene {
             player.listen('axeWhirlwindAoeUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeWhirlwindAoeUpgrades = stacks || 0;
+                if (animationState?.axeWhirlwind) this.updateAxeWhirlwindWeaponSize(playerSessionId);
             });
             player.listen('axeWhirlwindDamageUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
@@ -4747,7 +4749,7 @@ export class Game extends Phaser.Scene {
 
     drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState) {
         const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
-        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + 0.5 * rank);
+        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + PLAYER_AXE_WHIRLWIND_WEAPON_SCALE_PER_RANK * rank);
         graphics.lineStyle(2, 0x66ffff, 0.95);
         graphics.strokeCircle(x, y, radius);
     }
@@ -5304,6 +5306,28 @@ export class Game extends Phaser.Scene {
         return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodAxeIdle.key;
     }
 
+    getAxeWhirlwindWeaponScale(animationState) {
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
+        return 1 + PLAYER_AXE_WHIRLWIND_WEAPON_SCALE_PER_RANK * rank;
+    }
+
+    setPlayerWeaponDisplaySize(sessionId, scale = 1) {
+        const weapon = this.playerWeaponSprites.get(sessionId);
+        if (!weapon) return;
+        const size = PLAYER_DISPLAY_SIZE * Math.max(0.1, scale || 1);
+        weapon.setDisplaySize(size, size);
+    }
+
+    resetPlayerWeaponDisplaySize(sessionId) {
+        this.setPlayerWeaponDisplaySize(sessionId, 1);
+    }
+
+    updateAxeWhirlwindWeaponSize(sessionId) {
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!animationState?.axeWhirlwind) return;
+        this.setPlayerWeaponDisplaySize(sessionId, this.getAxeWhirlwindWeaponScale(animationState));
+    }
+
     updatePlayerWeaponAnimation(sessionId, moving, direction) {
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
@@ -5315,6 +5339,7 @@ export class Game extends Phaser.Scene {
             this.playPlayerAxeWhirlwindAnimation(sessionId, nextDirection, { preserveProgress: true });
             return;
         }
+        this.resetPlayerWeaponDisplaySize(sessionId);
         if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) {
             this.hidePlayerWeapon(sessionId);
             return;
@@ -5345,6 +5370,7 @@ export class Game extends Phaser.Scene {
         const weapon = this.playerWeaponSprites.get(sessionId);
         if (!weapon) return;
         if (weapon.anims.isPlaying) weapon.anims.stop();
+        this.resetPlayerWeaponDisplaySize(sessionId);
         weapon.setVisible(false);
     }
 
@@ -5378,6 +5404,7 @@ export class Game extends Phaser.Scene {
         if (!animation) return false;
 
         weapon.setVisible(true);
+        this.resetPlayerWeaponDisplaySize(sessionId);
         this.playDirectionalAnimation(weapon, animation.key, { restart, preserveProgress });
 
         return true;
@@ -5408,6 +5435,7 @@ export class Game extends Phaser.Scene {
         this.playDirectionalAnimation(sprite, bodyAnimation.key, { preserveProgress });
         if (weapon && weaponAnimation) {
             weapon.setVisible(true);
+            this.updateAxeWhirlwindWeaponSize(sessionId);
             this.playDirectionalAnimation(weapon, weaponAnimation.key, { preserveProgress });
         } else {
             this.hidePlayerWeapon(sessionId);
