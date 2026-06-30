@@ -120,6 +120,12 @@ const AXE_WHIRLWIND_DAMAGE = 1;
 const UPGRADE_MAX_RANK = 3;
 const AXE_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 1;
 const AXE_WHIRLWIND_DAMAGE_UPGRADE_MAX_RANK = 2;
+const BOW_PRIMARY_UPGRADE_MAX_RANK = 4;
+const BOW_PRIMARY_PIERCE_UPGRADE_MAX_RANK = 10;
+const BOW_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 10;
+const BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK = 3;
+const BOW_VOLLEY_AOE_UPGRADE_MAX_RANK = 5;
+const BOW_VOLLEY_DAMAGE_UPGRADE_MAX_RANK = 3;
 const BASE_ACTIVE_CAMPFIRE_LIMIT = 1;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
@@ -216,9 +222,12 @@ const UPGRADE_IDS = new Set([
     "axe_whirlwind_cooldown",
     "axe_whirlwind_aoe",
     "axe_whirlwind_damage",
+    "bow_primary_attack_speed",
     "bow_damage",
     "bow_pierce",
-    "bow_charge_time",
+    "bow_volley_cooldown",
+    "bow_volley_aoe",
+    "bow_volley_damage",
     "hammer_wood_gather",
 ]);
 type UpgradeNodeConfig = {
@@ -235,9 +244,12 @@ const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
         { id: "axe_whirlwind_damage", prerequisite: "axe_whirlwind_aoe", maxRank: AXE_WHIRLWIND_DAMAGE_UPGRADE_MAX_RANK },
     ],
     [ITEM_WOOD_BOW]: [
-        { id: "bow_damage" },
-        { id: "bow_pierce", prerequisite: "bow_damage" },
-        { id: "bow_charge_time", prerequisite: "bow_pierce" },
+        { id: "bow_primary_attack_speed", maxRank: BOW_PRIMARY_UPGRADE_MAX_RANK },
+        { id: "bow_pierce", prerequisite: "bow_primary_attack_speed", maxRank: BOW_PRIMARY_PIERCE_UPGRADE_MAX_RANK },
+        { id: "bow_damage", prerequisite: "bow_pierce", maxRank: BOW_PRIMARY_DAMAGE_UPGRADE_MAX_RANK },
+        { id: "bow_volley_cooldown", maxRank: BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK },
+        { id: "bow_volley_aoe", prerequisite: "bow_volley_cooldown", maxRank: BOW_VOLLEY_AOE_UPGRADE_MAX_RANK },
+        { id: "bow_volley_damage", prerequisite: "bow_volley_aoe", maxRank: BOW_VOLLEY_DAMAGE_UPGRADE_MAX_RANK },
     ],
     [ITEM_HAMMER]: [
         { id: "hammer_wood_gather" },
@@ -2000,14 +2012,23 @@ export class ShmupRoom extends Room<GameRoomState> {
             case "axe_whirlwind_damage":
                 player.axeWhirlwindDamageUpgrades++;
                 break;
-            case "bow_damage":
-                player.bowDamageUpgrades++;
+            case "bow_primary_attack_speed":
+                player.bowChargeTimeUpgrades++;
                 break;
             case "bow_pierce":
                 player.bowPierceUpgrades++;
                 break;
-            case "bow_charge_time":
-                player.bowChargeTimeUpgrades++;
+            case "bow_damage":
+                player.bowDamageUpgrades++;
+                break;
+            case "bow_volley_cooldown":
+                player.bowVolleyCooldownUpgrades++;
+                break;
+            case "bow_volley_aoe":
+                player.bowVolleyAoeUpgrades++;
+                break;
+            case "bow_volley_damage":
+                player.bowVolleyDamageUpgrades++;
                 break;
             case "hammer_wood_gather":
                 player.woodGatherUpgrades++;
@@ -2035,12 +2056,18 @@ export class ShmupRoom extends Room<GameRoomState> {
                 return Math.max(0, player.axeWhirlwindAoeUpgrades || 0);
             case "axe_whirlwind_damage":
                 return Math.max(0, player.axeWhirlwindDamageUpgrades || 0);
-            case "bow_damage":
-                return Math.max(0, player.bowDamageUpgrades || 0);
+            case "bow_primary_attack_speed":
+                return Math.max(0, player.bowChargeTimeUpgrades || 0);
             case "bow_pierce":
                 return Math.max(0, player.bowPierceUpgrades || 0);
-            case "bow_charge_time":
-                return Math.max(0, player.bowChargeTimeUpgrades || 0);
+            case "bow_damage":
+                return Math.max(0, player.bowDamageUpgrades || 0);
+            case "bow_volley_cooldown":
+                return Math.max(0, player.bowVolleyCooldownUpgrades || 0);
+            case "bow_volley_aoe":
+                return Math.max(0, player.bowVolleyAoeUpgrades || 0);
+            case "bow_volley_damage":
+                return Math.max(0, player.bowVolleyDamageUpgrades || 0);
             case "hammer_wood_gather":
                 return Math.max(0, player.woodGatherUpgrades || 0);
             default:
@@ -2384,7 +2411,23 @@ export class ShmupRoom extends Room<GameRoomState> {
     }
 
     private getPlayerBowChargeMs(player: PlayerState): number {
-        return Math.max(MIN_BOW_CHARGE_MS, BOW_CHARGE_MS * Math.pow(0.75, Math.max(0, player.bowChargeTimeUpgrades || 0)));
+        const rank = clamp(Math.floor(player.bowChargeTimeUpgrades || 0), 0, BOW_PRIMARY_UPGRADE_MAX_RANK);
+        return Math.max(MIN_BOW_CHARGE_MS, BOW_CHARGE_MS / (1 + 0.20 * rank));
+    }
+
+    private getPlayerBowVolleyCooldownMs(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.bowVolleyCooldownUpgrades || 0), 0, BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK);
+        return Math.max(0, BOW_VOLLEY_COOLDOWN_MS - 1000 * rank);
+    }
+
+    private getPlayerBowVolleyRadius(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.bowVolleyAoeUpgrades || 0), 0, BOW_VOLLEY_AOE_UPGRADE_MAX_RANK);
+        return BOW_VOLLEY_RADIUS * (1 + 0.25 * rank);
+    }
+
+    private getPlayerBowVolleyDamage(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.bowVolleyDamageUpgrades || 0), 0, BOW_VOLLEY_DAMAGE_UPGRADE_MAX_RANK);
+        return BOW_VOLLEY_DAMAGE + rank;
     }
 
     private startBowCharge(sessionId: string, data: unknown) {
@@ -2515,19 +2558,21 @@ export class ShmupRoom extends Room<GameRoomState> {
         if (!fullyCharged) return;
         if (!sp.alive || player.isDead || this.state.gameOver || player.activeItem !== ITEM_WOOD_BOW) return;
 
-        sp.bowVolleyCooldownMs = BOW_VOLLEY_COOLDOWN_MS;
-        player.bowVolleyCooldownProgress = 1;
+        const radius = this.getPlayerBowVolleyRadius(player);
+        const cooldownMs = this.getPlayerBowVolleyCooldownMs(player);
+        sp.bowVolleyCooldownMs = cooldownMs;
+        player.bowVolleyCooldownProgress = cooldownMs > 0 ? 1 : 0;
         const id = `bow-volley-${nextId()}`;
         this.broadcast("bowVolleyTelegraph", {
             id,
             attackerId: sessionId,
             x: target.x,
             y: target.y,
-            radius: BOW_VOLLEY_RADIUS,
+            radius,
             impactDelayMs: BOW_VOLLEY_IMPACT_DELAY_MS,
         });
         setTimeout(() => {
-            this.applyBowVolleyImpact(id, sessionId, target.x, target.y, BOW_VOLLEY_RADIUS);
+            this.applyBowVolleyImpact(id, sessionId, target.x, target.y, radius);
         }, BOW_VOLLEY_IMPACT_DELAY_MS);
     }
 
@@ -2553,8 +2598,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             return;
         }
 
+        const cooldownMs = this.getPlayerBowVolleyCooldownMs(player);
+        if (cooldownMs <= 0) {
+            sp.bowVolleyCooldownMs = 0;
+            player.bowVolleyCooldownProgress = 0;
+            return;
+        }
         sp.bowVolleyCooldownMs = Math.max(0, sp.bowVolleyCooldownMs - dtMs);
-        player.bowVolleyCooldownProgress = clamp(sp.bowVolleyCooldownMs / BOW_VOLLEY_COOLDOWN_MS, 0, 1);
+        player.bowVolleyCooldownProgress = clamp(sp.bowVolleyCooldownMs / cooldownMs, 0, 1);
     }
 
     private getBowVolleyTarget(player: PlayerState, data: unknown): { x: number; y: number } {
@@ -2834,6 +2885,9 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.bowDamageUpgrades = 0;
             player.bowPierceUpgrades = 0;
             player.bowChargeTimeUpgrades = 0;
+            player.bowVolleyCooldownUpgrades = 0;
+            player.bowVolleyAoeUpgrades = 0;
+            player.bowVolleyDamageUpgrades = 0;
             player.woodGatherUpgrades = 0;
             player.campfireUpgrades = 0;
             player.pendingCampfireCharges = 0;
@@ -3349,8 +3403,10 @@ export class ShmupRoom extends Room<GameRoomState> {
             hitEnemyIds.push(enemyId);
         });
 
+        const attacker = this.state.players.get(attackerId);
+        const damage = attacker ? this.getPlayerBowVolleyDamage(attacker) : BOW_VOLLEY_DAMAGE;
         hitEnemyIds.forEach((enemyId) => {
-            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, BOW_VOLLEY_DAMAGE);
+            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, damage);
             if (enemyHit) this.broadcast("enemyHit", enemyHit);
         });
     }
@@ -4232,8 +4288,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         const vx = length > 0 ? (dx / length) * ARROW_SPEED : 0;
         const vy = length > 0 ? (dy / length) * ARROW_SPEED : -ARROW_SPEED;
         const id = nextId();
-        const damage = ARROW_DAMAGE + Math.max(0, owner?.bowDamageUpgrades || 0);
-        const pierce = 1 + Math.max(0, owner?.bowPierceUpgrades || 0);
+        const damageRank = clamp(Math.floor(owner?.bowDamageUpgrades || 0), 0, BOW_PRIMARY_DAMAGE_UPGRADE_MAX_RANK);
+        const pierceRank = clamp(Math.floor(owner?.bowPierceUpgrades || 0), 0, BOW_PRIMARY_PIERCE_UPGRADE_MAX_RANK);
+        const damage = ARROW_DAMAGE + damageRank;
+        const pierce = 1 + pierceRank;
         const arrow = new PlayerBulletState();
         arrow.id = id;
         arrow.x = x;

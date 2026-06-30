@@ -45,6 +45,9 @@ export class PlayerState extends Schema {
     @type("int16")   bowDamageUpgrades: number = 0;
     @type("int16")   bowPierceUpgrades: number = 0;
     @type("int16")   bowChargeTimeUpgrades: number = 0;
+    @type("int16")   bowVolleyCooldownUpgrades: number = 0;
+    @type("int16")   bowVolleyAoeUpgrades: number = 0;
+    @type("int16")   bowVolleyDamageUpgrades: number = 0;
     @type("int16")   woodGatherUpgrades: number = 0;
     @type("int16")   campfireUpgrades: number = 0;
     @type("int16")   pendingCampfireCharges: number = 0;

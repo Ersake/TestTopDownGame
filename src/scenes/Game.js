@@ -300,9 +300,12 @@ const PLAYER_BUFFS = [
     { field: 'axeWhirlwindCooldownUpgrades', label: 'Whirlwind cooldown' },
     { field: 'axeWhirlwindAoeUpgrades', label: 'Whirlwind AOE' },
     { field: 'axeWhirlwindDamageUpgrades', label: 'Whirlwind damage' },
-    { field: 'bowDamageUpgrades', label: 'Bow damage' },
-    { field: 'bowPierceUpgrades', label: 'Bow pierce' },
-    { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
+    { field: 'bowChargeTimeUpgrades', label: 'Bow primary speed' },
+    { field: 'bowPierceUpgrades', label: 'Bow primary pierce' },
+    { field: 'bowDamageUpgrades', label: 'Bow primary damage' },
+    { field: 'bowVolleyCooldownUpgrades', label: 'Volley cooldown' },
+    { field: 'bowVolleyAoeUpgrades', label: 'Volley size' },
+    { field: 'bowVolleyDamageUpgrades', label: 'Volley damage' },
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
 ];
 const ENCHANTMENT_MAX_RANK = 3;
@@ -322,9 +325,12 @@ const ENCHANTMENT_SKILL_TREES = {
         title: 'Bow Skills',
         displayName: 'Bow',
         nodes: [
-            { id: 'bow_damage', label: '+1 damage', field: 'bowDamageUpgrades' },
-            { id: 'bow_pierce', label: '+1 pierce', field: 'bowPierceUpgrades', prerequisite: 'bow_damage' },
-            { id: 'bow_charge_time', label: '-25% charge time', field: 'bowChargeTimeUpgrades', prerequisite: 'bow_pierce' },
+            { id: 'bow_primary_attack_speed', label: '+20% charge speed', field: 'bowChargeTimeUpgrades', maxRank: 4, column: 0, row: 0 },
+            { id: 'bow_pierce', label: '+1 primary pierce', field: 'bowPierceUpgrades', prerequisite: 'bow_primary_attack_speed', maxRank: 10, column: 0, row: 1 },
+            { id: 'bow_damage', label: '+1 primary damage', field: 'bowDamageUpgrades', prerequisite: 'bow_pierce', maxRank: 10, column: 0, row: 2 },
+            { id: 'bow_volley_cooldown', label: '-1 second volley cooldown', field: 'bowVolleyCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
+            { id: 'bow_volley_aoe', label: '+25% volley size', field: 'bowVolleyAoeUpgrades', prerequisite: 'bow_volley_cooldown', maxRank: 5, column: 1, row: 1 },
+            { id: 'bow_volley_damage', label: '+1 volley damage', field: 'bowVolleyDamageUpgrades', prerequisite: 'bow_volley_aoe', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 2 },
         ],
     },
     [ITEM_HAMMER]: {
@@ -3006,6 +3012,8 @@ export class Game extends Phaser.Scene {
                 axeWhirlwindHitboxUntil: 0,
                 axeWhirlwindAoeUpgrades: player.axeWhirlwindAoeUpgrades || 0,
                 axeWhirlwindDamageUpgrades: player.axeWhirlwindDamageUpgrades || 0,
+                bowVolleyAoeUpgrades: player.bowVolleyAoeUpgrades || 0,
+                bowVolleyDamageUpgrades: player.bowVolleyDamageUpgrades || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
@@ -3325,6 +3333,15 @@ export class Game extends Phaser.Scene {
             player.listen('axeWhirlwindDamageUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeWhirlwindDamageUpgrades = stacks || 0;
+            });
+            player.listen('bowVolleyAoeUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.bowVolleyAoeUpgrades = stacks || 0;
+                if (isLocal && this.bowVolleyPointer) this.updateBowVolleyPreview(this.bowVolleyPointer);
+            });
+            player.listen('bowVolleyDamageUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.bowVolleyDamageUpgrades = stacks || 0;
             });
 
             if (player.isDead) {
@@ -5017,10 +5034,16 @@ export class Game extends Phaser.Scene {
             this.bowVolleyPreview,
             worldPoint.x,
             worldPoint.y,
-            BOW_VOLLEY_RADIUS,
+            this.getLocalBowVolleyRadius(),
             BOW_VOLLEY_PREVIEW_COLOR,
             BOW_VOLLEY_PREVIEW_ALPHA,
         );
+    }
+
+    getLocalBowVolleyRadius() {
+        const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        const rank = Phaser.Math.Clamp(Math.floor(animationState?.bowVolleyAoeUpgrades || 0), 0, 5);
+        return BOW_VOLLEY_RADIUS * (1 + 0.25 * rank);
     }
 
     clearBowVolleyPreview() {
