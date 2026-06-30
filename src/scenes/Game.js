@@ -59,6 +59,15 @@ const FIRECHARGE_DIRECTION_OFFSET = 12;
 const FIRECHARGE_DEPTH_OFFSET = 4;
 const FIREBALL_ROTATION_OFFSET = Phaser.Math.DegToRad(32);
 const BOW_AIM_SEND_INTERVAL_MS = 50;
+const BOW_VOLLEY_AIM_SEND_INTERVAL_MS = 50;
+const BOW_VOLLEY_RADIUS = 96;
+const BOW_VOLLEY_PREVIEW_COLOR = 0xffffff;
+const BOW_VOLLEY_PREVIEW_ALPHA = 0.48;
+const BOW_VOLLEY_TELEGRAPH_COLOR = 0xff2020;
+const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
+const BOW_VOLLEY_DOT_LENGTH = 10;
+const BOW_VOLLEY_DOT_GAP = 8;
+const BOW_VOLLEY_TELEGRAPH_FALLBACK_MS = 700;
 const ENEMY_ATTACK_RANGE = 26;
 const BASE_CASTER_CAST_RANGE = 360;
 const CASTER_CAST_RANGE = BASE_CASTER_CAST_RANGE;
@@ -398,6 +407,7 @@ export class Game extends Phaser.Scene {
         }
         this.cancelBowChargeForMovement();
         this.updateBowChargeAim();
+        this.updateBowVolleyAim();
         this.updateHeldAttack();
         this.updateAxeWhirlwind();
         this.updateAxeWhirlwindSounds();
@@ -461,6 +471,7 @@ export class Game extends Phaser.Scene {
         this.hotbarDrag = null;
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
+        this.localBowVolleyCooldownProgress = 0;
         this.skillPointText = null;
         this.enchantmentUi = null;
         this.enchantmentUiObjects = new Set();
@@ -534,6 +545,11 @@ export class Game extends Phaser.Scene {
         this.bowChargePointer = null;
         this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
+        this.bowVolleyPointerId = null;
+        this.bowVolleyPointer = null;
+        this.nextBowVolleyAimSendAt = 0;
+        this.bowVolleyPreview = null;
+        this.bowVolleyTelegraphs = new Map();
         this.nextHeldAttackAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
@@ -561,6 +577,7 @@ export class Game extends Phaser.Scene {
             this.remoteAttackAudioDirty = true;
             this.suppressRemoteAttackAudioUntil = Number.POSITIVE_INFINITY;
             this.stopAxeWhirlwind();
+            this.cancelBowVolley();
         };
         this.handleTabActive = () => {
             this.isTabActive = this.isDocumentActive();
@@ -588,6 +605,7 @@ export class Game extends Phaser.Scene {
             }
             if (event?.button === 2 || (typeof event?.buttons === 'number' && (event.buttons & 2) === 0)) {
                 this.stopAxeWhirlwind();
+                this.releaseBowVolley();
             }
         };
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
@@ -606,6 +624,8 @@ export class Game extends Phaser.Scene {
             this.closeEnchantmentMenu();
             this.cancelHotbarDrag();
             this.stopAxeWhirlwind();
+            this.cancelBowVolley();
+            this.clearBowVolleyTelegraphs();
             this.stopAllCasterChargeSounds();
             this.destroyDebugRoundControls();
         });
@@ -1099,13 +1119,20 @@ export class Game extends Phaser.Scene {
 
     updateHotbarAxeOverlays() {
         const activeProgress = Phaser.Math.Clamp(this.localAxeWhirlwindProgress || 0, 0, 1);
-        const cooldownProgress = Phaser.Math.Clamp(this.localAxeWhirlwindCooldownProgress || 0, 0, 1);
+        const axeCooldownProgress = Phaser.Math.Clamp(this.localAxeWhirlwindCooldownProgress || 0, 0, 1);
+        const bowCooldownProgress = Phaser.Math.Clamp(this.localBowVolleyCooldownProgress || 0, 0, 1);
         this.hotbarSlots.forEach(({ box, cooldownOverlay, activeOverlay, slot }) => {
             if (!cooldownOverlay) return;
             cooldownOverlay.clear();
             activeOverlay?.clear();
-            if (!box || this.getItemForHotbarSlot(slot) !== ITEM_WOOD_AXE) return;
+            if (!box) return;
 
+            const item = this.getItemForHotbarSlot(slot);
+            const cooldownProgress = item === ITEM_WOOD_AXE
+                ? axeCooldownProgress
+                : item === ITEM_WOOD_BOW
+                    ? bowCooldownProgress
+                    : 0;
             const x = box.x - HOTBAR_SLOT_SIZE * 0.5;
             const bottomY = box.y + HOTBAR_SLOT_SIZE * 0.5;
             if (cooldownProgress > 0) {
@@ -1113,7 +1140,7 @@ export class Game extends Phaser.Scene {
                 cooldownOverlay.fillStyle(HOTBAR_COOLDOWN_OVERLAY_COLOR, HOTBAR_COOLDOWN_OVERLAY_ALPHA);
                 cooldownOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
             }
-            if (activeOverlay && activeProgress > 0) {
+            if (item === ITEM_WOOD_AXE && activeOverlay && activeProgress > 0) {
                 const height = HOTBAR_SLOT_SIZE * activeProgress;
                 activeOverlay.fillStyle(HOTBAR_ACTIVE_OVERLAY_COLOR, HOTBAR_ACTIVE_OVERLAY_ALPHA);
                 activeOverlay.fillRect(x, bottomY - height, HOTBAR_SLOT_SIZE, height);
@@ -2561,7 +2588,7 @@ export class Game extends Phaser.Scene {
                     return;
                 }
                 if (activeItem === ITEM_WOOD_BOW) {
-                    this.cancelBowCharge();
+                    this.startBowVolley(pointer);
                     return;
                 }
             }
@@ -2601,6 +2628,9 @@ export class Game extends Phaser.Scene {
                 this.updateBuildPreview(pointer);
                 this.handleBuildModePointerDrag(pointer);
             }
+            if (this.bowVolleyPointerId === pointer.id) {
+                this.updateBowVolleyPreview(pointer);
+            }
         });
 
         this.input.on('pointerup', (pointer) => {
@@ -2632,6 +2662,9 @@ export class Game extends Phaser.Scene {
             if (this.axeWhirlwindPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
                 this.stopAxeWhirlwind();
             }
+            if (this.bowVolleyPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
+                this.releaseBowVolley(pointer);
+            }
         });
 
         this.input.on('wheel', (_pointer, _gameObjects, _deltaX, deltaY) => {
@@ -2655,6 +2688,7 @@ export class Game extends Phaser.Scene {
         const nextItem = this.getItemForHotbarSlot(slot);
         if (animationState.activeItem === ITEM_WOOD_BOW && nextItem !== ITEM_WOOD_BOW) {
             this.cancelBowCharge();
+            this.cancelBowVolley();
             this.clearBowPresentationState(sessionId, { updateAnimation: false });
         }
         if (animationState.activeItem === ITEM_WOOD_AXE && nextItem !== ITEM_WOOD_AXE) {
@@ -2830,6 +2864,15 @@ export class Game extends Phaser.Scene {
             });
         });
 
+        room.onMessage('bowVolleyTelegraph', (event) => {
+            this.showBowVolleyTelegraph(event);
+        });
+
+        room.onMessage('bowVolleyImpact', (event) => {
+            const id = typeof event?.id === 'string' ? event.id : '';
+            if (id) this.removeBowVolleyTelegraph(id);
+        });
+
         // ── Players ──────────────────────────────────────────────────────────
         room.onMessage('playerLevelUp', (event) => {
             if (!this.shouldPlayWorldEventAudio()) return;
@@ -2867,6 +2910,8 @@ export class Game extends Phaser.Scene {
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
             this.closeEnchantmentMenu();
+            this.cancelBowVolley();
+            this.clearBowVolleyTelegraphs();
             this.createGrassNoiseLayer();
         });
 
@@ -2964,6 +3009,7 @@ export class Game extends Phaser.Scene {
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
+                bowVolleyCooldownProgress: player.bowVolleyCooldownProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
                 axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
@@ -3019,8 +3065,12 @@ export class Game extends Phaser.Scene {
             });
 
             player.listen('isDead', (isDead) => {
-                if (isDead) this.playPlayerDeathAnimation(playerSessionId);
-                else this.resetPlayerAfterRevive(playerSessionId);
+                if (isDead) {
+                    if (isLocal) this.cancelBowVolley();
+                    this.playPlayerDeathAnimation(playerSessionId);
+                } else {
+                    this.resetPlayerAfterRevive(playerSessionId);
+                }
             });
 
             player.listen('facingDirection', (direction) => {
@@ -3062,6 +3112,7 @@ export class Game extends Phaser.Scene {
                 animationState.activeItem = item || '';
                 if (wasBow && animationState.activeItem !== ITEM_WOOD_BOW) {
                     if (isLocal) this.cancelBowCharge();
+                    if (isLocal) this.cancelBowVolley();
                     this.clearBowPresentationState(playerSessionId, { updateAnimation: false });
                 }
                 if (animationState.axeWhirlwind && animationState.activeItem !== ITEM_WOOD_AXE) {
@@ -3198,6 +3249,16 @@ export class Game extends Phaser.Scene {
                 });
             });
 
+            player.listen('bowVolleyCooldownProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.bowVolleyCooldownProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localBowVolleyCooldownProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
+            });
+
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
                 if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
@@ -3279,6 +3340,7 @@ export class Game extends Phaser.Scene {
                 this.localActiveSlot = player.activeSlot || 1;
                 this.localAxeWhirlwindProgress = Phaser.Math.Clamp(player.axeWhirlwindProgress || 0, 0, 1);
                 this.localAxeWhirlwindCooldownProgress = Phaser.Math.Clamp(player.axeWhirlwindCooldownProgress || 0, 0, 1);
+                this.localBowVolleyCooldownProgress = Phaser.Math.Clamp(player.bowVolleyCooldownProgress || 0, 0, 1);
                 this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
@@ -4147,6 +4209,59 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    drawDottedCircle(graphics, x, y, radius, color, alpha) {
+        if (!graphics) return;
+        graphics.clear();
+        graphics.lineStyle(2, color, alpha);
+
+        const circumference = Math.PI * 2 * radius;
+        const step = BOW_VOLLEY_DOT_LENGTH + BOW_VOLLEY_DOT_GAP;
+        const segmentAngle = (BOW_VOLLEY_DOT_LENGTH / circumference) * Math.PI * 2;
+        const stepAngle = (step / circumference) * Math.PI * 2;
+
+        for (let angle = 0; angle < Math.PI * 2; angle += stepAngle) {
+            const endAngle = Math.min(angle + segmentAngle, Math.PI * 2);
+            graphics.beginPath();
+            graphics.arc(x, y, radius, angle, endAngle, false);
+            graphics.strokePath();
+        }
+    }
+
+    showBowVolleyTelegraph(event) {
+        const id = typeof event?.id === 'string' ? event.id : '';
+        const x = Number(event?.x);
+        const y = Number(event?.y);
+        const radius = Number(event?.radius) || BOW_VOLLEY_RADIUS;
+        if (!id || !Number.isFinite(x) || !Number.isFinite(y)) return;
+
+        this.removeBowVolleyTelegraph(id);
+        const graphics = this.add.graphics().setDepth(HITBOX_DEPTH - 2);
+        this.registerWorldObject(graphics);
+        this.drawDottedCircle(graphics, x, y, radius, BOW_VOLLEY_TELEGRAPH_COLOR, BOW_VOLLEY_TELEGRAPH_ALPHA);
+
+        const impactDelayMs = Math.max(0, Number(event?.impactDelayMs) || 0);
+        const timer = this.time.delayedCall(impactDelayMs + BOW_VOLLEY_TELEGRAPH_FALLBACK_MS, () => {
+            this.removeBowVolleyTelegraph(id);
+        });
+        this.bowVolleyTelegraphs.set(id, { graphics, timer });
+    }
+
+    removeBowVolleyTelegraph(id) {
+        const telegraph = this.bowVolleyTelegraphs.get(id);
+        if (!telegraph) return;
+        telegraph.timer?.remove?.(false);
+        telegraph.graphics?.destroy?.();
+        this.bowVolleyTelegraphs.delete(id);
+    }
+
+    clearBowVolleyTelegraphs() {
+        this.bowVolleyTelegraphs.forEach(({ graphics, timer }) => {
+            timer?.remove?.(false);
+            graphics?.destroy?.();
+        });
+        this.bowVolleyTelegraphs.clear();
+    }
+
     drawCampfireHealBar(graphics, campfire, progress) {
         const x = campfire.x - CAMPFIRE_HEAL_BAR_WIDTH * 0.5;
         const y = campfire.y + CAMPFIRE_HEAL_BAR_Y_OFFSET;
@@ -4173,6 +4288,7 @@ export class Game extends Phaser.Scene {
         if (this.isBuildModeActive) {
             this.stopHeldAttack();
             this.cancelBowCharge();
+            this.cancelBowVolley();
         }
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(this.isBuildModeActive);
@@ -4770,6 +4886,7 @@ export class Game extends Phaser.Scene {
     }
 
     cancelBowChargeForMovement() {
+        if (this.bowVolleyPointer || this.bowVolleyPointerId !== null) return;
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
         if (!animationState?.bowCharging) return;
         const movement = this.getMovementKeyState();
@@ -4801,6 +4918,114 @@ export class Game extends Phaser.Scene {
         this.bowChargePointer = null;
         this.bowChargeMoveState = null;
         this.nextBowAimSendAt = 0;
+    }
+
+    startBowVolley(pointer) {
+        const sessionId = this.localSessionId;
+        const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
+        const sprite = sessionId ? this.playerSprites.get(sessionId) : null;
+        if (!this.gameStarted || !sessionId || !animationState || !sprite || animationState.dead || this.isBuildModeActive) return;
+        if (animationState.activeItem !== ITEM_WOOD_BOW || animationState.axeWhirlwind) return;
+        if ((animationState.bowVolleyCooldownProgress || this.localBowVolleyCooldownProgress || 0) > 0) return;
+
+        this.cancelBowCharge();
+        this.clearBowPresentationState(sessionId, { updateAnimation: true });
+        this.stopHeldAttack();
+        this.stopAxeWhirlwind();
+
+        this.bowVolleyPointerId = pointer.id;
+        this.bowVolleyPointer = pointer;
+        this.nextBowVolleyAimSendAt = this.time.now + BOW_VOLLEY_AIM_SEND_INTERVAL_MS;
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        const origin = { x: animationState.x ?? sprite.x ?? 0, y: animationState.y ?? ((sprite.y ?? 0) - PLAYER_VISUAL_Y_OFFSET) };
+        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        animationState.attackItem = ITEM_WOOD_BOW;
+        animationState.attackTargetX = worldPoint?.x ?? null;
+        animationState.attackTargetY = worldPoint?.y ?? null;
+        this.createBowVolleyPreview();
+        this.updateBowVolleyPreview(pointer);
+        RoomClient.sendBowVolleyStart(worldPoint?.x, worldPoint?.y);
+        this.playPlayerAttackAnimation(sessionId, direction, { playAudio: false, allowWhileCharging: true });
+    }
+
+    updateBowVolleyAim() {
+        if (!this.bowVolleyPointer || this.time.now < this.nextBowVolleyAimSendAt) return;
+        const sessionId = this.localSessionId;
+        const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
+        if (!animationState || animationState.dead || animationState.activeItem !== ITEM_WOOD_BOW) {
+            this.cancelBowVolley();
+            return;
+        }
+        const worldPoint = this.getPointerWorldPoint(this.bowVolleyPointer);
+        animationState.attackTargetX = worldPoint?.x ?? null;
+        animationState.attackTargetY = worldPoint?.y ?? null;
+        const sprite = this.playerSprites.get(sessionId);
+        const origin = { x: animationState.x ?? sprite?.x ?? 0, y: animationState.y ?? ((sprite?.y ?? 0) - PLAYER_VISUAL_Y_OFFSET) };
+        const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
+        if (direction !== animationState.direction) {
+            animationState.bowAnimationPaused = false;
+            this.playPlayerAttackAnimation(sessionId, direction, {
+                playAudio: false,
+                allowWhileCharging: true,
+                preserveProgress: true,
+            });
+            if (animationState.bowFullyCharged) this.pauseFullBowChargeAnimation(sessionId);
+        }
+        this.updateBowVolleyPreview(this.bowVolleyPointer);
+        RoomClient.sendBowVolleyAim(worldPoint?.x, worldPoint?.y);
+        this.nextBowVolleyAimSendAt = this.time.now + BOW_VOLLEY_AIM_SEND_INTERVAL_MS;
+    }
+
+    releaseBowVolley(pointer = this.bowVolleyPointer) {
+        if (!this.bowVolleyPointer && this.bowVolleyPointerId === null) return;
+        const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        if ((animationState?.bowChargeProgress || 0) >= 1) {
+            RoomClient.sendBowVolleyRelease(worldPoint?.x, worldPoint?.y);
+        } else {
+            RoomClient.sendBowVolleyCancel();
+            if (this.localSessionId) this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
+        }
+        this.clearBowVolleyPreview();
+        this.bowVolleyPointerId = null;
+        this.bowVolleyPointer = null;
+        this.nextBowVolleyAimSendAt = 0;
+    }
+
+    cancelBowVolley() {
+        if (!this.bowVolleyPointer && this.bowVolleyPointerId === null && !this.bowVolleyPreview) return;
+        RoomClient.sendBowVolleyCancel();
+        this.clearBowVolleyPreview();
+        this.bowVolleyPointerId = null;
+        this.bowVolleyPointer = null;
+        this.nextBowVolleyAimSendAt = 0;
+        if (this.localSessionId) this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
+    }
+
+    createBowVolleyPreview() {
+        if (this.bowVolleyPreview) return;
+        this.bowVolleyPreview = this.add.graphics().setDepth(HITBOX_DEPTH - 1);
+        this.registerWorldObject(this.bowVolleyPreview);
+    }
+
+    updateBowVolleyPreview(pointer = this.bowVolleyPointer) {
+        if (!pointer) return;
+        this.createBowVolleyPreview();
+        const worldPoint = this.getPointerWorldPoint(pointer);
+        if (!worldPoint) return;
+        this.drawDottedCircle(
+            this.bowVolleyPreview,
+            worldPoint.x,
+            worldPoint.y,
+            BOW_VOLLEY_RADIUS,
+            BOW_VOLLEY_PREVIEW_COLOR,
+            BOW_VOLLEY_PREVIEW_ALPHA,
+        );
+    }
+
+    clearBowVolleyPreview() {
+        this.bowVolleyPreview?.destroy();
+        this.bowVolleyPreview = null;
     }
 
     updateHeldAttack() {
@@ -6163,8 +6388,11 @@ export class Game extends Phaser.Scene {
         this.resetBuildDragState();
         this.stopHeldAttack();
         this.cancelBowCharge();
+        this.cancelBowVolley();
+        this.clearBowVolleyTelegraphs();
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
+        this.localBowVolleyCooldownProgress = 0;
         this.updateHotbarAxeOverlays();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();

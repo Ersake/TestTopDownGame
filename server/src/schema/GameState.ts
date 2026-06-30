@@ -31,6 +31,7 @@ export class PlayerState extends Schema {
     @type("boolean") bowCharging: boolean = false;
     @type("float32") bowChargeProgress: number = 0;
     @type("int32")   bowChargeSeq: number = 0;
+    @type("float32") bowVolleyCooldownProgress: number = 0;
     @type("int16")   pendingUpgradeChoices: number = 0;
     @type("int16")   axeSwingSpeedUpgrades: number = 0;
     @type("int16")   axePrimaryDamageUpgrades: number = 0;

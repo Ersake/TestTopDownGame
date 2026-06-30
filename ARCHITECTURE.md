@@ -98,6 +98,7 @@ Important server files:
 | `"attack"` | `RoomClient.sendAttack()` | Attack direction and target coordinates. |
 | `"dash"` | `RoomClient.sendDash()` | One-shot dash request; the server owns cooldown, facing direction, movement, and collision resolution. |
 | `"bowChargeStart"`, `"bowAim"`, `"bowCancel"` | Bow input helpers | Starts, updates, or cancels a server-owned bow charge. |
+| `"bowVolleyStart"`, `"bowVolleyAim"`, `"bowVolleyRelease"`, `"bowVolleyCancel"` | Bow Volley input helpers | Starts, updates, releases, or cancels server-owned bow secondary targeting. Volley reuses synced bow charge state and only releases after full charge. |
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
@@ -121,6 +122,8 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"woodPickup"` | One-shot pickup sound/UI presentation. |
 | `"reviveStarted"` | One-shot revive-start presentation. |
 | `"playerHurt"` | One-shot player hurt presentation. |
+| `"bowVolleyTelegraph"` | One-shot shared red Volley warning circle presentation before impact. |
+| `"bowVolleyImpact"` | One-shot Volley impact/removal presentation. |
 | `"craftResult"` | Acceptance or rejection feedback for a crafting request. |
 | `"itemCrafted"` | One-shot presentation for successful crafting. |
 | `"levelReset"` | One-shot presentation/state reset after a room-level reset. |
@@ -165,7 +168,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, bow Volley cooldown progress, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage.
 
 ### Enemy State
 
@@ -195,6 +198,7 @@ Current server-owned systems include:
 - World bounds and tree generation.
 - Player movement uses a 200 px/s server-authoritative base speed, facing direction, smooth dash movement with a 2-second cooldown, attack lockout, attack cooldown, and interaction input. Dash cooldown progress is synced for the under-player cooldown bar.
 - Axe left-click attacks and active axe whirlwind do not slow server-authoritative player movement. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades split into two branches: primary attack speed up to 3 ranks followed by +1 primary damage, and whirlwind cooldown reduction up to 3 ranks followed by AOE size up to 3 ranks and whirlwind damage up to 2 ranks. Whirlwind cooldown ranks reduce the 10-second base cooldown by 2 seconds each, and AOE ranks increase the 56px base radius by 50% each.
+- Bow primary charge locks the player in place until fired or cancelled. Bow secondary Volley reuses the same synced `bowCharging`, `bowChargeProgress`, and `bowChargeSeq` presentation, including the charge bar and arrow-pull audio. Volley locks the player in place while right click is held; early release cancels without impact, while full-charge release clamps the target to 600px from the player, broadcasts a 96px red warning circle for 0.5 seconds, then damages every enemy in the circle for 1 damage and starts a 3-second server-owned cooldown rendered on bow hotbar slots. The local white targeting circle is client-only presentation; Volley impact is server-authoritative.
 - Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites and server-enforced max ranks.
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering upgrade multipliers.

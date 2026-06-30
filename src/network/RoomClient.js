@@ -168,6 +168,26 @@ class RoomClient {
         this.room.send("bowCancel", {});
     }
 
+    sendBowVolleyStart(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowVolleyStart", { targetX, targetY });
+    }
+
+    sendBowVolleyAim(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowVolleyAim", { targetX, targetY });
+    }
+
+    sendBowVolleyRelease(targetX, targetY) {
+        if (!this.room) return;
+        this.room.send("bowVolleyRelease", { targetX, targetY });
+    }
+
+    sendBowVolleyCancel() {
+        if (!this.room) return;
+        this.room.send("bowVolleyCancel", {});
+    }
+
     sendAxeWhirlwind(active) {
         if (!this.room) return;
         this.room.send("axeWhirlwind", { active: !!active });

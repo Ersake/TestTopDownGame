@@ -92,6 +92,11 @@ const BOW_CHARGE_MS = 1000;
 const ARROW_SPEED = 900;
 const ARROW_RANGE = 1200;
 const ARROW_DAMAGE = 1;
+const BOW_VOLLEY_RADIUS = 96;
+const BOW_VOLLEY_RANGE = 600;
+const BOW_VOLLEY_DAMAGE = 1;
+const BOW_VOLLEY_IMPACT_DELAY_MS = 500;
+const BOW_VOLLEY_COOLDOWN_MS = 3000;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
@@ -413,6 +418,12 @@ interface ServerPlayer {
     bowChargeMoveRight: boolean;
     bowChargeMoveUp: boolean;
     bowChargeMoveDown: boolean;
+    bowVolleyActive: boolean;
+    bowVolleyLockX: number;
+    bowVolleyLockY: number;
+    bowVolleyTargetX: number;
+    bowVolleyTargetY: number;
+    bowVolleyCooldownMs: number;
     axeWhirlwind: boolean;
     axeWhirlwindTickMs: number;
     axeWhirlwindElapsedMs: number;
@@ -812,7 +823,23 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.onMessage("bowCancel", (client) => {
             const sp = this.serverPlayers.get(client.sessionId);
             const player = this.state.players.get(client.sessionId);
-            if (sp && player) this.clearBowCharge(player, sp);
+            if (sp && player && !sp.bowVolleyActive) this.clearBowCharge(player, sp);
+        });
+
+        this.onMessage("bowVolleyStart", (client, data) => {
+            this.startBowVolley(client.sessionId, data);
+        });
+
+        this.onMessage("bowVolleyAim", (client, data) => {
+            this.updateBowVolleyAim(client.sessionId, data);
+        });
+
+        this.onMessage("bowVolleyRelease", (client, data) => {
+            this.releaseBowVolley(client.sessionId, data);
+        });
+
+        this.onMessage("bowVolleyCancel", (client) => {
+            this.cancelBowVolley(client.sessionId);
         });
 
         this.onMessage("dash", (client) => {
@@ -1878,6 +1905,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.activeItem = this.getHotbarItem(player, slot);
         if (player.activeItem !== ITEM_WOOD_BOW) {
             this.clearBowCharge(player, sp);
+            this.clearBowVolley(sp);
         }
         if (player.activeItem !== ITEM_WOOD_AXE) {
             this.setAxeWhirlwind(sessionId, false);
@@ -2363,7 +2391,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const player = this.state.players.get(sessionId);
         const sp = this.serverPlayers.get(sessionId);
         if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
-        if (player.activeItem !== ITEM_WOOD_BOW || sp.bowCharging) return;
+        if (player.activeItem !== ITEM_WOOD_BOW || sp.bowCharging || sp.bowVolleyActive) return;
 
         this.cancelRevive(sessionId);
         const vector = this.getBowAimVector(player, data);
@@ -2433,6 +2461,123 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.bowChargeProgress = 0;
     }
 
+    private startBowVolley(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
+        if (player.activeItem !== ITEM_WOOD_BOW || sp.bowCharging || sp.bowVolleyActive || sp.bowVolleyCooldownMs > 0 || sp.dashMs > 0 || sp.axeWhirlwind) return;
+
+        this.cancelRevive(sessionId);
+        this.clearBowCharge(player, sp);
+        const target = this.getBowVolleyTarget(player, data);
+        const direction = directionFromInput(target.x - player.x, target.y - player.y) || player.facingDirection || "N";
+        sp.bowVolleyActive = true;
+        sp.bowVolleyLockX = player.x;
+        sp.bowVolleyLockY = player.y;
+        sp.bowVolleyTargetX = target.x;
+        sp.bowVolleyTargetY = target.y;
+        sp.bowChargeMs = 0;
+        sp.bowChargeX = player.x;
+        sp.bowChargeY = player.y;
+        sp.vx = 0;
+        sp.vy = 0;
+        sp.attackLockMs = 0;
+        player.bowCharging = true;
+        player.bowChargeProgress = 0;
+        player.bowChargeSeq++;
+        player.facingDirection = direction;
+        player.attackDirection = direction;
+        player.attackItem = ITEM_WOOD_BOW;
+    }
+
+    private updateBowVolleyAim(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.bowVolleyActive || player.isDead) return;
+
+        const target = this.getBowVolleyTarget(player, data);
+        const direction = directionFromInput(target.x - player.x, target.y - player.y) || player.facingDirection || "N";
+        sp.bowVolleyTargetX = target.x;
+        sp.bowVolleyTargetY = target.y;
+        player.facingDirection = direction;
+        player.attackDirection = direction;
+    }
+
+    private releaseBowVolley(sessionId: string, data: unknown) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.bowVolleyActive) return;
+
+        const target = this.getBowVolleyTarget(player, data);
+        const fullyCharged = player.bowChargeProgress >= 1;
+        this.clearBowVolley(sp);
+        this.clearBowCharge(player, sp);
+        if (!fullyCharged) return;
+        if (!sp.alive || player.isDead || this.state.gameOver || player.activeItem !== ITEM_WOOD_BOW) return;
+
+        sp.bowVolleyCooldownMs = BOW_VOLLEY_COOLDOWN_MS;
+        player.bowVolleyCooldownProgress = 1;
+        const id = `bow-volley-${nextId()}`;
+        this.broadcast("bowVolleyTelegraph", {
+            id,
+            attackerId: sessionId,
+            x: target.x,
+            y: target.y,
+            radius: BOW_VOLLEY_RADIUS,
+            impactDelayMs: BOW_VOLLEY_IMPACT_DELAY_MS,
+        });
+        setTimeout(() => {
+            this.applyBowVolleyImpact(id, sessionId, target.x, target.y, BOW_VOLLEY_RADIUS);
+        }, BOW_VOLLEY_IMPACT_DELAY_MS);
+    }
+
+    private cancelBowVolley(sessionId: string) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!sp) return;
+        this.clearBowVolley(sp);
+        if (player) this.clearBowCharge(player, sp);
+    }
+
+    private clearBowVolley(sp: ServerPlayer) {
+        sp.bowVolleyActive = false;
+        sp.bowVolleyLockX = 0;
+        sp.bowVolleyLockY = 0;
+        sp.bowVolleyTargetX = 0;
+        sp.bowVolleyTargetY = 0;
+    }
+
+    private updateBowVolleyCooldown(player: PlayerState, sp: ServerPlayer, dtMs: number) {
+        if (sp.bowVolleyCooldownMs <= 0) {
+            if (player.bowVolleyCooldownProgress !== 0) player.bowVolleyCooldownProgress = 0;
+            return;
+        }
+
+        sp.bowVolleyCooldownMs = Math.max(0, sp.bowVolleyCooldownMs - dtMs);
+        player.bowVolleyCooldownProgress = clamp(sp.bowVolleyCooldownMs / BOW_VOLLEY_COOLDOWN_MS, 0, 1);
+    }
+
+    private getBowVolleyTarget(player: PlayerState, data: unknown): { x: number; y: number } {
+        const payload = data as { targetX?: unknown; targetY?: unknown } | null;
+        let x = typeof payload?.targetX === "number" && Number.isFinite(payload.targetX) ? payload.targetX : player.x;
+        let y = typeof payload?.targetY === "number" && Number.isFinite(payload.targetY) ? payload.targetY : player.y;
+        x = clamp(x, 0, WORLD_WIDTH);
+        y = clamp(y, 0, WORLD_HEIGHT);
+
+        const dx = x - player.x;
+        const dy = y - player.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > BOW_VOLLEY_RANGE) {
+            x = player.x + (dx / distance) * BOW_VOLLEY_RANGE;
+            y = player.y + (dy / distance) * BOW_VOLLEY_RANGE;
+        }
+
+        return {
+            x: clamp(x, 0, WORLD_WIDTH),
+            y: clamp(y, 0, WORLD_HEIGHT),
+        };
+    }
+
     private didPressMovementAfterBowCharge(sp: ServerPlayer, left: boolean, right: boolean, up: boolean, down: boolean): boolean {
         const pressed = (left && !sp.bowChargeMoveLeft)
             || (right && !sp.bowChargeMoveRight)
@@ -2449,7 +2594,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         const player = this.state.players.get(sessionId);
         const sp = this.serverPlayers.get(sessionId);
         if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
-        if (sp.attackLockMs > 0 || sp.bowCharging || sp.dashMs > 0 || sp.dashCooldownMs > 0) return;
+        if (sp.attackLockMs > 0 || sp.bowCharging || sp.bowVolleyActive || sp.dashMs > 0 || sp.dashCooldownMs > 0) return;
 
         const vector = DIRECTION_VECTORS[player.facingDirection] || DIRECTION_VECTORS.N;
         sp.vx = 0;
@@ -2476,6 +2621,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
         this.cancelRevive(sessionId);
         this.clearBowCharge(player, sp);
+        this.clearBowVolley(sp);
         sp.axeWhirlwind = true;
         sp.axeWhirlwindTickMs = 0;
         sp.axeWhirlwindElapsedMs = 0;
@@ -2560,6 +2706,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         ps.bowCharging = false;
         ps.bowChargeProgress = 0;
         ps.bowChargeSeq = 0;
+        ps.bowVolleyCooldownProgress = 0;
         this.state.players.set(client.sessionId, ps);
 
         this.serverPlayers.set(client.sessionId, {
@@ -2583,6 +2730,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             bowChargeMoveRight: false,
             bowChargeMoveUp: false,
             bowChargeMoveDown: false,
+            bowVolleyActive: false,
+            bowVolleyLockX: ps.x,
+            bowVolleyLockY: ps.y,
+            bowVolleyTargetX: ps.x,
+            bowVolleyTargetY: ps.y,
+            bowVolleyCooldownMs: 0,
             axeWhirlwind: false,
             axeWhirlwindTickMs: 0,
             axeWhirlwindElapsedMs: 0,
@@ -2667,6 +2820,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.bowCharging = false;
             player.bowChargeProgress = 0;
             player.bowChargeSeq = 0;
+            player.bowVolleyCooldownProgress = 0;
             player.pendingUpgradeChoices = 0;
             player.axeSwingSpeedUpgrades = 0;
             player.axePrimaryDamageUpgrades = 0;
@@ -2707,6 +2861,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeMoveRight = false;
             sp.bowChargeMoveUp = false;
             sp.bowChargeMoveDown = false;
+            sp.bowVolleyActive = false;
+            sp.bowVolleyLockX = player.x;
+            sp.bowVolleyLockY = player.y;
+            sp.bowVolleyTargetX = player.x;
+            sp.bowVolleyTargetY = player.y;
+            sp.bowVolleyCooldownMs = 0;
             sp.axeWhirlwind = false;
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindElapsedMs = 0;
@@ -3168,6 +3328,31 @@ export class ShmupRoom extends Room<GameRoomState> {
         }
 
         return hitPayload;
+    }
+
+    private applyBowVolleyImpact(volleyId: string, attackerId: string, x: number, y: number, radius: number) {
+        this.broadcast("bowVolleyImpact", { id: volleyId, attackerId, x, y, radius });
+        if (this.state.gameOver || !this.state.players.has(attackerId)) return;
+
+        const hitEnemyIds: string[] = [];
+        this.state.enemies.forEach((enemy, enemyId) => {
+            if (enemy.isDead) return;
+            if (!circleOverlapsAabb(
+                x,
+                y,
+                radius,
+                enemy.x,
+                enemy.y,
+                ENEMY_HW,
+                ENEMY_HH,
+            )) return;
+            hitEnemyIds.push(enemyId);
+        });
+
+        hitEnemyIds.forEach((enemyId) => {
+            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, BOW_VOLLEY_DAMAGE);
+            if (enemyHit) this.broadcast("enemyHit", enemyHit);
+        });
     }
 
     private shouldPreserveDarkKnightAttackCooldown(enemy: EnemyState): boolean {
@@ -3770,6 +3955,12 @@ export class ShmupRoom extends Room<GameRoomState> {
         targetSp.bowChargeMoveRight = false;
         targetSp.bowChargeMoveUp = false;
         targetSp.bowChargeMoveDown = false;
+        targetSp.bowVolleyActive = false;
+        targetSp.bowVolleyLockX = target.x;
+        targetSp.bowVolleyLockY = target.y;
+        targetSp.bowVolleyTargetX = target.x;
+        targetSp.bowVolleyTargetY = target.y;
+        targetSp.bowVolleyCooldownMs = 0;
         targetSp.axeWhirlwind = false;
         targetSp.axeWhirlwindTickMs = 0;
         targetSp.axeWhirlwindElapsedMs = 0;
@@ -3787,6 +3978,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         target.axeWhirlwindHitSeq = 0;
         target.bowCharging = false;
         target.bowChargeProgress = 0;
+        target.bowVolleyCooldownProgress = 0;
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
@@ -3806,6 +3998,7 @@ export class ShmupRoom extends Room<GameRoomState> {
                     player.dashCooldownProgress = sp.dashCooldownMs > 0
                         ? clamp(sp.dashCooldownMs / PLAYER_DASH_COOLDOWN_MS, 0, 1)
                         : 0;
+                    this.updateBowVolleyCooldown(player, sp, dtMs);
                     this.updateAxeWhirlwindCooldown(player, sp, dtMs);
                 });
 
@@ -3830,6 +4023,24 @@ export class ShmupRoom extends Room<GameRoomState> {
                         return true;
                     });
                     if (bowChargeStillActive) return;
+                }
+
+                if (sp.bowVolleyActive) {
+                    this.measurePlayerSubphase("playerBowVolley", () => {
+                        if (player.activeItem !== ITEM_WOOD_BOW || player.isDead || this.state.gameOver) {
+                            this.clearBowVolley(sp);
+                            this.clearBowCharge(player, sp);
+                            return;
+                        }
+                        const chargeMs = this.getPlayerBowChargeMs(player);
+                        sp.bowChargeMs = Math.min(chargeMs, sp.bowChargeMs + dtMs);
+                        player.bowChargeProgress = clamp(sp.bowChargeMs / chargeMs, 0, 1);
+                        sp.vx = 0;
+                        sp.vy = 0;
+                        player.x = sp.bowVolleyLockX;
+                        player.y = sp.bowVolleyLockY;
+                    });
+                    return;
                 }
 
                 if (sp.axeWhirlwind && (player.activeItem !== ITEM_WOOD_AXE || player.isDead || this.state.gameOver)) {
@@ -5728,6 +5939,8 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.dashDirY = 0;
         sp.dashCooldownMs = 0;
         this.clearBowCharge(player, sp);
+        this.clearBowVolley(sp);
+        sp.bowVolleyCooldownMs = 0;
         this.clearAxeWhirlwindState(player, sp);
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
@@ -5736,6 +5949,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         player.axeAttackHitboxActive = false;
         player.dashing = false;
         player.dashCooldownProgress = 0;
+        player.bowVolleyCooldownProgress = 0;
         player.axeWhirlwindHitSeq = 0;
         player.axeWhirlwindProgress = 0;
         this.cancelRevive(sid);
@@ -5773,6 +5987,12 @@ export class ShmupRoom extends Room<GameRoomState> {
             sp.bowChargeMoveRight = false;
             sp.bowChargeMoveUp = false;
             sp.bowChargeMoveDown = false;
+            sp.bowVolleyActive = false;
+            sp.bowVolleyLockX = 0;
+            sp.bowVolleyLockY = 0;
+            sp.bowVolleyTargetX = 0;
+            sp.bowVolleyTargetY = 0;
+            sp.bowVolleyCooldownMs = 0;
             sp.dashMs = 0;
             sp.dashDirX = 0;
             sp.dashDirY = 0;
@@ -5794,6 +6014,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             player.axeWhirlwindHitSeq = 0;
             player.bowCharging = false;
             player.bowChargeProgress = 0;
+            player.bowVolleyCooldownProgress = 0;
         });
     }
 }
