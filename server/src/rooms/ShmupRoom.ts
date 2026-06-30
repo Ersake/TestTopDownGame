@@ -164,7 +164,10 @@ const DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS = 600;
 const DARK_KNIGHT_COOLDOWN_MS = 1560;
 const DARK_KNIGHT_AOE_RADIUS = 88;
 const DARK_KNIGHT_ATTACK_DAMAGE = 2;
-const ENEMY1_SPEED = 114.75;
+const ENEMY1_SPEED = 100;
+const ENEMY2_SPEED = 114.75;
+const ENEMY1_HEALTH = 4;
+const DEFAULT_ENEMY_HEALTH = 3;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_PLAYER_ATTACK_RANGE = 72;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
@@ -4582,7 +4585,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         e.shipId = 0;
         e.enemyType = enemyType;
         e.power = 1;
-        e.maxHealth = enemyType === ENEMY_TYPE_DARK_KNIGHT ? DARK_KNIGHT_HEALTH : 3;
+        e.maxHealth = this.getEnemyMaxHealth(enemyType);
         e.health = e.maxHealth;
         e.action = enemyType === ENEMY_TYPE_DARK_KNIGHT ? "walk" : "run";
         e.isDead = false;
@@ -4739,7 +4742,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     return;
                 }
 
-                const move = Math.min(ENEMY1_SPEED * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
+                const move = Math.min(this.getEnemyMoveSpeed(enemy.enemyType) * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
                 if (!this.moveEnemyUsingFlowField(enemy, se, target, move, dx, dy, distance)) {
                     enemy.action = "idle";
                 }
@@ -4748,6 +4751,18 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             }
         });
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
+    }
+
+    private getEnemyMaxHealth(enemyType: number): number {
+        if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return DARK_KNIGHT_HEALTH;
+        if (enemyType === 1) return ENEMY1_HEALTH;
+        return DEFAULT_ENEMY_HEALTH;
+    }
+
+    private getEnemyMoveSpeed(enemyType: number): number {
+        if (enemyType === 1) return ENEMY1_SPEED;
+        if (enemyType === 2) return ENEMY2_SPEED;
+        return ENEMY2_SPEED;
     }
 
     private pruneEnemyFlowFields(): void {
