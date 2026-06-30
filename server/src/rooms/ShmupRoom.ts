@@ -139,6 +139,8 @@ const ENEMY_WAVE_SPAWN_INTERVAL_MS = 900;
 const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 2;
 const ENEMY_NEXT_WAVE_DELAY_MS = 30000;
 const DEBUG_MAX_ROUND = 99;
+const DEBUG_MAX_PLAYER_LEVEL = 99;
+const INT32_MAX = 2147483647;
 const MAX_ACTIVE_ENEMIES = 100;
 const ENEMY_DIAGNOSTIC_INTERVAL_MS = 5000;
 const ENABLE_ENEMY_DIAGNOSTICS = process.env.ENEMY_DIAGNOSTICS === "1";
@@ -979,6 +981,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             this.debugSetRound(client, data);
         });
 
+        this.onMessage("debugSetLevel", (client, data) => {
+            this.debugSetLevel(client, data);
+        });
+
         this.onMessage("readyForNextWave", (client) => {
             this.readyPlayerForNextWave(client.sessionId);
         });
@@ -1014,6 +1020,45 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.nextEnemyDiagnosticAtMs = 0;
         this.scheduleEnemyWave(targetWaveIndex);
         client.send("debugRoundResult", { accepted: true, round });
+    }
+
+    private debugSetLevel(client: Client, data: unknown) {
+        const level = Number((data as { level?: unknown })?.level);
+        const player = this.state.players.get(client.sessionId);
+        const reject = (reason: string) => client.send("debugLevelResult", { accepted: false, reason });
+
+        if (!player || !this.state.gameStarted || this.state.gameOver) {
+            reject("The game is not active.");
+            return;
+        }
+        if (player.isDead) {
+            reject("You cannot set level while downed.");
+            return;
+        }
+        if (!Number.isInteger(level) || level < 1 || level > DEBUG_MAX_PLAYER_LEVEL) {
+            reject(`Enter a whole level from 1 to ${DEBUG_MAX_PLAYER_LEVEL}.`);
+            return;
+        }
+
+        const previousLevel = Math.max(1, Math.floor(player.level || 1));
+        const levelDelta = level - previousLevel;
+        player.level = level;
+        player.experience = 0;
+        player.experienceToNext = this.getExperienceToNextLevel(level);
+        player.pendingUpgradeChoices = Math.max(0, Math.floor(player.pendingUpgradeChoices || 0) + levelDelta);
+        player.maxHealth = PLAYER_MAX_HEALTH + Math.max(0, level - 1);
+        player.health = clamp(player.health, 1, player.maxHealth);
+        if (levelDelta > 0) player.health = player.maxHealth;
+
+        client.send("debugLevelResult", { accepted: true, level });
+        if (levelDelta > 0) {
+            this.broadcast("playerLevelUp", {
+                playerId: client.sessionId,
+                level: player.level,
+                x: player.x,
+                y: player.y,
+            });
+        }
     }
 
     private isMapEditor(): boolean {
@@ -3619,7 +3664,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getExperienceToNextLevel(level: number): number {
-        return FIRST_LEVEL_UP_KILLS * Math.pow(2, Math.max(0, level - 1));
+        return Math.min(INT32_MAX, FIRST_LEVEL_UP_KILLS * Math.pow(2, Math.max(0, level - 1)));
     }
 
     private getAttackVector(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): { x: number; y: number } {

@@ -112,6 +112,7 @@ Important server files:
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
 | `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
+| `"debugSetLevel"` | Escape-menu debug controls | Temporarily enabled for live testing. Sets the requesting player's level (1–99), resets current XP progress, and adjusts pending skill points and max health from server state. |
 
 The lobby sidebar uses `RoomClient.listPlayableRooms()`, which calls Colyseus `getAvailableRooms("shmup_room")` and filters room metadata to show only joinable normal game rooms with connected players. `ShmupRoom.ts` keeps listing metadata current during room create, join, leave, game-over, and reset events; the room tick does not update lobby listing metadata.
 
@@ -141,6 +142,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"mapSaved"` | Save success confirmation. |
 | `"mapLoaded"` | Load success confirmation, including whether data was trimmed. |
 | `"debugRoundResult"` | Acceptance or validation feedback for a `"debugSetRound"` request. |
+| `"debugLevelResult"` | Acceptance or validation feedback for a `"debugSetLevel"` request. |
 
 Durable game facts should usually be schema state, not transient messages.
 

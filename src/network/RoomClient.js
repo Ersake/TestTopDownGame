@@ -325,6 +325,11 @@ class RoomClient {
         this.room.send("debugSetRound", { round });
     }
 
+    sendDebugSetLevel(level) {
+        if (!this.room) return;
+        this.room.send("debugSetLevel", { level });
+    }
+
     sendReadyForNextWave() {
         if (!this.room) return;
         this.room.send("readyForNextWave", {});

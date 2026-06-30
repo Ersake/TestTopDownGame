@@ -191,6 +191,7 @@ const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
 const TREE_REPLENISH_MESSAGE_MS = 4000;
 const DEBUG_MAX_ROUND = 99;
+const DEBUG_MAX_PLAYER_LEVEL = 99;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
 const ENABLE_DEBUG_ROUND = true;
 const FIREBALL_CHARGE_SOUND_VOLUME = 0.315;
@@ -567,6 +568,7 @@ export class Game extends Phaser.Scene {
         this.cameraZoom = CAMERA_MIN_ZOOM;
         this.showHitboxes = false;
         this.hitboxGraphics = null;
+        this.debugControlsVisible = false;
         this.debugRoundInput = null;
         this.debugRoundStatusText = null;
         this.debugRoundInputHandlers = null;
@@ -747,7 +749,10 @@ export class Game extends Phaser.Scene {
             .setScrollFactor(0)
             .setVisible(false)
             .setInteractive({ useHandCursor: true });
-        this.hitboxToggleButton.on('pointerdown', () => this.toggleHitboxes());
+        this.hitboxToggleButton.on('pointerdown', () => {
+            this.toggleHitboxes();
+            this.setDebugRoundControlsVisible(!this.debugControlsVisible);
+        });
 
         if (ENABLE_DEBUG_ROUND) {
             this.initDebugRoundControls();
@@ -780,31 +785,42 @@ export class Game extends Phaser.Scene {
     }
 
     initDebugRoundControls() {
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.min = '2';
-        input.max = String(DEBUG_MAX_ROUND);
-        input.step = '1';
-        input.placeholder = 'Round';
-        input.setAttribute('aria-label', 'Target round');
-        input.style.cssText = [
+        const createInput = ({ min, max, placeholder, label }) => {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.min = String(min);
+            input.max = String(max);
+            input.step = '1';
+            input.placeholder = placeholder;
+            input.setAttribute('aria-label', label);
+            input.style.cssText = [
             'width: 62px', 'height: 24px', 'box-sizing: border-box', 'padding: 2px 5px',
             'border: 1px solid #aaaaaa', 'border-radius: 3px', 'background: #181818',
             'color: #ffffff', 'font: 12px Arial', 'text-align: center',
-        ].join(';');
+            ].join(';');
+            return input;
+        };
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = 'Start';
-        button.style.cssText = [
-            'height: 24px', 'margin-left: 4px', 'padding: 1px 7px', 'border: 1px solid #aaaaaa',
-            'border-radius: 3px', 'background: #333333', 'color: #ffffff', 'font: 12px Arial', 'cursor: pointer',
-        ].join(';');
+        const createButton = (label) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.style.cssText = [
+                'height: 24px', 'padding: 1px 7px', 'border: 1px solid #aaaaaa',
+                'border-radius: 3px', 'background: #333333', 'color: #ffffff', 'font: 12px Arial', 'cursor: pointer',
+            ].join(';');
+            return button;
+        };
+
+        const roundInput = createInput({ min: 2, max: DEBUG_MAX_ROUND, placeholder: 'Round', label: 'Target round' });
+        const roundButton = createButton('Start');
+        const levelInput = createInput({ min: 1, max: DEBUG_MAX_PLAYER_LEVEL, placeholder: 'Level', label: 'Target player level' });
+        const levelButton = createButton('Set');
 
         const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display:flex; align-items:center; visibility:hidden; pointer-events:none;';
-        wrapper.append(input, button);
-        this.debugRoundInput = this.add.dom(this.scale.width - 92, this.scale.height - 36, wrapper)
+        wrapper.style.cssText = 'display:flex; align-items:center; gap:4px; visibility:hidden; pointer-events:none;';
+        wrapper.append(roundInput, roundButton, levelInput, levelButton);
+        this.debugRoundInput = this.add.dom(this.scale.width - 154, this.scale.height - 36, wrapper)
             .setOrigin(0.5, 1)
             .setDepth(UI_DEPTH + 10)
             .setScrollFactor(0);
@@ -814,21 +830,32 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 2, align: 'right',
         }).setOrigin(1, 1).setDepth(UI_DEPTH + 10).setScrollFactor(0).setVisible(false);
 
-        const submit = () => this.submitDebugRound(input.value);
-        button.addEventListener('click', submit);
-        const onKeyDown = (event) => {
+        const submitRound = () => this.submitDebugRound(roundInput.value);
+        const submitLevel = () => this.submitDebugLevel(levelInput.value);
+        roundButton.addEventListener('click', submitRound);
+        levelButton.addEventListener('click', submitLevel);
+        const onRoundKeyDown = (event) => {
             event.stopPropagation();
             if (event.key === 'Enter') {
                 event.preventDefault();
-                submit();
+                submitRound();
             }
         };
-        input.addEventListener('keydown', onKeyDown);
-        this.debugRoundInputHandlers = { input, button, submit, onKeyDown };
+        const onLevelKeyDown = (event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submitLevel();
+            }
+        };
+        roundInput.addEventListener('keydown', onRoundKeyDown);
+        levelInput.addEventListener('keydown', onLevelKeyDown);
+        this.debugRoundInputHandlers = { roundInput, roundButton, submitRound, onRoundKeyDown, levelInput, levelButton, submitLevel, onLevelKeyDown };
     }
 
     setDebugRoundControlsVisible(visible) {
         if (!ENABLE_DEBUG_ROUND || !this.debugRoundInput) return;
+        this.debugControlsVisible = !!visible;
         this.debugRoundInput.node.style.visibility = visible ? 'visible' : 'hidden';
         this.debugRoundInput.node.style.pointerEvents = visible ? 'auto' : 'none';
         this.debugRoundStatusText?.setVisible(visible && !!this.debugRoundStatusText.text);
@@ -849,6 +876,16 @@ export class Game extends Phaser.Scene {
         RoomClient.sendDebugSetRound(round);
     }
 
+    submitDebugLevel(rawLevel) {
+        const level = Number(rawLevel);
+        if (!Number.isInteger(level) || level < 1 || level > DEBUG_MAX_PLAYER_LEVEL) {
+            this.setDebugRoundStatus(`Enter a whole level from 1 to ${DEBUG_MAX_PLAYER_LEVEL}.`);
+            return;
+        }
+        this.setDebugRoundStatus(`Setting level ${level}...`, '#ffffaa');
+        RoomClient.sendDebugSetLevel(level);
+    }
+
     setDebugRoundStatus(message, color = '#ffdddd') {
         if (!this.debugRoundStatusText) return;
         this.debugRoundStatusText.setText(message).setColor(color)
@@ -857,9 +894,11 @@ export class Game extends Phaser.Scene {
 
     destroyDebugRoundControls() {
         if (this.debugRoundInputHandlers) {
-            const { input, button, submit, onKeyDown } = this.debugRoundInputHandlers;
-            button.removeEventListener('click', submit);
-            input.removeEventListener('keydown', onKeyDown);
+            const { roundInput, roundButton, submitRound, onRoundKeyDown, levelInput, levelButton, submitLevel, onLevelKeyDown } = this.debugRoundInputHandlers;
+            roundButton.removeEventListener('click', submitRound);
+            roundInput.removeEventListener('keydown', onRoundKeyDown);
+            levelButton.removeEventListener('click', submitLevel);
+            levelInput.removeEventListener('keydown', onLevelKeyDown);
             this.debugRoundInputHandlers = null;
         }
         this.debugRoundInput?.destroy();
@@ -2933,6 +2972,14 @@ export class Game extends Phaser.Scene {
                     this.setDebugRoundStatus(result?.reason || 'Could not start that round.');
                 }
             });
+
+            room.onMessage('debugLevelResult', (result) => {
+                if (result?.accepted) {
+                    this.setDebugRoundStatus(`Set level ${result.level}.`, '#aaffaa');
+                } else {
+                    this.setDebugRoundStatus(result?.reason || 'Could not set that level.');
+                }
+            });
         }
 
         room.onMessage('enemyWaveStarted', (event) => {
@@ -4128,7 +4175,7 @@ export class Game extends Phaser.Scene {
         } else {
             this.hitboxToggleButton.disableInteractive();
         }
-        this.setDebugRoundControlsVisible(shouldShowQuitScreen);
+        this.setDebugRoundControlsVisible(false);
     }
 
     // Flat world background
