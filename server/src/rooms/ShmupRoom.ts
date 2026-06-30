@@ -464,6 +464,11 @@ interface PathCell { col: number; row: number; }
 interface EnemyTarget {
     id: string;
     player: PlayerState;
+    targetX: number;
+    targetY: number;
+    targetFootX: number;
+    targetFootY: number;
+    targetCell: PathCell;
     distanceSq: number;
 }
 type EnemyLineOfSightKind = "melee" | "caster" | "darkKnight";
@@ -729,6 +734,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private mapTopologyVersion = 0;
     private solidSegmentCache = new Map<string, boolean>();
     private enemyFlowFields = new Map<string, EnemyFlowField>();
+    private enemyTargetCache = new Map<string, Omit<EnemyTarget, "id" | "player" | "distanceSq"> | null>();
     private enemyFlowBuildQueue = new Int32Array(BUILD_PATH_CELL_COUNT);
     private readonly mapStorage = new MapStorage();
     private activeTickMetrics: TickMetrics | null = null;
@@ -4806,7 +4812,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         const target = this.findNearestAlivePlayer(e.x, e.y);
         if (target) {
-            e.facingDirection = directionFromInput(target.player.x - e.x, target.player.y - e.y) || "S";
+            e.facingDirection = directionFromInput(target.targetX - e.x, target.targetY - e.y) || "S";
         }
 
         this.state.enemies.set(id, e);
@@ -4842,6 +4848,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const dead: string[] = [];
         this.enemyPathBuildsThisTick = 0;
         this.enemyFlowBuildsThisTick = 0;
+        this.enemyTargetCache.clear();
         this.pruneEnemyFlowFields();
         this.state.enemies.forEach((enemy, id) => {
             this.incrementEnemyCounter("enemyLoops");
@@ -4874,10 +4881,13 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 }
 
                 se.targetId = target.id;
-                const dx = target.player.x - enemy.x;
-                const dy = target.player.y - enemy.y;
+                const dx = target.targetX - enemy.x;
+                const dy = target.targetY - enemy.y;
                 const distance = Math.hypot(dx, dy);
                 const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
+                const hasMeleeLineOfSight = enemy.enemyType === ENEMY_TYPE_CASTER || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT
+                    ? false
+                    : this.hasEnemyLineOfSightToPlayer(enemy, se, target);
 
                 if (enemy.enemyType === ENEMY_TYPE_CASTER) {
                     this.tickCasterEnemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
@@ -4893,17 +4903,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     enemy.action = "attack";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
                     if (se.modeMs === 0) {
-                        se.mode = isInAttackRange ? "windup" : "chase";
+                        se.mode = isInAttackRange && hasMeleeLineOfSight ? "windup" : "chase";
                         se.modeMs = se.mode === "windup" ? ENEMY1_WINDUP_MS : 0;
                         enemy.action = se.mode === "windup" ? "idle" : "run";
                     }
                     return;
                 }
 
-                if (isInAttackRange) {
-                    if (this.hasEnemyLineOfSightToPlayer(enemy, se, target)) {
-                        this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
-                    }
+                if (isInAttackRange && hasMeleeLineOfSight) {
+                    this.faceEnemyTowardPoint(enemy, target.targetX, target.targetY);
                     enemy.action = "idle";
                     if (se.mode !== "windup") {
                         se.mode = "windup";
@@ -4919,7 +4927,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         enemy.attackSeq++;
                         const attackOrigin = { x: enemy.x, y: enemy.y };
                         const attackDirection = enemy.facingDirection || "S";
-                        const attackVector = this.getEnemyAttackVector(attackOrigin, target.player, attackDirection);
+                        const attackVector = this.getEnemyAttackVector(attackOrigin, target, attackDirection);
                         setTimeout(() => {
                             this.applyEnemyAttackImpact(id, attackOrigin, attackVector);
                         }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
@@ -4935,9 +4943,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 const remainingDistance = Math.max(0, distance - ENEMY1_PLAYER_ATTACK_RANGE);
                 if (remainingDistance <= ENEMY1_MIN_CHASE_STEP) {
                     enemy.action = "idle";
-                    se.mode = "windup";
-                    se.modeMs = ENEMY1_WINDUP_MS;
                     se.path = [];
+                    if (hasMeleeLineOfSight) {
+                        se.mode = "windup";
+                        se.modeMs = ENEMY1_WINDUP_MS;
+                    }
                     return;
                 }
 
@@ -4949,6 +4959,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 this.recordEnemyTickDuration(id, enemy, se, performance.now() - enemyStartedAt);
             }
         });
+        this.enemyTargetCache.clear();
         dead.forEach(id => { this.state.enemies.delete(id); this.serverEnemies.delete(id); });
     }
 
@@ -4974,7 +4985,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         enemyId: string,
         enemy: EnemyState,
         se: ServerEnemy,
-        target: { id: string; player: PlayerState; distanceSq: number },
+        target: EnemyTarget,
         dx: number,
         dy: number,
         distance: number,
@@ -5002,7 +5013,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 se.modeMs = 0;
                 enemy.action = "run";
             } else {
-                this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
+                this.faceEnemyTowardPoint(enemy, target.targetX, target.targetY);
                 enemy.action = "charge";
                 se.modeMs = Math.max(0, se.modeMs - dtMs);
                 if (se.modeMs === 0) {
@@ -5013,8 +5024,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         return;
                     }
 
-                    const launchDx = launchTarget.player.x - enemy.x;
-                    const launchDy = launchTarget.player.y - enemy.y;
+                    const launchDx = launchTarget.targetX - enemy.x;
+                    const launchDy = launchTarget.targetY - enemy.y;
                     const launchDirection = directionFromInput(launchDx, launchDy);
                     if (launchDirection) enemy.facingDirection = launchDirection;
 
@@ -5022,14 +5033,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     se.modeMs = CASTER_ATTACK_MS;
                     enemy.action = "attack";
                     enemy.attackSeq++;
-                    this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.player);
+                    this.spawnCasterFireball(enemy.x, enemy.y, launchTarget.targetX, launchTarget.targetY);
                 }
                 return;
             }
         }
 
         if (canStartCast) {
-            this.faceEnemyTowardPoint(enemy, target.player.x, target.player.y);
+            this.faceEnemyTowardPoint(enemy, target.targetX, target.targetY);
             se.path = [];
             enemy.action = "charge";
             se.mode = "casterCharge";
@@ -5066,7 +5077,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         enemyId: string,
         enemy: EnemyState,
         se: ServerEnemy,
-        target: { id: string; player: PlayerState; distanceSq: number },
+        target: EnemyTarget,
         dx: number,
         dy: number,
         distance: number,
@@ -5103,7 +5114,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
 
         if (distance <= DARK_KNIGHT_DETECTION_RANGE && this.hasDarkKnightLineOfSightToPlayer(enemy, se, target)) {
-            this.startDarkKnightRush(enemy, se, target.player);
+            this.startDarkKnightRush(enemy, se, target);
             return;
         }
 
@@ -5122,15 +5133,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return this.hasCachedEnemyLineOfSight(enemy, se, target, "darkKnight");
     }
 
-    private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: PlayerState) {
+    private startDarkKnightRush(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget) {
         se.mode = "dkRush";
         se.modeMs = DARK_KNIGHT_MIN_RUSH_MS;
-        se.darkKnightMarkX = target.x;
-        se.darkKnightMarkY = target.y;
+        se.darkKnightMarkX = target.targetX;
+        se.darkKnightMarkY = target.targetY;
         se.darkKnightTargetKind = "playerMark";
         se.path = [];
 
-        const direction = directionFromInput(target.x - enemy.x, target.y - enemy.y);
+        const direction = directionFromInput(target.targetX - enemy.x, target.targetY - enemy.y);
         if (direction) enemy.facingDirection = direction;
         enemy.action = "run";
     }
@@ -5260,7 +5271,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
             return this.moveEnemyWithLocalFallback(
                 enemy,
-                this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET),
+                target.targetCell,
                 moveDistance,
                 directDx,
                 directDy,
@@ -5341,10 +5352,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getEnemyFlowFieldForTarget(target: EnemyTarget): EnemyFlowField | null {
-        const targetCell = this.getNearestWalkableBuildCell(
-            this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET),
-            ENEMY_PATH_TARGET_SEARCH_RADIUS,
-        );
+        const targetCell = target.targetCell;
         if (!targetCell) {
             this.incrementEnemyCounter("flowFieldNoTargetCell");
             return null;
@@ -5436,9 +5444,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
     }
 
-    private shouldUseDirectEnemyPath(enemy: EnemyState, se: ServerEnemy, target: PlayerState): boolean {
+    private shouldUseDirectEnemyPath(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget): boolean {
         const fromCell = this.worldToBuildCell(enemy.x, enemy.y + ENEMY_FOOT_Y_OFFSET);
-        const targetCell = this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET);
+        const targetCell = target.targetCell;
         const topologyChanged = se.directPathTopologyVersion !== this.mapTopologyVersion;
         const fromChanged = !se.directPathFromCell
             || se.directPathFromCell.col !== fromCell.col
@@ -5455,8 +5463,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const clear = this.hasDirectEnemyPath(
             enemy.x,
             enemy.y + ENEMY_FOOT_Y_OFFSET,
-            target.x,
-            target.y + PLAYER_TREE_Y_OFFSET,
+            target.targetFootX,
+            target.targetFootY,
         );
         se.directPathFromCell = fromCell;
         se.directPathTargetCell = targetCell;
@@ -5553,7 +5561,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     ): boolean {
         const fromY = kind === "caster" ? enemy.y : enemy.y + ENEMY_FOOT_Y_OFFSET;
         const fromCell = this.worldToBuildCell(enemy.x, fromY);
-        const targetCell = this.worldToBuildCell(target.player.x, target.player.y + PLAYER_TREE_Y_OFFSET);
+        const targetCell = target.targetCell;
         const cacheValid = se.lineOfSightTopologyVersion === this.mapTopologyVersion
             && se.lineOfSightTargetId === target.id
             && se.lineOfSightKind === kind
@@ -5572,8 +5580,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const clear = !this.segmentOverlapsSolidMapTile(
                 enemy.x,
                 fromY,
-                target.player.x,
-                target.player.y + PLAYER_TREE_Y_OFFSET,
+                target.targetFootX,
+                target.targetFootY,
                 1,
             );
             se.lineOfSightFromCell = fromCell;
@@ -5664,13 +5672,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return null;
     }
 
-    private followEnemyPathToTarget(enemy: EnemyState, se: ServerEnemy, target: PlayerState, moveDistance: number): boolean {
+    private followEnemyPathToTarget(enemy: EnemyState, se: ServerEnemy, target: EnemyTarget, moveDistance: number): boolean {
         return this.measureEnemySubphase("pathFollow", () => {
             this.incrementEnemyCounter("pathFollowCalls");
-            const targetCell = this.getNearestWalkableBuildCell(
-                this.worldToBuildCell(target.x, target.y + PLAYER_TREE_Y_OFFSET),
-                ENEMY_PATH_TARGET_SEARCH_RADIUS,
-            );
+            const targetCell = target.targetCell;
             if (!targetCell) {
                 this.incrementEnemyCounter("pathNoRoute");
                 se.path = [];
@@ -6063,6 +6068,30 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return true;
     }
 
+    private resolveEnemyTargetForPlayer(playerId: string, player: PlayerState): Omit<EnemyTarget, "id" | "player" | "distanceSq"> | null {
+        if (this.enemyTargetCache.has(playerId)) return this.enemyTargetCache.get(playerId) || null;
+
+        const targetCell = this.getNearestWalkableBuildCell(
+            this.worldToBuildCell(player.x, player.y + PLAYER_TREE_Y_OFFSET),
+            ENEMY_PATH_TARGET_SEARCH_RADIUS,
+        );
+        if (!targetCell) {
+            this.enemyTargetCache.set(playerId, null);
+            return null;
+        }
+
+        const targetCenter = this.buildCellCenter(targetCell);
+        const resolvedTarget = {
+            targetX: targetCenter.x,
+            targetY: targetCenter.y - PLAYER_TREE_Y_OFFSET,
+            targetFootX: targetCenter.x,
+            targetFootY: targetCenter.y,
+            targetCell,
+        };
+        this.enemyTargetCache.set(playerId, resolvedTarget);
+        return resolvedTarget;
+    }
+
     private findNearestAlivePlayer(x: number, y: number): EnemyTarget | null {
         return this.measureEnemySubphase("targeting", () => {
             this.incrementEnemyCounter("targetSearches");
@@ -6072,12 +6101,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 this.incrementEnemyCounter("targetPlayerChecks");
                 const sp = this.serverPlayers.get(id);
                 if (!sp || !sp.alive || player.isDead) return;
+                const resolvedTarget = this.resolveEnemyTargetForPlayer(id, player);
+                if (!resolvedTarget) return;
 
-                const dx = player.x - x;
-                const dy = player.y - y;
+                const dx = resolvedTarget.targetX - x;
+                const dy = resolvedTarget.targetY - y;
                 const target: EnemyTarget = {
                     id,
                     player,
+                    ...resolvedTarget,
                     distanceSq: dx * dx + dy * dy,
                 };
                 if (!nearest || target.distanceSq < nearest.distanceSq) {
@@ -6107,9 +6139,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
     }
 
-    private getEnemyAttackVector(attackOrigin: AttackOrigin, target: PlayerState, fallbackDirection: string): AttackVector {
-        const dx = target.x - attackOrigin.x;
-        const dy = target.y - attackOrigin.y;
+    private getEnemyAttackVector(attackOrigin: AttackOrigin, target: EnemyTarget, fallbackDirection: string): AttackVector {
+        const dx = target.targetX - attackOrigin.x;
+        const dy = target.targetY - attackOrigin.y;
         const distance = Math.hypot(dx, dy);
         if (distance > 0) return { x: dx / distance, y: dy / distance };
         return DIRECTION_VECTORS[fallbackDirection] || DIRECTION_VECTORS.S;
@@ -6123,9 +6155,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.serverEnemyBullets.set(id, { vx: 0, vy: 200 * power * 0.5, kind: "bullet" });
     }
 
-    private spawnCasterFireball(x: number, y: number, target: PlayerState) {
-        const dx = target.x - x;
-        const dy = target.y - y;
+    private spawnCasterFireball(x: number, y: number, targetX: number, targetY: number) {
+        const dx = targetX - x;
+        const dy = targetY - y;
         const distance = Math.hypot(dx, dy);
         const vector = distance > 0
             ? { x: dx / distance, y: dy / distance }
