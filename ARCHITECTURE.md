@@ -133,6 +133,7 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"levelReset"` | One-shot presentation/state reset after a room-level reset. |
 | `"playerLevelUp"` | One-shot level-up presentation; the synced pending upgrade count is displayed as available skill points. |
 | `"enemyWaveStarted"` | One-shot wave-start presentation. |
+| `"treesReplenished"` | One-shot wave-clear presentation when the server tops living trees back up after replenishment waves. |
 | `"mapImported"` | Legacy map-import acceptance feedback. |
 | `"mapList"` | Saved map names returned to the map editor. |
 | `"mapStorageError"` | Map storage validation or persistence failure message. |
@@ -209,7 +210,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio. After clearing wave 9 and every 10 waves after that, the server tops living trees back up to 25 in valid random spots and broadcasts `"treesReplenished"` for the client toast.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, death, revive progress, revive completion, and game-over checks.

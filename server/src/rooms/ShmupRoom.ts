@@ -62,6 +62,9 @@ const TREE_GRID_COLS = 5;
 const TREE_GRID_ROWS = 5;
 const TREE_EDGE_PADDING = 192;
 const TREE_SPAWN_CLEAR_RADIUS = 300;
+const TREE_REPLENISH_FIRST_COMPLETED_WAVE = 9;
+const TREE_REPLENISH_WAVE_INTERVAL = 10;
+const TREE_REPLENISH_MAX_ATTEMPTS_PER_TREE = 80;
 const TREE_TRUNK_Y_OFFSET = -18;
 const TREE_VARIANT_TOPDOWN_3X3 = "topdown_3x3";
 const TOPDOWN_TREE_TILE_SPAN = 3;
@@ -3082,6 +3085,79 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
     }
 
+    private shouldReplenishTreesAfterWave(waveNumber: number): boolean {
+        return waveNumber >= TREE_REPLENISH_FIRST_COMPLETED_WAVE
+            && (waveNumber - TREE_REPLENISH_FIRST_COMPLETED_WAVE) % TREE_REPLENISH_WAVE_INTERVAL === 0;
+    }
+
+    private replenishTreesAfterWaveClear(waveNumber: number): void {
+        if (!this.shouldReplenishTreesAfterWave(waveNumber)) return;
+
+        const neededTrees = Math.max(0, TREE_COUNT - this.state.trees.size);
+        let addedTrees = 0;
+
+        for (let treeNumber = 0; treeNumber < neededTrees; treeNumber++) {
+            const spot = this.findRandomTreeSpawnSpot();
+            if (!spot) break;
+
+            const tree = new TreeState();
+            tree.id = `tree-${nextId()}`;
+            tree.x = spot.x;
+            tree.y = spot.y;
+            tree.variant = TREE_VARIANT_TOPDOWN_3X3;
+            this.state.trees.set(tree.id, tree);
+            this.serverTreeHealth.set(tree.id, TREE_HEALTH);
+            addedTrees++;
+        }
+
+        if (addedTrees <= 0) return;
+
+        this.broadcast("treesReplenished", {
+            waveNumber,
+            addedTrees,
+            totalTrees: this.state.trees.size,
+        });
+        this.logRoomEvent("trees replenished", {
+            wave: waveNumber,
+            addedTrees,
+            totalTrees: this.state.trees.size,
+        });
+    }
+
+    private findRandomTreeSpawnSpot(): { x: number; y: number } | null {
+        const spawnX = WORLD_WIDTH / 2;
+        const spawnY = WORLD_HEIGHT / 2;
+
+        for (let attempt = 0; attempt < TREE_REPLENISH_MAX_ATTEMPTS_PER_TREE; attempt++) {
+            const candidateX = rndReal(TREE_EDGE_PADDING, WORLD_WIDTH - TREE_EDGE_PADDING);
+            const candidateY = rndReal(TREE_EDGE_PADDING, WORLD_HEIGHT - TREE_EDGE_PADDING);
+            const snapped = this.snapTopdownTreeAnchor(candidateX, candidateY);
+            if (
+                Math.hypot(snapped.x - spawnX, snapped.y - spawnY) < TREE_SPAWN_CLEAR_RADIUS
+                || !this.topdownTreeHasSpawnSpace(snapped.x, snapped.y)
+                || this.treeOverlapsExistingTree(snapped.x, snapped.y)
+            ) continue;
+
+            return snapped;
+        }
+
+        return null;
+    }
+
+    private treeOverlapsExistingTree(x: number, y: number): boolean {
+        const hitbox = this.getTreeHitbox({ x, y, variant: TREE_VARIANT_TOPDOWN_3X3 });
+        let overlaps = false;
+        this.state.trees.forEach((tree) => {
+            if (overlaps) return;
+            const otherHitbox = this.getTreeHitbox(tree);
+            const radius = hitbox.radius + otherHitbox.radius;
+            const dx = hitbox.x - otherHitbox.x;
+            const dy = hitbox.y - otherHitbox.y;
+            overlaps = dx * dx + dy * dy < radius * radius;
+        });
+        return overlaps;
+    }
+
     private applyDelayedTreeAttackImpact(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
         const sp = this.serverPlayers.get(attackerId);
         const player = this.state.players.get(attackerId);
@@ -4456,6 +4532,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (this.pendingEnemySpawns.length > 0) return;
         if (this.hasLivingEnemies()) return;
         if (this.nextEnemyWaveStartMs === null) {
+            this.replenishTreesAfterWaveClear(this.currentWaveIndex + 1);
             this.logRoomEvent("wave cleared", {
                 wave: this.currentWaveIndex + 1,
                 durationSeconds: Math.round((this.elapsedMs - this.currentWaveStartedAtMs) / 1000),

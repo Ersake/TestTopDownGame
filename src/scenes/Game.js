@@ -188,6 +188,7 @@ const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
+const TREE_REPLENISH_MESSAGE_MS = 4000;
 const DEBUG_MAX_ROUND = 99;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
 const ENABLE_DEBUG_ROUND = true;
@@ -480,6 +481,7 @@ export class Game extends Phaser.Scene {
         this.localAxeWhirlwindCooldownProgress = 0;
         this.localBowVolleyCooldownProgress = 0;
         this.skillPointText = null;
+        this.treeReplenishText = null;
         this.enchantmentUi = null;
         this.enchantmentUiObjects = new Set();
         this.enchantmentSelectedItem = '';
@@ -721,6 +723,11 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 5,
         }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setVisible(false);
 
+        this.treeReplenishText = this.add.text(this.centreX, 174, 'The trees have replenished', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#a8ff9a',
+            stroke: '#000000', strokeThickness: 5,
+        }).setOrigin(0.5, 0).setDepth(UI_DEPTH).setScrollFactor(0).setAlpha(0).setVisible(false);
+
         const activeMapName = RoomClient.room?.state?.activeMapName || '';
         this.activeMapText = this.add.text(this.centreX, 50, activeMapName ? `Map: ${activeMapName}` : '', {
             fontFamily: 'Arial Black', fontSize: 16, color: '#ff6666',
@@ -765,6 +772,7 @@ export class Game extends Phaser.Scene {
             this.nextWaveCountdownText,
             this.nextWaveReadyText,
             this.nextWavePromptText,
+            this.treeReplenishText,
             this.activeMapText,
             this.hitboxToggleButton,
             this.debugRoundStatusText,
@@ -2943,6 +2951,10 @@ export class Game extends Phaser.Scene {
             });
         });
 
+        room.onMessage('treesReplenished', () => {
+            this.showTreeReplenishMessage();
+        });
+
         room.onMessage('levelReset', () => {
             this.suppressLevelResetEffects();
             this.closeEnchantmentMenu();
@@ -4043,6 +4055,26 @@ export class Game extends Phaser.Scene {
 
         this.nextWaveCountdownText.setText(`Next wave in ${countdown}`);
         this.nextWaveReadyText.setText(`${readyPlayers}/${totalPlayers}`);
+    }
+
+    showTreeReplenishMessage() {
+        if (!this.treeReplenishText) return;
+
+        this.tweens.killTweensOf(this.treeReplenishText);
+        this.treeReplenishText
+            .setText('The trees have replenished')
+            .setAlpha(1)
+            .setVisible(true);
+
+        this.tweens.add({
+            targets: this.treeReplenishText,
+            alpha: 0,
+            duration: 600,
+            delay: TREE_REPLENISH_MESSAGE_MS,
+            onComplete: () => {
+                this.treeReplenishText?.setVisible(false);
+            },
+        });
     }
 
     updateGameOverCountdown(countdown) {
@@ -6525,6 +6557,10 @@ export class Game extends Phaser.Scene {
         this.nextWaveCountdownText?.setVisible(false);
         this.nextWaveReadyText?.setVisible(false);
         this.nextWavePromptText?.setVisible(false);
+        if (this.treeReplenishText) {
+            this.tweens.killTweensOf(this.treeReplenishText);
+            this.treeReplenishText.setAlpha(0).setVisible(false);
+        }
         this.updateHotbarAxeOverlays();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();
