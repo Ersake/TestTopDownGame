@@ -932,7 +932,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
 
         this.onMessage("selectUpgrade", (client, data) => {
-            this.selectUpgrade(client.sessionId, data);
+            this.selectUpgrade(client, data);
         });
 
         this.onMessage("setOutfitColor", (client, data) => {
@@ -2086,7 +2086,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.outfitColor = outfitColor;
     }
 
-    private selectUpgrade(sessionId: string, data: unknown) {
+    private selectUpgrade(client: Client, data: unknown) {
+        const sessionId = client.sessionId;
         const player = this.state.players.get(sessionId);
         const sp = this.serverPlayers.get(sessionId);
         if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver) return;
@@ -2147,6 +2148,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
 
         player.pendingUpgradeChoices = Math.max(0, player.pendingUpgradeChoices - 1);
+        client.send("upgradePicked", { upgradeId, item, slot });
     }
 
     private getUpgradeNodeForItem(item: string, upgradeId: string): UpgradeNodeConfig | null {
@@ -5617,7 +5619,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 1,
                 true,
             );
-            if (clear && kind === "melee") {
+            if (clear && (kind === "melee" || kind === "caster")) {
                 clear = !this.segmentOverlapsSolidMapTile(
                     enemy.x,
                     fromY,

@@ -188,6 +188,7 @@ const GRAB_ITEM_SOUND_VOLUME = 0.75;
 const REVIVE_SOUND_VOLUME = 0.75;
 const PLAYER_HURT_SOUND_VOLUME = 0.5625;
 const LEVEL_UP_SOUND_VOLUME = 0.7;
+const UPGRADE_PICKED_SOUND_VOLUME = 0.8;
 const ENEMY_WAVE_HORN_SOUND_VOLUME = 0.7;
 const ENEMY_WAVE_HORN_MAX_EVENT_AGE_MS = 2000;
 const TREE_REPLENISH_MESSAGE_MS = 4000;
@@ -2971,6 +2972,10 @@ export class Game extends Phaser.Scene {
         room.onMessage('itemCrafted', () => {
             const anvilHit = Math.random() < 0.5 ? ASSETS.audio.anvilHit1 : ASSETS.audio.anvilHit2;
             this.playSfx(anvilHit.key, ANVIL_HIT_SOUND_VOLUME, { serverEvent: true });
+        });
+
+        room.onMessage('upgradePicked', () => {
+            this.playSfx(ASSETS.audio.upgradeSound.key, UPGRADE_PICKED_SOUND_VOLUME, { serverEvent: true });
         });
 
         room.onMessage('reviveStarted', () => {

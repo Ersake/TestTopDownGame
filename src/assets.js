@@ -44,6 +44,10 @@ export default {
             key: 'level-up',
             args: ['assets/Level Up Sound.mp3']
         },
+        upgradeSound: {
+            key: 'upgrade-sound',
+            args: ['assets/upgrade sound.mp3']
+        },
         fireballCharge: {
             key: 'fireball-charge',
             args: ['assets/fireballcharge.mp3']
