@@ -165,7 +165,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include wood gain, max campfires, whirlwind cooldown, and whirlwind AOE size.
+`PlayerState` includes identity, position, health, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, axe whirlwind active/cooldown progress, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage.
 
 ### Enemy State
 
@@ -194,11 +194,11 @@ Current server-owned systems include:
 - Player join/leave and room reset after game over.
 - World bounds and tree generation.
 - Player movement, facing direction, smooth dash movement with a 2-second cooldown, attack lockout, attack cooldown, and interaction input. Dash cooldown progress is synced for the under-player cooldown bar.
-- Axe left-click attacks and active axe whirlwind reduce server-authoritative player movement speed by 25%. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades can reduce the 10-second base cooldown by 1 second per rank and increase the 56px base AOE radius by 25% per rank, with server-enforced max rank 3.
+- Axe left-click attacks and active axe whirlwind reduce server-authoritative player movement speed by 25%. Axe whirlwind right-click attacks last up to 4 seconds, can be cancelled early, and then enter a server-owned cooldown rendered on the hotbar. Axe upgrades split into two branches: primary attack speed up to 3 ranks followed by +1 primary damage, and whirlwind cooldown reduction up to 3 ranks followed by AOE size up to 3 ranks and whirlwind damage up to 2 ranks. Whirlwind cooldown ranks reduce the 10-second base cooldown by 2 seconds each, and AOE ranks increase the 56px base radius by 50% each.
 - Level-ups add pending upgrade choices displayed as skill points. Skill points are spent only through the enchantment table UI by dragging a hotbar item into the panel, then selecting bottom-to-top item-tree nodes with satisfied prerequisites and server-enforced max ranks.
 - Tree damage, tree removal, and log spawning.
-- Wood pickup, including hammer wood gathering and axe wood gain upgrade multipliers.
-- Player-placed campfires with a per-player active cap of 1 plus axe max-campfire upgrade ranks.
+- Wood pickup, including hammer wood gathering upgrade multipliers.
+- Player-placed campfires with a per-player active cap of 1.
 - Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. After a wave is fully cleared, the server waits 3 seconds before starting the next wave, updates `waveNumber`, and broadcasts `"enemyWaveStarted"` for horn audio.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.

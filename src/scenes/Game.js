@@ -286,10 +286,11 @@ const PLAYER_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const ENEMY_DIRECTION_ORDER = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 const FRAMES_PER_DIRECTION = 15;
 const PLAYER_BUFFS = [
-    { field: 'axeWoodGainUpgrades', label: 'Axe wood gain' },
-    { field: 'axeCampfireMaxUpgrades', label: 'Axe max campfires' },
+    { field: 'axeSwingSpeedUpgrades', label: 'Axe attack speed' },
+    { field: 'axePrimaryDamageUpgrades', label: 'Axe primary damage' },
     { field: 'axeWhirlwindCooldownUpgrades', label: 'Whirlwind cooldown' },
     { field: 'axeWhirlwindAoeUpgrades', label: 'Whirlwind AOE' },
+    { field: 'axeWhirlwindDamageUpgrades', label: 'Whirlwind damage' },
     { field: 'bowDamageUpgrades', label: 'Bow damage' },
     { field: 'bowPierceUpgrades', label: 'Bow pierce' },
     { field: 'bowChargeTimeUpgrades', label: 'Bow charge speed' },
@@ -301,10 +302,11 @@ const ENCHANTMENT_SKILL_TREES = {
         title: 'Axe Skills',
         displayName: 'Axe',
         nodes: [
-            { id: 'axe_wood_gain', label: '+25% wood gain', field: 'axeWoodGainUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
-            { id: 'axe_campfire_max', label: '+1 max campfires', field: 'axeCampfireMaxUpgrades', prerequisite: 'axe_wood_gain', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 1 },
-            { id: 'axe_whirlwind_cooldown', label: '-1 second whirlwind cooldown', field: 'axeWhirlwindCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
-            { id: 'axe_whirlwind_aoe', label: '+25% AOE size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 1 },
+            { id: 'axe_primary_attack_speed', label: '+25% primary attack speed', field: 'axeSwingSpeedUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
+            { id: 'axe_primary_damage', label: '+1 primary DMG', field: 'axePrimaryDamageUpgrades', prerequisite: 'axe_primary_attack_speed', maxRank: 1, column: 0, row: 1 },
+            { id: 'axe_whirlwind_cooldown', label: '-2 seconds whirlwind cooldown', field: 'axeWhirlwindCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
+            { id: 'axe_whirlwind_aoe', label: '+50% whirlwind size', field: 'axeWhirlwindAoeUpgrades', prerequisite: 'axe_whirlwind_cooldown', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 1 },
+            { id: 'axe_whirlwind_damage', label: '+1 whirlwind DMG', field: 'axeWhirlwindDamageUpgrades', prerequisite: 'axe_whirlwind_aoe', maxRank: 2, column: 1, row: 2 },
         ],
     },
     [ITEM_WOOD_BOW]: {
@@ -2958,12 +2960,14 @@ export class Game extends Phaser.Scene {
                 lastAxeWhirlwindHitSeq: player.axeWhirlwindHitSeq || 0,
                 axeWhirlwindHitboxUntil: 0,
                 axeWhirlwindAoeUpgrades: player.axeWhirlwindAoeUpgrades || 0,
+                axeWhirlwindDamageUpgrades: player.axeWhirlwindDamageUpgrades || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
                 axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
+                axePrimaryDamageUpgrades: player.axePrimaryDamageUpgrades || 0,
                 lastMovedAt: 0,
                 x: player.x,
                 y: player.y,
@@ -3249,9 +3253,17 @@ export class Game extends Phaser.Scene {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeSwingSpeedUpgrades = stacks || 0;
             });
+            player.listen('axePrimaryDamageUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axePrimaryDamageUpgrades = stacks || 0;
+            });
             player.listen('axeWhirlwindAoeUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.axeWhirlwindAoeUpgrades = stacks || 0;
+            });
+            player.listen('axeWhirlwindDamageUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.axeWhirlwindDamageUpgrades = stacks || 0;
             });
 
             if (player.isDead) {
@@ -4502,7 +4514,7 @@ export class Game extends Phaser.Scene {
 
     drawPlayerAxeWhirlwindHitbox(graphics, x, y, animationState) {
         const rank = Phaser.Math.Clamp(Math.floor(animationState?.axeWhirlwindAoeUpgrades || 0), 0, ENCHANTMENT_MAX_RANK);
-        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + 0.25 * rank);
+        const radius = PLAYER_AXE_WHIRLWIND_HIT_RADIUS * (1 + 0.5 * rank);
         graphics.lineStyle(2, 0x66ffff, 0.95);
         graphics.strokeCircle(x, y, radius);
     }
