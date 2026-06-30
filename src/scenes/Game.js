@@ -30,8 +30,9 @@ const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const LOG_DEPTH = 95;
-const PLAYER_HITBOX_HW = 17;
-const PLAYER_HITBOX_HH = 17;
+const PLAYER_HITBOX_HW = 11;
+const PLAYER_HITBOX_HH = 21;
+const PLAYER_HITBOX_Y_OFFSET = 10;
 const PLAYER_FOOT_RADIUS = 5;
 const PLAYER_FOOT_Y_OFFSET = 32;
 const ENEMY_HITBOX_HW = 28;
@@ -4749,9 +4750,10 @@ export class Game extends Phaser.Scene {
             if (!sprite.visible) return;
             const x = sprite.x;
             const y = sprite.y - PLAYER_VISUAL_Y_OFFSET;
+            const hitboxY = y + PLAYER_HITBOX_Y_OFFSET;
 
             graphics.lineStyle(2, 0x44aaff, 0.95);
-            graphics.strokeRect(x - PLAYER_HITBOX_HW, y - PLAYER_HITBOX_HH, PLAYER_HITBOX_HW * 2, PLAYER_HITBOX_HH * 2);
+            graphics.strokeRect(x - PLAYER_HITBOX_HW, hitboxY - PLAYER_HITBOX_HH, PLAYER_HITBOX_HW * 2, PLAYER_HITBOX_HH * 2);
             graphics.lineStyle(2, 0xffffff, 0.95);
             graphics.strokeCircle(x, y + PLAYER_FOOT_Y_OFFSET, PLAYER_FOOT_RADIUS);
 

@@ -79,7 +79,8 @@ const TOPDOWN_TREE_HITBOX_RADIUS = TOPDOWN_TREE_HALF_SIZE * TREE_HITBOX_SCALE;
 const LEGACY_TREE_HITBOX_RADIUS = 28 * TREE_HITBOX_SCALE;
 
 // Half-extents used for AABB collision detection
-const PLAYER_HW  = 17;  const PLAYER_HH  = 17;
+const PLAYER_HW  = 11;  const PLAYER_HH  = 21;
+const PLAYER_HITBOX_Y_OFFSET = 10;
 const ENEMY_HW   = 28;  const ENEMY_HH   = 28;
 const PB_HW      = 6;   const PB_HH      = 16;  // player bullet
 const EB_HW      = 8;   const EB_HH      = 12;  // enemy bullet
@@ -1814,6 +1815,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         };
     }
 
+    private getMapTileFullCellCollider(col: number, row: number): MapTileCollider {
+        return {
+            x: col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+            y: row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5,
+            halfWidth: MAP_TILE_SIZE * 0.5,
+            halfHeight: MAP_TILE_SIZE * 0.5,
+        };
+    }
+
     private mapCellOverlapsPlayer(col: number, row: number, frame: number): boolean {
         const collider = this.getMapTileCollider(col, row, frame);
         let overlapsPlayer = false;
@@ -1972,9 +1982,21 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
     }
 
+    private playerHitboxCenterY(playerY: number): number {
+        return playerY + PLAYER_HITBOX_Y_OFFSET;
+    }
+
+    private minPlayerY(): number {
+        return PLAYER_HH - PLAYER_HITBOX_Y_OFFSET;
+    }
+
+    private maxPlayerY(): number {
+        return this.playableWorldHeight() - PLAYER_HH - PLAYER_HITBOX_Y_OFFSET;
+    }
+
     private findNearestOpenPlayerPosition(originX: number, originY: number): { x: number; y: number } {
         const clampedOriginX = clamp(originX, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
-        const clampedOriginY = clamp(originY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+        const clampedOriginY = clamp(originY, this.minPlayerY(), this.maxPlayerY());
         if (!this.collidesWithPlayerWorldColliders(clampedOriginX, clampedOriginY)) return { x: clampedOriginX, y: clampedOriginY };
 
         const originCol = Math.floor(clampedOriginX / MAP_TILE_SIZE);
@@ -1984,7 +2006,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 for (let col = originCol - radius; col <= originCol + radius; col++) {
                     if (Math.max(Math.abs(col - originCol), Math.abs(row - originRow)) !== radius || !this.isMapCellInside(col, row)) continue;
                     const x = clamp(col * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5, PLAYER_HW, this.playableWorldWidth() - PLAYER_HW);
-                    const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+                    const y = clamp(row * MAP_TILE_SIZE + MAP_TILE_SIZE * 0.5 - PLAYER_TREE_Y_OFFSET, this.minPlayerY(), this.maxPlayerY());
                     if (!this.collidesWithPlayerWorldColliders(x, y)) return { x, y };
                 }
             }
@@ -4438,7 +4460,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     this.incrementTickCounter("playerMoveStepBlockedX");
                 }
 
-                const candidateY = clamp(resolvedY + stepY, PLAYER_HH, this.playableWorldHeight() - PLAYER_HH);
+                const candidateY = clamp(resolvedY + stepY, this.minPlayerY(), this.maxPlayerY());
                 if (!this.collidesWithPlayerWorldColliders(resolvedX, candidateY)) {
                     resolvedY = candidateY;
                 } else {
@@ -5505,7 +5527,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
     }
 
-    private segmentOverlapsSolidMapTile(fromX: number, fromY: number, toX: number, toY: number, radius: number): boolean {
+    private segmentOverlapsSolidMapTile(
+        fromX: number,
+        fromY: number,
+        toX: number,
+        toY: number,
+        radius: number,
+        useFullCellCollider: boolean = false,
+    ): boolean {
         const cacheKey = [
             this.mapTopologyVersion,
             Math.round(fromX),
@@ -5513,6 +5542,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             Math.round(toX),
             Math.round(toY),
             Math.round(radius),
+            useFullCellCollider ? "full" : "shape",
         ].join(":");
         const cached = this.solidSegmentCache.get(cacheKey);
         if (cached !== undefined) return cached;
@@ -5527,7 +5557,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 this.incrementEnemyCounter("solidTileChecks");
                 const value = this.getMapTileValue(col, row, layer);
                 if (value <= 0 || !this.isSolidMapFrame(value - 1)) continue;
-                const collider = this.getMapTileCollider(col, row, value - 1);
+                const collider = useFullCellCollider
+                    ? this.getMapTileFullCellCollider(col, row)
+                    : this.getMapTileCollider(col, row, value - 1);
                 if (capsuleOverlapsAabb(
                     fromX,
                     fromY,
@@ -5577,13 +5609,24 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         return this.measureEnemySubphase("lineOfSight", () => {
             this.incrementEnemyCounter("lineOfSightChecks");
-            const clear = !this.segmentOverlapsSolidMapTile(
+            let clear = !this.segmentOverlapsSolidMapTile(
                 enemy.x,
                 fromY,
                 target.targetFootX,
                 target.targetFootY,
                 1,
+                true,
             );
+            if (clear && kind === "melee") {
+                clear = !this.segmentOverlapsSolidMapTile(
+                    enemy.x,
+                    fromY,
+                    target.player.x,
+                    this.playerHitboxCenterY(target.player.y),
+                    1,
+                    true,
+                );
+            }
             se.lineOfSightFromCell = fromCell;
             se.lineOfSightTargetCell = targetCell;
             se.lineOfSightTopologyVersion = this.mapTopologyVersion;
@@ -5664,6 +5707,29 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     if (distance < bestDistance) {
                         best = { col, row };
                         bestDistance = distance;
+                    }
+                }
+            }
+            if (best) return best;
+        }
+        return null;
+    }
+
+    private getNearestWalkableBuildCellToWorldPoint(center: PathCell, worldX: number, worldY: number, maxRadius: number): PathCell | null {
+        for (let radius = 0; radius <= maxRadius; radius++) {
+            let best: PathCell | null = null;
+            let bestDistanceSq = Number.POSITIVE_INFINITY;
+            for (let row = center.row - radius; row <= center.row + radius; row++) {
+                for (let col = center.col - radius; col <= center.col + radius; col++) {
+                    if (Math.max(Math.abs(col - center.col), Math.abs(row - center.row)) !== radius) continue;
+                    if (!this.isBuildPathCellInside(col, row) || this.isBuildPathCellBlocked(col, row)) continue;
+                    const cellCenter = this.buildCellCenter({ col, row });
+                    const dx = cellCenter.x - worldX;
+                    const dy = cellCenter.y - worldY;
+                    const distanceSq = dx * dx + dy * dy;
+                    if (distanceSq < bestDistanceSq) {
+                        best = { col, row };
+                        bestDistanceSq = distanceSq;
                     }
                 }
             }
@@ -5887,10 +5953,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 impactY,
                 DARK_KNIGHT_AOE_RADIUS,
                 player.x,
-                player.y,
+                this.playerHitboxCenterY(player.y),
                 PLAYER_HW,
                 PLAYER_HH,
             )) return;
+            if (this.segmentOverlapsSolidMapTile(impactX, impactY, player.x, this.playerHitboxCenterY(player.y), 1, true)) return;
 
             const hurt = this.damagePlayer(playerId, sp, player, DARK_KNIGHT_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
@@ -6071,8 +6138,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private resolveEnemyTargetForPlayer(playerId: string, player: PlayerState): Omit<EnemyTarget, "id" | "player" | "distanceSq"> | null {
         if (this.enemyTargetCache.has(playerId)) return this.enemyTargetCache.get(playerId) || null;
 
-        const targetCell = this.getNearestWalkableBuildCell(
-            this.worldToBuildCell(player.x, player.y + PLAYER_TREE_Y_OFFSET),
+        const playerFootX = player.x;
+        const playerFootY = player.y + PLAYER_TREE_Y_OFFSET;
+        const targetCell = this.getNearestWalkableBuildCellToWorldPoint(
+            this.worldToBuildCell(playerFootX, playerFootY),
+            playerFootX,
+            playerFootY,
             ENEMY_PATH_TARGET_SEARCH_RADIUS,
         );
         if (!targetCell) {
@@ -6132,7 +6203,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const sp = this.serverPlayers.get(playerId);
             if (!sp || !sp.alive || player.isDead) return;
 
-            if (!overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
+            if (!overlaps(player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
+            if (this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, player.x, this.playerHitboxCenterY(player.y), 1, true)) return;
 
             const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
@@ -6233,7 +6305,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
             this.state.enemyBullets.forEach((bullet, bid) => {
                 if (!sp.alive || deadEB.includes(bid)) return;
-                if (overlaps(player.x, player.y, PLAYER_HW, PLAYER_HH, bullet.x, bullet.y, EB_HW, EB_HH)) {
+                if (overlaps(player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH, bullet.x, bullet.y, EB_HW, EB_HH)) {
                     deadEB.push(bid);
                     const hurt = this.damagePlayer(sid, sp, player, bullet.power || ENEMY1_ATTACK_DAMAGE, bid);
                     if (hurt) this.broadcast("playerHurt", hurt);
