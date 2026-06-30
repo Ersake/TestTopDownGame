@@ -2522,6 +2522,10 @@ export class ShmupRoom extends Room<GameRoomState> {
         sp.bowChargeMs = 0;
         sp.bowChargeX = player.x;
         sp.bowChargeY = player.y;
+        sp.bowChargeMoveLeft = sp.input.left;
+        sp.bowChargeMoveRight = sp.input.right;
+        sp.bowChargeMoveUp = sp.input.up;
+        sp.bowChargeMoveDown = sp.input.down;
         sp.vx = 0;
         sp.vy = 0;
         sp.attackLockMs = 0;
@@ -4083,7 +4087,7 @@ export class ShmupRoom extends Room<GameRoomState> {
 
                 if (sp.bowVolleyActive) {
                     this.measurePlayerSubphase("playerBowVolley", () => {
-                        if (player.activeItem !== ITEM_WOOD_BOW || player.isDead || this.state.gameOver) {
+                        if (player.activeItem !== ITEM_WOOD_BOW || player.isDead || this.state.gameOver || this.didPressMovementAfterBowCharge(sp, left, right, up, down)) {
                             this.clearBowVolley(sp);
                             this.clearBowCharge(player, sp);
                             return;

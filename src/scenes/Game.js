@@ -4903,7 +4903,6 @@ export class Game extends Phaser.Scene {
     }
 
     cancelBowChargeForMovement() {
-        if (this.bowVolleyPointer || this.bowVolleyPointerId !== null) return;
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
         if (!animationState?.bowCharging) return;
         const movement = this.getMovementKeyState();
@@ -4914,7 +4913,11 @@ export class Game extends Phaser.Scene {
             || (movement.down && !previous.down);
         this.bowChargeMoveState = movement;
         if (!pressed) return;
-        this.cancelBowCharge();
+        if (this.bowVolleyPointer || this.bowVolleyPointerId !== null) {
+            this.cancelBowVolley();
+        } else {
+            this.cancelBowCharge();
+        }
         this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
     }
 
@@ -4952,6 +4955,7 @@ export class Game extends Phaser.Scene {
 
         this.bowVolleyPointerId = pointer.id;
         this.bowVolleyPointer = pointer;
+        this.bowChargeMoveState = this.getMovementKeyState();
         this.nextBowVolleyAimSendAt = this.time.now + BOW_VOLLEY_AIM_SEND_INTERVAL_MS;
         const worldPoint = this.getPointerWorldPoint(pointer);
         const origin = { x: animationState.x ?? sprite.x ?? 0, y: animationState.y ?? ((sprite.y ?? 0) - PLAYER_VISUAL_Y_OFFSET) };
@@ -5006,6 +5010,7 @@ export class Game extends Phaser.Scene {
         this.clearBowVolleyPreview();
         this.bowVolleyPointerId = null;
         this.bowVolleyPointer = null;
+        this.bowChargeMoveState = null;
         this.nextBowVolleyAimSendAt = 0;
     }
 
@@ -5015,6 +5020,7 @@ export class Game extends Phaser.Scene {
         this.clearBowVolleyPreview();
         this.bowVolleyPointerId = null;
         this.bowVolleyPointer = null;
+        this.bowChargeMoveState = null;
         this.nextBowVolleyAimSendAt = 0;
         if (this.localSessionId) this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
     }
