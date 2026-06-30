@@ -277,11 +277,26 @@ const REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS = 3000;
 const INITIAL_SERVER_AUDIO_SUPPRESS_MS = 1500;
 const LEVEL_RESET_EFFECT_SUPPRESS_MS = 1200;
 const MASTER_VOLUME_STORAGE_KEY = 'testtopdown-master-volume';
+const RADIO_VOLUME_STORAGE_KEY = 'testtopdown-radio-volume';
 const DEFAULT_MASTER_VOLUME = 0.5;
+const DEFAULT_RADIO_VOLUME = 0.5;
 const MAX_EFFECTIVE_SOUND_VOLUME = 0.65;
+const RADIO_MAX_EFFECTIVE_VOLUME = 0.65;
+const RADIO_FADE_IN_DELAY_MS = 1000;
+const RADIO_FADE_IN_MS = 1500;
+const RADIO_FADE_OUT_MS = 1000;
 const VOLUME_SLIDER_WIDTH = 120;
 const VOLUME_SLIDER_HEIGHT = 8;
 const VOLUME_UI_ICON_SIZE = 48;
+const RADIO_PLAYLIST = [
+    ASSETS.audio.radioSong1.key,
+    ASSETS.audio.radioSong2.key,
+    ASSETS.audio.radioSong3.key,
+    ASSETS.audio.radioSong4.key,
+    ASSETS.audio.radioSong5.key,
+    ASSETS.audio.radioSong6.key,
+    ASSETS.audio.radioSong7.key,
+];
 const SPATIAL_FULL_VOLUME_RADIUS = 250;
 const SPATIAL_MAX_VOLUME = 0.9;
 const SPATIAL_MIN_ONSCREEN_VOLUME = 0.25;
@@ -581,6 +596,15 @@ export class Game extends Phaser.Scene {
         this.craftingUiObjects = new Set();
         this.craftingStatusText = null;
         this.masterVolume = this.loadMasterVolume();
+        this.radioVolume = this.loadRadioVolume();
+        this.radioShuffleQueue = [];
+        this.currentRadioSound = null;
+        this.currentRadioKey = null;
+        this.lastRadioKey = null;
+        this.radioFadeTween = null;
+        this.radioFadeState = null;
+        this.radioFadeInEvent = null;
+        this.radioPlayingWave = false;
         this.sfxGroupLastPlayedAt = new Map();
         this.activeSfxStacks = new Map();
         this.axeWhirlwindSoundNextAt = new Map();
@@ -644,6 +668,7 @@ export class Game extends Phaser.Scene {
             this.cancelBowVolley();
             this.clearBowVolleyTelegraphs();
             this.stopAllCasterChargeSounds();
+            this.stopRadioSong(true);
             this.destroyDebugRoundControls();
         });
     }
@@ -1854,6 +1879,11 @@ export class Game extends Phaser.Scene {
             .setDepth(UI_DEPTH)
             .setScrollFactor(0);
 
+        this.volumeLabel = this.add.text(x + VOLUME_SLIDER_WIDTH + 12, y, 'SFX', {
+            fontFamily: 'Arial Black', fontSize: 13, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0, 0.5).setDepth(UI_DEPTH).setScrollFactor(0);
+
         this.volumeSliderTrack = this.add.rectangle(x, y, VOLUME_SLIDER_WIDTH, VOLUME_SLIDER_HEIGHT, 0x050505, 0.85)
             .setOrigin(0, 0.5)
             .setDepth(UI_DEPTH)
@@ -1870,30 +1900,73 @@ export class Game extends Phaser.Scene {
             .setScrollFactor(0)
             .setInteractive({ useHandCursor: true });
 
-        const updateFromPointer = (pointer) => {
+        const updateSfxFromPointer = (pointer) => {
             const value = Phaser.Math.Clamp((pointer.x - x) / VOLUME_SLIDER_WIDTH, 0, 1);
             this.setMasterVolume(value);
         };
 
-        this.volumeSliderTrack.on('pointerdown', updateFromPointer);
-        this.volumeSliderFill.on('pointerdown', updateFromPointer);
+        this.volumeSliderTrack.on('pointerdown', updateSfxFromPointer);
+        this.volumeSliderFill.on('pointerdown', updateSfxFromPointer);
         this.volumeSliderKnob.on('pointerdown', (pointer) => {
-            updateFromPointer(pointer);
+            updateSfxFromPointer(pointer);
             this.volumeSliderDragging = true;
         });
+
+        const radioY = y + 30;
+        this.radioVolumeLabel = this.add.text(x - 42, radioY, 'RADIO', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 4,
+        }).setOrigin(0.5).setDepth(UI_DEPTH).setScrollFactor(0);
+
+        this.radioVolumeSliderTrack = this.add.rectangle(x, radioY, VOLUME_SLIDER_WIDTH, VOLUME_SLIDER_HEIGHT, 0x050505, 0.85)
+            .setOrigin(0, 0.5)
+            .setDepth(UI_DEPTH)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+
+        this.radioVolumeSliderFill = this.add.rectangle(x, radioY, VOLUME_SLIDER_WIDTH, VOLUME_SLIDER_HEIGHT, 0xdddddd, 1)
+            .setOrigin(0, 0.5)
+            .setDepth(UI_DEPTH + 1)
+            .setScrollFactor(0);
+
+        this.radioVolumeSliderKnob = this.add.circle(x, radioY, 8, 0xffffff, 1)
+            .setDepth(UI_DEPTH + 2)
+            .setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+
+        const updateRadioFromPointer = (pointer) => {
+            const value = Phaser.Math.Clamp((pointer.x - x) / VOLUME_SLIDER_WIDTH, 0, 1);
+            this.setRadioVolume(value);
+        };
+
+        this.radioVolumeSliderTrack.on('pointerdown', updateRadioFromPointer);
+        this.radioVolumeSliderFill.on('pointerdown', updateRadioFromPointer);
+        this.radioVolumeSliderKnob.on('pointerdown', (pointer) => {
+            updateRadioFromPointer(pointer);
+            this.radioVolumeSliderDragging = true;
+        });
+
         this.input.on('pointermove', (pointer) => {
-            if (this.volumeSliderDragging) updateFromPointer(pointer);
+            if (this.volumeSliderDragging) updateSfxFromPointer(pointer);
+            if (this.radioVolumeSliderDragging) updateRadioFromPointer(pointer);
         });
         this.input.on('pointerup', () => {
             this.volumeSliderDragging = false;
+            this.radioVolumeSliderDragging = false;
         });
 
         this.updateVolumeSliderUi();
+        this.updateRadioVolumeSliderUi();
         this.registerFixedUi(
             this.volumeIcon,
+            this.volumeLabel,
             this.volumeSliderTrack,
             this.volumeSliderFill,
             this.volumeSliderKnob,
+            this.radioVolumeLabel,
+            this.radioVolumeSliderTrack,
+            this.radioVolumeSliderFill,
+            this.radioVolumeSliderKnob,
         );
     }
 
@@ -3043,6 +3116,7 @@ export class Game extends Phaser.Scene {
             this.playSfx(ASSETS.audio.enemyWaveHorn.key, ENEMY_WAVE_HORN_SOUND_VOLUME, {
                 serverEvent: true,
             });
+            this.scheduleRadioSongAfterHorn();
         });
 
         room.onMessage('treesReplenished', () => {
@@ -3054,6 +3128,7 @@ export class Game extends Phaser.Scene {
             this.closeEnchantmentMenu();
             this.cancelBowVolley();
             this.clearBowVolleyTelegraphs();
+            this.stopRadioSong();
             this.createGrassNoiseLayer();
         });
 
@@ -4082,7 +4157,12 @@ export class Game extends Phaser.Scene {
         });
 
         this.updateNextWaveReadyUi();
-        state.listen('nextWaveCountdown', () => this.updateNextWaveReadyUi());
+        state.listen('nextWaveCountdown', (countdown) => {
+            this.updateNextWaveReadyUi();
+            if ((countdown || 0) > 0 && this.radioPlayingWave) {
+                this.stopRadioSong();
+            }
+        });
         state.listen('nextWaveReadyPlayers', () => this.updateNextWaveReadyUi());
         state.listen('nextWaveTotalPlayers', () => this.updateNextWaveReadyUi());
 
@@ -4105,6 +4185,7 @@ export class Game extends Phaser.Scene {
                 this.disableBuildMode();
                 this.stopHeldAttack();
                 this.cancelBowCharge();
+                this.stopRadioSong();
                 this.closeCraftingMenu();
                 this.closeEnchantmentMenu();
                 this.updateNextWaveReadyUi();
@@ -5774,6 +5855,172 @@ export class Game extends Phaser.Scene {
         this.volumeSliderFill.width = Math.max(1, width);
         this.volumeSliderKnob.x = this.volumeSliderTrack.x + width;
         this.volumeSliderKnob.y = this.volumeSliderTrack.y;
+    }
+
+    loadRadioVolume() {
+        const saved = Number(window.localStorage?.getItem(RADIO_VOLUME_STORAGE_KEY));
+        return Number.isFinite(saved) ? Phaser.Math.Clamp(saved, 0, 1) : DEFAULT_RADIO_VOLUME;
+    }
+
+    setRadioVolume(value) {
+        this.radioVolume = Phaser.Math.Clamp(value, 0, 1);
+        try {
+            window.localStorage?.setItem(RADIO_VOLUME_STORAGE_KEY, String(this.radioVolume));
+        } catch (_error) {
+            // Ignore storage failures; volume still works for this session.
+        }
+        this.updateRadioVolumeSliderUi();
+        this.updateCurrentRadioVolume();
+    }
+
+    updateRadioVolumeSliderUi() {
+        if (!this.radioVolumeSliderTrack || !this.radioVolumeSliderFill || !this.radioVolumeSliderKnob) return;
+
+        const value = Phaser.Math.Clamp(this.radioVolume ?? DEFAULT_RADIO_VOLUME, 0, 1);
+        const width = VOLUME_SLIDER_WIDTH * value;
+        this.radioVolumeSliderFill.width = Math.max(1, width);
+        this.radioVolumeSliderKnob.x = this.radioVolumeSliderTrack.x + width;
+        this.radioVolumeSliderKnob.y = this.radioVolumeSliderTrack.y;
+    }
+
+    getRadioEffectiveVolume() {
+        return Phaser.Math.Clamp(this.radioVolume ?? DEFAULT_RADIO_VOLUME, 0, 1) * RADIO_MAX_EFFECTIVE_VOLUME;
+    }
+
+    updateCurrentRadioVolume() {
+        const sound = this.currentRadioSound;
+        if (!sound) return;
+
+        const fadeValue = this.radioFadeState?.value;
+        const volume = Number.isFinite(fadeValue)
+            ? this.getRadioEffectiveVolume() * Phaser.Math.Clamp(fadeValue, 0, 1)
+            : this.getRadioEffectiveVolume();
+        if (typeof sound.setVolume === 'function') {
+            sound.setVolume(volume);
+        } else {
+            sound.volume = volume;
+        }
+    }
+
+    scheduleRadioSongAfterHorn() {
+        if (!RADIO_PLAYLIST.length || this.isMapEditor) return;
+
+        this.cancelRadioFadeInEvent();
+        this.stopRadioSong(true);
+        this.radioPlayingWave = true;
+        this.radioFadeInEvent = this.time.delayedCall(RADIO_FADE_IN_DELAY_MS, () => {
+            this.radioFadeInEvent = null;
+            if (!this.radioPlayingWave || RoomClient.room?.state?.gameOver) return;
+            if ((RoomClient.room?.state?.nextWaveCountdown || 0) > 0) return;
+            this.startNextRadioSong();
+        });
+    }
+
+    startNextRadioSong() {
+        const key = this.getNextRadioSongKey();
+        if (!key) return;
+
+        this.stopRadioSong(true);
+        this.radioPlayingWave = true;
+        this.currentRadioKey = key;
+        this.lastRadioKey = key;
+        const sound = this.sound.add(key, { loop: true, volume: 0 });
+        this.currentRadioSound = sound;
+        const didPlay = sound.play();
+        if (!didPlay) {
+            sound.destroy();
+            if (this.currentRadioSound === sound) {
+                this.currentRadioSound = null;
+                this.currentRadioKey = null;
+            }
+            return;
+        }
+
+        this.fadeRadioTo(1, RADIO_FADE_IN_MS);
+    }
+
+    stopRadioSong(immediate = false) {
+        this.radioPlayingWave = false;
+        this.cancelRadioFadeInEvent();
+
+        const sound = this.currentRadioSound;
+        if (!sound) return;
+
+        if (immediate) {
+            this.killRadioFadeTween();
+            this.destroyRadioSound(sound);
+            return;
+        }
+
+        this.fadeRadioTo(0, RADIO_FADE_OUT_MS, () => {
+            if (this.currentRadioSound === sound) {
+                this.destroyRadioSound(sound);
+            }
+        });
+    }
+
+    fadeRadioTo(targetFadeValue, durationMs, onComplete = null) {
+        const sound = this.currentRadioSound;
+        if (!sound) return;
+
+        const currentVolume = Number(sound.volume);
+        const maxVolume = this.getRadioEffectiveVolume();
+        const fallbackFadeValue = maxVolume > 0 && Number.isFinite(currentVolume) ? currentVolume / maxVolume : 0;
+        const currentFadeValue = Phaser.Math.Clamp(this.radioFadeState?.value ?? fallbackFadeValue, 0, 1);
+        this.killRadioFadeTween();
+        this.radioFadeState = { value: currentFadeValue };
+        this.radioFadeTween = this.tweens.add({
+            targets: this.radioFadeState,
+            value: Phaser.Math.Clamp(targetFadeValue, 0, 1),
+            duration: Math.max(0, durationMs),
+            ease: 'Linear',
+            onUpdate: () => this.updateCurrentRadioVolume(),
+            onComplete: () => {
+                this.updateCurrentRadioVolume();
+                this.radioFadeTween = null;
+                this.radioFadeState = null;
+                onComplete?.();
+            },
+        });
+    }
+
+    killRadioFadeTween() {
+        if (this.radioFadeTween) {
+            this.radioFadeTween.stop();
+            this.radioFadeTween = null;
+        }
+        this.radioFadeState = null;
+    }
+
+    cancelRadioFadeInEvent() {
+        if (!this.radioFadeInEvent) return;
+        this.radioFadeInEvent.remove(false);
+        this.radioFadeInEvent = null;
+    }
+
+    destroyRadioSound(sound) {
+        if (this.currentRadioSound === sound) {
+            this.currentRadioSound = null;
+            this.currentRadioKey = null;
+        }
+        if (sound.isPlaying || sound.isPaused) {
+            sound.stop();
+        }
+        sound.destroy();
+    }
+
+    getNextRadioSongKey() {
+        if (!RADIO_PLAYLIST.length) return null;
+        if (!this.radioShuffleQueue.length) {
+            this.radioShuffleQueue = Phaser.Utils.Array.Shuffle(RADIO_PLAYLIST.slice());
+            if (this.lastRadioKey && this.radioShuffleQueue.length > 1 && this.radioShuffleQueue[0] === this.lastRadioKey) {
+                const swapIndex = this.radioShuffleQueue.findIndex((key) => key !== this.lastRadioKey);
+                if (swapIndex > 0) {
+                    [this.radioShuffleQueue[0], this.radioShuffleQueue[swapIndex]] = [this.radioShuffleQueue[swapIndex], this.radioShuffleQueue[0]];
+                }
+            }
+        }
+        return this.radioShuffleQueue.shift() || null;
     }
 
     getSfxVolume(baseVolume, {

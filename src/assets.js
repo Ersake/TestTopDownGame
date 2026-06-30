@@ -64,6 +64,34 @@ export default {
             key: 'enemy-wave-horn',
             args: ['assets/horngame.mp3']
         },
+        radioSong1: {
+            key: 'radio-song-1',
+            args: ['assets/song1 Royalty Free Heavy Metal Instrumental - Game Over.mp3']
+        },
+        radioSong2: {
+            key: 'radio-song-2',
+            args: ['assets/song2 MELODIC METALCORE - ROYALTY FREE.mp3']
+        },
+        radioSong3: {
+            key: 'radio-song-3',
+            args: ['assets/song3 Royalty Free Heavy Metal Instrumental - The Gallows (Creative Commons).mp3']
+        },
+        radioSong4: {
+            key: 'radio-song-4',
+            args: ['assets/song4 Death Thrash Hardcore Metal - Royalty Free - Instrumental.mp3']
+        },
+        radioSong5: {
+            key: 'radio-song-5',
+            args: ['assets/song5 Royalty Free Heavy Metal Instrumental - ARMAGEDDON (Creative Commons) - DOWNLOAD.mp3']
+        },
+        radioSong6: {
+            key: 'radio-song-6',
+            args: ['assets/song6 Royalty Free Heavy Metal - Digital Meltdown - DOWNLOAD.mp3']
+        },
+        radioSong7: {
+            key: 'radio-song-7',
+            args: ['assets/song7 Royalty Free Heavy Metal Instrumental - VIOLENCE MACHINE - DOWNLOAD.mp3']
+        },
         anvilHit1: {
             key: 'anvil-hit-1',
             args: ['assets/anvilhit1.mp3']
