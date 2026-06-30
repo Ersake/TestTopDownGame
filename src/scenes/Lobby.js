@@ -1,6 +1,8 @@
 import RoomClient from '../network/RoomClient.js';
 
 const ROOM_CODE_DISPLAY_MS = 2000; // ms to show the created room code before entering the game
+const ACTIVE_ROOM_POLL_MS = 2000;
+const ACTIVE_ROOM_ROW_LIMIT = 5;
 const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
 const PLAYER_NAME_MAX_LENGTH = 12;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
@@ -22,6 +24,9 @@ export class Lobby extends Phaser.Scene {
         this._nameDraft = this._nameInput;
         this._isEditingName = false;
         this._selectedGameMapIndex = 0;
+        this._activeRoomRows = [];
+        this._activeRoomsRequestId = 0;
+        this._isRefreshingActiveRooms = false;
         RoomClient.setPlayerName(this._nameInput);
 
         const cx = this.scale.width  * 0.5;
@@ -124,6 +129,14 @@ export class Lobby extends Phaser.Scene {
             fontFamily: 'Arial Black', fontSize: 22, color: '#ff4444',
             stroke: '#000000', strokeThickness: 6, align: 'center',
         }).setOrigin(0.5);
+
+        this._createActiveRoomsSidebar();
+        this._refreshActiveRooms(true);
+        this._activeRoomsPoll = this.time.addEvent({
+            delay: ACTIVE_ROOM_POLL_MS,
+            loop: true,
+            callback: () => this._refreshActiveRooms(),
+        });
 
         // ── Keyboard input ───────────────────────────────────────────────────
         this.input.keyboard.on('keydown', (event) => this._onKey(event));
@@ -246,11 +259,103 @@ export class Lobby extends Phaser.Scene {
         if (this._state !== 'idle') return;
         RoomClient.selectNextServer();
         this._updateServerDisplay();
+        this._refreshActiveRooms(true);
     }
 
     _updateServerDisplay() {
         const selectedServer = RoomClient.getSelectedServer();
         this._serverBtn?.setText(`[ SERVER: ${selectedServer.label} ]`);
+    }
+
+    _createActiveRoomsSidebar() {
+        const width = 260;
+        const x = this.scale.width - width - 22;
+        const y = 140;
+        this._activeRoomsPanel = this.add.container(x, y);
+        this._activeRoomsPanel.add(this.add.rectangle(0, 0, width, 452, 0x07110c, 0.94)
+            .setOrigin(0, 0)
+            .setStrokeStyle(2, 0x1d5f3a, 1));
+        this._activeRoomsPanel.add(this.add.text(18, 18, 'ACTIVE ROOMS', {
+            fontFamily: 'Arial Black', fontSize: 21, color: '#9dffbf',
+            stroke: '#000000', strokeThickness: 5,
+        }));
+        this._activeRoomsStatusText = this.add.text(18, 64, 'Loading...', {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#b8c8bd',
+            stroke: '#000000', strokeThickness: 4,
+            wordWrap: { width: width - 36 },
+        });
+        this._activeRoomsPanel.add(this._activeRoomsStatusText);
+    }
+
+    async _refreshActiveRooms(force = false) {
+        if (this._isRefreshingActiveRooms && !force) return;
+        if (!this.scene.isActive('Lobby')) return;
+
+        const requestId = ++this._activeRoomsRequestId;
+        this._isRefreshingActiveRooms = true;
+        if (force) this._renderActiveRooms([], 'Loading...');
+
+        try {
+            const rooms = await RoomClient.listPlayableRooms();
+            if (requestId !== this._activeRoomsRequestId || !this.scene.isActive('Lobby')) return;
+            this._renderActiveRooms(rooms);
+        } catch (_error) {
+            if (requestId !== this._activeRoomsRequestId || !this.scene.isActive('Lobby')) return;
+            this._renderActiveRooms([], 'Room list unavailable');
+        } finally {
+            if (requestId === this._activeRoomsRequestId) {
+                this._isRefreshingActiveRooms = false;
+            }
+        }
+    }
+
+    _renderActiveRooms(rooms, statusText = '') {
+        this._activeRoomRows.forEach((item) => item.destroy());
+        this._activeRoomRows = [];
+
+        const visibleRooms = rooms.slice(0, ACTIVE_ROOM_ROW_LIMIT);
+        if (visibleRooms.length === 0) {
+            this._activeRoomsStatusText.setText(statusText || 'No active rooms').setColor('#b8c8bd');
+            return;
+        }
+
+        this._activeRoomsStatusText.setText('').setColor('#b8c8bd');
+        visibleRooms.forEach((room, index) => {
+            const rowY = 60 + index * 72;
+            const row = this.add.container(16, rowY);
+            row.add(this.add.rectangle(0, 0, 228, 58, 0x10261a, 0.98)
+                .setOrigin(0, 0)
+                .setStrokeStyle(1, 0x2b7f4f, 1));
+            row.add(this.add.text(12, 8, room.roomId, {
+                fontFamily: 'Arial Black', fontSize: 23, color: '#ffffff',
+                stroke: '#000000', strokeThickness: 5,
+            }));
+            const displayMapName = room.mapName.length > 10 ? `${room.mapName.slice(0, 10)}...` : room.mapName;
+            const mapLabel = displayMapName ? ` - ${displayMapName}` : '';
+            row.add(this.add.text(12, 34, `${room.clients}/${room.maxClients} PLAYERS${mapLabel}`, {
+                fontFamily: 'Arial Black', fontSize: 12, color: '#a9bdb0',
+                stroke: '#000000', strokeThickness: 3,
+            }));
+
+            const joinBg = this.add.rectangle(160, 12, 56, 34, 0x168a35, 1)
+                .setOrigin(0, 0)
+                .setStrokeStyle(1, 0x7dff9f, 1)
+                .setInteractive({ useHandCursor: true });
+            const joinText = this.add.text(188, 29, 'JOIN', {
+                fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
+                stroke: '#063b14', strokeThickness: 3,
+            }).setOrigin(0.5);
+            joinBg.on('pointerover', () => joinBg.setFillStyle(0x21aa45, 1));
+            joinBg.on('pointerout', () => joinBg.setFillStyle(0x168a35, 1));
+            joinBg.on('pointerdown', () => this._onJoinListedRoom(room.roomId));
+            joinText.setInteractive({ useHandCursor: true });
+            joinText.on('pointerdown', () => this._onJoinListedRoom(room.roomId));
+            row.add(joinBg);
+            row.add(joinText);
+
+            this._activeRoomsPanel.add(row);
+            this._activeRoomRows.push(row);
+        });
     }
 
     // ── Create Room ──────────────────────────────────────────────────────────
@@ -278,6 +383,7 @@ export class Lobby extends Phaser.Scene {
         } catch (e) {
             this._setStatus(e?.message || 'Failed to create room. Is the server running?', '#ff4444');
             this._state = 'idle';
+            this._refreshActiveRooms(true);
         }
     }
 
@@ -302,6 +408,7 @@ export class Lobby extends Phaser.Scene {
         } catch (error) {
             this._setStatus(error?.message || 'Failed to create map editor. Is the server running?', '#ff4444');
             this._state = 'idle';
+            this._refreshActiveRooms(true);
         }
     }
 
@@ -326,6 +433,28 @@ export class Lobby extends Phaser.Scene {
         } catch (e) {
             this._setStatus(`Room "${this._codeInput}" not found. Check the code.`, '#ff4444');
             this._state = 'idle';
+            this._refreshActiveRooms(true);
+        }
+    }
+
+    async _onJoinListedRoom(roomId) {
+        if (this._state !== 'idle') return;
+        if (this._isEditingName && !this._confirmNameEdit()) return;
+        if (!this._hasPlayerName()) {
+            this._setStatus('Enter a player name first.', '#ff4444');
+            return;
+        }
+
+        this._state = 'busy';
+        this._setStatus(`Joining room ${roomId}...`, '#ffffff');
+
+        try {
+            await RoomClient.joinRoom(roomId);
+            this.scene.start('Game');
+        } catch (_error) {
+            this._setStatus(`Room "${roomId}" is no longer available.`, '#ff4444');
+            this._state = 'idle';
+            this._refreshActiveRooms(true);
         }
     }
 

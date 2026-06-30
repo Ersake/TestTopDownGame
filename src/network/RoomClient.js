@@ -100,6 +100,33 @@ class RoomClient {
         await this._leaveCurrentRoom();
     }
 
+    /**
+     * List normal game rooms that can be joined from the lobby.
+     * @returns {Promise<Array<{ roomId: string, clients: number, maxClients: number, mapName: string, gameStarted: boolean }>>}
+     */
+    async listPlayableRooms() {
+        this._ensureClient();
+        const rooms = await this._client.getAvailableRooms("shmup_room");
+        return rooms
+            .filter((room) => {
+                const metadata = room.metadata || {};
+                return metadata.mode === "game"
+                    && metadata.gameStarted === true
+                    && metadata.gameOver !== true
+                    && room.clients > 0
+                    && room.clients < room.maxClients;
+            })
+            .map((room) => ({
+                roomId: String(room.roomId || '').toUpperCase(),
+                clients: Number(room.clients) || 0,
+                maxClients: Number(room.maxClients) || 0,
+                mapName: String(room.metadata?.activeMapName || ''),
+                gameStarted: !!room.metadata?.gameStarted,
+            }))
+            .filter((room) => /^[A-Z]{4}$/.test(room.roomId))
+            .sort((a, b) => a.roomId.localeCompare(b.roomId));
+    }
+
     getServerOptions() {
         return SERVER_OPTIONS;
     }

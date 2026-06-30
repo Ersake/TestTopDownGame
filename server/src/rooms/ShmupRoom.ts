@@ -677,7 +677,14 @@ function normalizeAttackDirection(direction: unknown, fallback: string): string 
 // Tracks codes in use to avoid collisions within the same server process.
 const _usedCodes = new Set<string>();
 
-export class ShmupRoom extends Room<GameRoomState> {
+interface ShmupRoomMetadata {
+    mode: string;
+    gameStarted: boolean;
+    gameOver: boolean;
+    activeMapName: string;
+}
+
+export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     maxClients = 8;
 
     private serverPlayers       = new Map<string, ServerPlayer>();
@@ -732,6 +739,17 @@ export class ShmupRoom extends Room<GameRoomState> {
         console.log(`[ShmupRoom ${this.roomId}] ${event}${details ? `: ${details}` : ""}`);
     }
 
+    private updateRoomListingMetadata(): void {
+        void this.setMetadata({
+            mode: this.state.mode,
+            gameStarted: this.state.gameStarted,
+            gameOver: this.state.gameOver,
+            activeMapName: this.state.activeMapName || "",
+        }).catch((error) => {
+            console.warn(`[ShmupRoom ${this.roomId}] unable to update room listing metadata:`, error);
+        });
+    }
+
     async onCreate(options: { mode?: unknown; mapName?: unknown } = {}) {
         this.roomId = this.generateRoomCode();
         const state = new GameRoomState();
@@ -756,6 +774,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             }
         }
         if (!isMapEditor) this.generateTrees();
+        this.updateRoomListingMetadata();
         this.logRoomEvent("room created", {
             mode: state.mode,
             map: this.state.activeMapName || "none",
@@ -2808,12 +2827,14 @@ export class ShmupRoom extends Room<GameRoomState> {
             this.state.waveNumber = 0;
             this.state.gameOverCountdown = 0;
             if (!this.isMapEditor()) this.startEnemyWaveSchedule();
+            this.updateRoomListingMetadata();
             this.logRoomEvent("game started", {
                 players: this.state.players.size,
                 mode: this.state.mode,
                 map: this.state.activeMapName || "none",
             });
         }
+        this.updateRoomListingMetadata();
         this.logRoomEvent("player joined", {
             playerId: client.sessionId,
             players: this.state.players.size,
@@ -2943,6 +2964,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.state.gameOverCountdown = 0;
         this.gameOverRestartMs = 0;
         if (this.state.gameStarted && this.state.players.size > 0) this.startEnemyWaveSchedule();
+        this.updateRoomListingMetadata();
     }
 
     onLeave(client: Client) {
@@ -2957,6 +2979,7 @@ export class ShmupRoom extends Room<GameRoomState> {
             gameOver: this.state.gameOver,
         });
         this.checkAllDead();
+        this.updateRoomListingMetadata();
     }
 
     onDispose() {
@@ -6040,6 +6063,7 @@ export class ShmupRoom extends Room<GameRoomState> {
         this.activeAxeAttacks = [];
         this.gameOverRestartMs = GAME_OVER_RESTART_SECONDS * 1000;
         this.state.gameOverCountdown = GAME_OVER_RESTART_SECONDS;
+        this.updateRoomListingMetadata();
         this.serverPlayers.forEach((sp) => {
             sp.vx = 0;
             sp.vy = 0;

@@ -32,7 +32,7 @@ The server is authoritative. Clients send player intent and render Colyseus sche
 The Phaser client is responsible for:
 
 - Booting scenes and loading assets.
-- Presenting the lobby create/join room-code UI.
+- Presenting the lobby create/join room-code UI and active-room sidebar.
 - Sending input and attack intent to the server.
 - Mirroring Colyseus schema state with sprites, UI, camera, animations, and audio.
 - Playing one-shot presentation effects from server messages.
@@ -44,7 +44,7 @@ Important client files:
 |---|---|
 | `src/main.js` | Creates the Phaser game and registers scenes. |
 | `src/scenes/Preloader.js` | Loads all assets registered in `src/assets.js`, then starts `Lobby`. |
-| `src/scenes/Lobby.js` | Creates rooms and joins rooms by 4-letter room code. |
+| `src/scenes/Lobby.js` | Creates rooms, joins rooms by 4-letter room code, and lists joinable active rooms. |
 | `src/scenes/Game.js` | Renders synced state, sends input, handles UI/audio presentation. |
 | `src/network/RoomClient.js` | Owns the Colyseus client and current room reference. |
 | `src/assets.js` | Asset registry consumed by the preloader. |
@@ -80,7 +80,8 @@ Important server files:
 3. `Preloader` loads assets from `src/assets.js` and starts `Lobby`.
 4. In `Lobby`, a player can:
    - create a new `"shmup_room"` via `RoomClient.createRoom()`, or
-   - join an existing room by code via `RoomClient.joinRoom(code)`.
+   - join an existing room by code via `RoomClient.joinRoom(code)`, or
+   - join a listed active room from the sidebar.
 5. The server assigns new rooms a 4-letter uppercase room ID.
 6. After a room is created or joined, the client starts `Game`.
 7. `Game` registers Colyseus state listeners, renders existing state, and starts sending input.
@@ -110,6 +111,8 @@ Important server files:
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
 | `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
+
+The lobby sidebar uses `RoomClient.listPlayableRooms()`, which calls Colyseus `getAvailableRooms("shmup_room")` and filters room metadata to show only joinable normal game rooms with connected players. `ShmupRoom.ts` keeps listing metadata current during room create, join, leave, game-over, and reset events; the room tick does not update lobby listing metadata.
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
