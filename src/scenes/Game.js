@@ -69,7 +69,7 @@ const BOW_VOLLEY_DOT_LENGTH = 10;
 const BOW_VOLLEY_DOT_GAP = 8;
 const BOW_VOLLEY_TELEGRAPH_FALLBACK_MS = 700;
 const ENEMY_ATTACK_RANGE = 26;
-const BASE_CASTER_CAST_RANGE = 360;
+const BASE_CASTER_CAST_RANGE = 375;
 const CASTER_CAST_RANGE = BASE_CASTER_CAST_RANGE;
 const DARK_KNIGHT_DETECTION_RANGE = BASE_CASTER_CAST_RANGE;
 const DARK_KNIGHT_AOE_RADIUS = 88;
@@ -414,6 +414,7 @@ export class Game extends Phaser.Scene {
         this.cancelBowChargeForMovement();
         this.updateBowChargeAim();
         this.updateBowVolleyAim();
+        this.updateBowVolleyAutoRepeat();
         this.updateHeldAttack();
         this.updateAxeWhirlwind();
         this.updateAxeWhirlwindSounds();
@@ -553,6 +554,7 @@ export class Game extends Phaser.Scene {
         this.nextBowAimSendAt = 0;
         this.bowVolleyPointerId = null;
         this.bowVolleyPointer = null;
+        this.bowVolleyAutoRepeatPointer = null;
         this.nextBowVolleyAimSendAt = 0;
         this.bowVolleyPreview = null;
         this.bowVolleyTelegraphs = new Map();
@@ -611,7 +613,7 @@ export class Game extends Phaser.Scene {
             }
             if (event?.button === 2 || (typeof event?.buttons === 'number' && (event.buttons & 2) === 0)) {
                 this.stopAxeWhirlwind();
-                this.releaseBowVolley();
+                this.clearBowVolleyAutoRepeatIfReleased();
             }
         };
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
@@ -2669,7 +2671,7 @@ export class Game extends Phaser.Scene {
                 this.stopAxeWhirlwind();
             }
             if (this.bowVolleyPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
-                this.releaseBowVolley(pointer);
+                this.clearBowVolleyAutoRepeatIfReleased(pointer);
             }
         });
 
@@ -3215,10 +3217,19 @@ export class Game extends Phaser.Scene {
                     const repeatBowChargePointer = isLocal && this.bowChargePointer?.leftButtonDown?.()
                         ? this.bowChargePointer
                         : null;
+                    const repeatBowVolleyPointer = isLocal && this.bowVolleyPointer && this.isRightMouseButtonDown(this.bowVolleyPointer)
+                        ? this.bowVolleyPointer
+                        : null;
                     if (isLocal) {
                         this.bowChargePointerId = null;
                         this.bowChargePointer = null;
                         this.nextBowAimSendAt = 0;
+                        this.clearBowVolleyPreview();
+                        this.bowVolleyPointerId = null;
+                        this.bowVolleyPointer = null;
+                        this.bowChargeMoveState = null;
+                        this.nextBowVolleyAimSendAt = 0;
+                        this.bowVolleyAutoRepeatPointer = repeatBowVolleyPointer;
                     }
                     this.updatePlayerBowChargeBar(playerSessionId);
                     this.clearBowPresentationState(playerSessionId, { updateAnimation: true });
@@ -4952,6 +4963,7 @@ export class Game extends Phaser.Scene {
         this.clearBowPresentationState(sessionId, { updateAnimation: true });
         this.stopHeldAttack();
         this.stopAxeWhirlwind();
+        this.bowVolleyAutoRepeatPointer = null;
 
         this.bowVolleyPointerId = pointer.id;
         this.bowVolleyPointer = pointer;
@@ -5012,17 +5024,44 @@ export class Game extends Phaser.Scene {
         this.bowVolleyPointer = null;
         this.bowChargeMoveState = null;
         this.nextBowVolleyAimSendAt = 0;
+        this.bowVolleyAutoRepeatPointer = null;
     }
 
     cancelBowVolley() {
-        if (!this.bowVolleyPointer && this.bowVolleyPointerId === null && !this.bowVolleyPreview) return;
+        if (!this.bowVolleyPointer && this.bowVolleyPointerId === null && !this.bowVolleyPreview && !this.bowVolleyAutoRepeatPointer) return;
         RoomClient.sendBowVolleyCancel();
         this.clearBowVolleyPreview();
         this.bowVolleyPointerId = null;
         this.bowVolleyPointer = null;
         this.bowChargeMoveState = null;
         this.nextBowVolleyAimSendAt = 0;
+        this.bowVolleyAutoRepeatPointer = null;
         if (this.localSessionId) this.clearBowPresentationState(this.localSessionId, { updateAnimation: true });
+    }
+
+    updateBowVolleyAutoRepeat() {
+        const pointer = this.bowVolleyAutoRepeatPointer;
+        if (!pointer) return;
+        if (!this.isRightMouseButtonDown(pointer)) {
+            this.bowVolleyAutoRepeatPointer = null;
+            return;
+        }
+        if (this.bowVolleyPointer || this.bowVolleyPointerId !== null) return;
+
+        const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        if (!animationState || animationState.dead || animationState.activeItem !== ITEM_WOOD_BOW) {
+            this.bowVolleyAutoRepeatPointer = null;
+            return;
+        }
+        if (animationState.bowCharging || animationState.axeWhirlwind || this.isBuildModeActive) return;
+        if ((animationState.bowVolleyCooldownProgress || this.localBowVolleyCooldownProgress || 0) > 0) return;
+
+        this.startBowVolley(pointer);
+    }
+
+    clearBowVolleyAutoRepeatIfReleased(pointer = this.bowVolleyAutoRepeatPointer) {
+        if (!this.bowVolleyAutoRepeatPointer) return;
+        if (!this.isRightMouseButtonDown(pointer)) this.bowVolleyAutoRepeatPointer = null;
     }
 
     createBowVolleyPreview() {

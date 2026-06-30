@@ -147,9 +147,9 @@ const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
 const ENEMY_TYPE_CASTER = 3;
 const ENEMY_TYPE_DARK_KNIGHT = 4;
 const MIN_BOW_CHARGE_MS = 100;
-const BASE_CASTER_CAST_RANGE = 360;
+const BASE_CASTER_CAST_RANGE = 375;
 const CASTER_CAST_RANGE = BASE_CASTER_CAST_RANGE;
-const CASTER_CHARGE_MS = 1000 / 1.25;
+const CASTER_CHARGE_MS = 1100;
 const CASTER_ATTACK_MS = 500;
 const CASTER_FIREBALL_SPEED = 225;
 const CASTER_FIREBALL_DAMAGE = 1;
@@ -4122,6 +4122,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         sp.vy = 0;
                         player.x = sp.bowVolleyLockX;
                         player.y = sp.bowVolleyLockY;
+                        if (sp.bowChargeMs >= chargeMs) this.releaseBowVolley(sid, {
+                            targetX: sp.bowVolleyTargetX,
+                            targetY: sp.bowVolleyTargetY,
+                        });
                     });
                     return;
                 }
