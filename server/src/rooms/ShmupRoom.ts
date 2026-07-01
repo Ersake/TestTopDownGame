@@ -5040,12 +5040,6 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 const dx = target.targetX - enemy.x;
                 const dy = target.targetY - enemy.y;
                 const distance = Math.hypot(dx, dy);
-                const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
-                const hasMeleeLineOfSight = enemy.enemyType === ENEMY_TYPE_CASTER
-                    || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT
-                    || enemy.enemyType === ENEMY_TYPE_BOSS1
-                    ? false
-                    : this.hasEnemyLineOfSightToPlayer(enemy, se, target);
 
                 if (enemy.enemyType === ENEMY_TYPE_BOSS1) {
                     this.tickBoss1Enemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
@@ -5062,19 +5056,25 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     return;
                 }
 
+                const attackOrigin = { x: enemy.x, y: enemy.y };
+                const attackDirection = enemy.facingDirection || "S";
+                const meleeReachVector = this.findEnemyMeleeReachVector(attackOrigin, target.player);
+                const canMeleeReachPlayer = !!meleeReachVector;
+                const canStartMeleeAttack = canMeleeReachPlayer;
+
                 if (se.mode === "attack") {
                     enemy.action = "attack";
                     se.modeMs = Math.max(0, se.modeMs - dtMs);
                     if (se.modeMs === 0) {
-                        se.mode = isInAttackRange && hasMeleeLineOfSight ? "windup" : "chase";
+                        se.mode = canStartMeleeAttack ? "windup" : "chase";
                         se.modeMs = se.mode === "windup" ? ENEMY1_WINDUP_MS : 0;
                         enemy.action = se.mode === "windup" ? "idle" : "run";
                     }
                     return;
                 }
 
-                if (isInAttackRange && hasMeleeLineOfSight) {
-                    this.faceEnemyTowardPoint(enemy, target.targetX, target.targetY);
+                if (canStartMeleeAttack) {
+                    this.faceEnemyTowardPoint(enemy, target.player.x, this.playerHitboxCenterY(target.player.y));
                     enemy.action = "idle";
                     if (se.mode !== "windup") {
                         se.mode = "windup";
@@ -5088,9 +5088,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         se.modeMs = ENEMY1_ATTACK_MS;
                         enemy.action = "attack";
                         enemy.attackSeq++;
-                        const attackOrigin = { x: enemy.x, y: enemy.y };
-                        const attackDirection = enemy.facingDirection || "S";
-                        const attackVector = this.getEnemyAttackVector(attackOrigin, target, attackDirection);
+                        const attackVector = meleeReachVector || this.getEnemyMeleeAttackVector(attackOrigin, target, attackDirection);
                         setTimeout(() => {
                             this.applyEnemyAttackImpact(id, attackOrigin, attackVector);
                         }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
@@ -5103,11 +5101,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 enemy.action = "run";
                 if (distance <= 0) return;
 
-                const remainingDistance = Math.max(0, distance - ENEMY1_PLAYER_ATTACK_RANGE);
+                const remainingDistance = canMeleeReachPlayer ? Math.max(0, distance - ENEMY1_PLAYER_ATTACK_RANGE) : distance;
                 if (remainingDistance <= ENEMY1_MIN_CHASE_STEP) {
                     enemy.action = "idle";
                     se.path = [];
-                    if (hasMeleeLineOfSight) {
+                    if (canMeleeReachPlayer) {
                         se.mode = "windup";
                         se.modeMs = ENEMY1_WINDUP_MS;
                     }
@@ -6542,16 +6540,64 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             if (!sp || !sp.alive || player.isDead) return;
 
             if (!overlaps(player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
-            if (this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, player.x, this.playerHitboxCenterY(player.y), 1, true)) return;
+            if (this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, player.x, this.playerHitboxCenterY(player.y), 1, true)) {
+                if (!this.findEnemyMeleeReachVector(attackOrigin, player)) return;
+                this.incrementEnemyCounter("meleeCornerReachHits");
+            }
 
             const hurt = this.damagePlayer(playerId, sp, player, ENEMY1_ATTACK_DAMAGE, enemyId);
             if (hurt) this.broadcast("playerHurt", hurt);
         });
     }
 
+    private findEnemyMeleeReachVector(attackOrigin: AttackOrigin, player: PlayerState): AttackVector | null {
+        const playerHitboxY = this.playerHitboxCenterY(player.y);
+
+        const reachRadius = ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
+        if (!circleOverlapsAabb(attackOrigin.x, attackOrigin.y, reachRadius, player.x, playerHitboxY, PLAYER_HW, PLAYER_HH)) {
+            return null;
+        }
+
+        const sampleInsetX = Math.max(1, PLAYER_HW - 1);
+        const sampleInsetY = Math.max(1, PLAYER_HH - 1);
+        const samples = [
+            { x: player.x, y: playerHitboxY },
+            { x: player.x - sampleInsetX, y: playerHitboxY },
+            { x: player.x + sampleInsetX, y: playerHitboxY },
+            { x: player.x, y: playerHitboxY - sampleInsetY },
+            { x: player.x, y: playerHitboxY + sampleInsetY },
+            { x: player.x - sampleInsetX, y: playerHitboxY - sampleInsetY },
+            { x: player.x + sampleInsetX, y: playerHitboxY - sampleInsetY },
+            { x: player.x - sampleInsetX, y: playerHitboxY + sampleInsetY },
+            { x: player.x + sampleInsetX, y: playerHitboxY + sampleInsetY },
+        ];
+
+        for (const sample of samples) {
+            const dx = sample.x - attackOrigin.x;
+            const dy = sample.y - attackOrigin.y;
+            const distance = Math.hypot(dx, dy);
+            if (distance <= 0.0001) continue;
+            const vector = { x: dx / distance, y: dy / distance };
+            const hitX = attackOrigin.x + vector.x * ENEMY1_ATTACK_HIT_OFFSET;
+            const hitY = attackOrigin.y + vector.y * ENEMY1_ATTACK_HIT_OFFSET;
+            if (!overlaps(player.x, playerHitboxY, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) continue;
+            if (this.segmentOverlapsLayer3Table(attackOrigin.x, attackOrigin.y, sample.x, sample.y, 1)) continue;
+            if (!this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, sample.x, sample.y, 1)) return vector;
+        }
+        return null;
+    }
+
     private getEnemyAttackVector(attackOrigin: AttackOrigin, target: EnemyTarget, fallbackDirection: string): AttackVector {
         const dx = target.targetX - attackOrigin.x;
         const dy = target.targetY - attackOrigin.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > 0) return { x: dx / distance, y: dy / distance };
+        return DIRECTION_VECTORS[fallbackDirection] || DIRECTION_VECTORS.S;
+    }
+
+    private getEnemyMeleeAttackVector(attackOrigin: AttackOrigin, target: EnemyTarget, fallbackDirection: string): AttackVector {
+        const dx = target.player.x - attackOrigin.x;
+        const dy = this.playerHitboxCenterY(target.player.y) - attackOrigin.y;
         const distance = Math.hypot(dx, dy);
         if (distance > 0) return { x: dx / distance, y: dy / distance };
         return DIRECTION_VECTORS[fallbackDirection] || DIRECTION_VECTORS.S;
