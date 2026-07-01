@@ -184,6 +184,7 @@ const BOSS1_BOMB_FUSE_MS = 2500;
 const BOSS1_BOMB_DAMAGE = 5;
 const BOSS1_BOMB_RADIUS = BOW_VOLLEY_RADIUS * 1.25;
 const BOSS1_XP = 15;
+const RADIO_TRACK_COUNT = 7;
 const ENEMY1_SPEED = 100;
 const ENEMY2_SPEED = 114.75;
 const ENEMY1_HEALTH = 4;
@@ -4772,7 +4773,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         const waveNumber = waveIndex + 1;
         this.state.waveNumber = waveNumber;
-        this.broadcast("enemyWaveStarted", { minute: waveIndex, waveIndex, waveNumber, startedAtUnixMs: Date.now() });
+        const startedAtUnixMs = Date.now();
+        this.broadcast("enemyWaveStarted", {
+            minute: waveIndex,
+            waveIndex,
+            waveNumber,
+            startedAtUnixMs,
+            radioTrackIndex: waveIndex % RADIO_TRACK_COUNT,
+            radioStartUnixMs: startedAtUnixMs + 1000,
+        });
 
         let spawnIndex = 0;
         for (let i = 0; i < meleeCount; i++) {

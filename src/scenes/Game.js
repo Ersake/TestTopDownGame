@@ -609,6 +609,7 @@ export class Game extends Phaser.Scene {
         this.currentRadioSound = null;
         this.currentRadioKey = null;
         this.lastRadioKey = null;
+        this.sharedRadioWave = null;
         this.radioFadeTween = null;
         this.radioFadeState = null;
         this.radioFadeInEvent = null;
@@ -639,6 +640,7 @@ export class Game extends Phaser.Scene {
             this.syncRemoteAttackSeqBaselines();
             this.remoteAttackAudioDirty = false;
             this.suppressRemoteAttackAudioUntil = performance.now() + REMOTE_ATTACK_AUDIO_RESUME_SUPPRESS_MS;
+            this.syncRadioToSharedWave({ force: true });
         };
         this.handleVisibilityChange = () => {
             if (document.hidden) {
@@ -3132,6 +3134,7 @@ export class Game extends Phaser.Scene {
         room.onMessage('enemyWaveStarted', (event) => {
             const startedAtUnixMs = Number(event?.startedAtUnixMs);
             const eventAgeMs = Date.now() - startedAtUnixMs;
+            this.handleSharedRadioWave(event);
             if (!this.isDocumentActive()
                 || !Number.isFinite(startedAtUnixMs)
                 || startedAtUnixMs < this.lastTabActiveAtUnixMs
@@ -3140,7 +3143,6 @@ export class Game extends Phaser.Scene {
             this.playSfx(ASSETS.audio.enemyWaveHorn.key, ENEMY_WAVE_HORN_SOUND_VOLUME, {
                 serverEvent: true,
             });
-            this.scheduleRadioSongAfterHorn();
         });
 
         room.onMessage('treesReplenished', () => {
@@ -5995,23 +5997,52 @@ export class Game extends Phaser.Scene {
         }
     }
 
-    scheduleRadioSongAfterHorn() {
+    handleSharedRadioWave(event) {
         if (!RADIO_PLAYLIST.length || this.isMapEditor) return;
 
-        this.cancelRadioFadeInEvent();
-        this.stopRadioSong(true);
+        const radioTrackIndex = Number(event?.radioTrackIndex);
+        const startedAtUnixMs = Number(event?.startedAtUnixMs);
+        const radioStartUnixMs = Number(event?.radioStartUnixMs);
+        if (!Number.isFinite(radioTrackIndex) || !Number.isFinite(startedAtUnixMs)) return;
+
+        const trackIndex = Phaser.Math.Wrap(Math.floor(radioTrackIndex), 0, RADIO_PLAYLIST.length);
+        const startUnixMs = Number.isFinite(radioStartUnixMs) ? radioStartUnixMs : startedAtUnixMs + RADIO_FADE_IN_DELAY_MS;
+        this.sharedRadioWave = {
+            waveIndex: Number(event?.waveIndex) || 0,
+            waveNumber: Number(event?.waveNumber) || 0,
+            key: RADIO_PLAYLIST[trackIndex],
+            radioStartUnixMs: startUnixMs,
+        };
         this.radioPlayingWave = true;
-        this.radioFadeInEvent = this.time.delayedCall(RADIO_FADE_IN_DELAY_MS, () => {
-            this.radioFadeInEvent = null;
-            if (!this.radioPlayingWave || RoomClient.room?.state?.gameOver) return;
-            if ((RoomClient.room?.state?.nextWaveCountdown || 0) > 0) return;
-            this.startNextRadioSong();
-        });
+        this.syncRadioToSharedWave();
     }
 
-    startNextRadioSong() {
-        const key = this.getNextRadioSongKey();
+    syncRadioToSharedWave({ force = false } = {}) {
+        const sync = this.sharedRadioWave;
+        if (!sync?.key || this.isMapEditor) return;
+        if (!this.isDocumentActive()) return;
+        const state = RoomClient.room?.state;
+        if (state?.gameOver || (state?.nextWaveCountdown || 0) > 0) return;
+
+        this.cancelRadioFadeInEvent();
+        const delayMs = sync.radioStartUnixMs - Date.now();
+        if (delayMs > 0) {
+            if (force) this.stopRadioSong(true);
+            this.radioPlayingWave = true;
+            this.radioFadeInEvent = this.time.delayedCall(delayMs, () => {
+                this.radioFadeInEvent = null;
+                this.syncRadioToSharedWave({ force: true });
+            });
+            return;
+        }
+
+        const seekSeconds = this.getRadioSeekSeconds(sync.key, Math.max(0, -delayMs) / 1000);
+        this.startSharedRadioSong(sync.key, seekSeconds, { force });
+    }
+
+    startSharedRadioSong(key, seekSeconds = 0, { force = false } = {}) {
         if (!key) return;
+        if (!force && this.currentRadioKey === key && this.currentRadioSound?.isPlaying) return;
 
         this.stopRadioSong(true);
         this.radioPlayingWave = true;
@@ -6019,7 +6050,8 @@ export class Game extends Phaser.Scene {
         this.lastRadioKey = key;
         const sound = this.sound.add(key, { loop: true, volume: 0 });
         this.currentRadioSound = sound;
-        const didPlay = sound.play();
+        const playConfig = seekSeconds > 0 ? { seek: seekSeconds } : undefined;
+        const didPlay = sound.play(playConfig);
         if (!didPlay) {
             sound.destroy();
             if (this.currentRadioSound === sound) {
@@ -6030,6 +6062,17 @@ export class Game extends Phaser.Scene {
         }
 
         this.fadeRadioTo(1, RADIO_FADE_IN_MS);
+    }
+
+    getRadioSeekSeconds(key, elapsedSeconds) {
+        if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return 0;
+        const cache = this.cache?.audio;
+        const audio = cache?.get?.(key);
+        const duration = Number(audio?.duration);
+        if (Number.isFinite(duration) && duration > 0) {
+            return elapsedSeconds % duration;
+        }
+        return elapsedSeconds;
     }
 
     stopRadioSong(immediate = false) {
