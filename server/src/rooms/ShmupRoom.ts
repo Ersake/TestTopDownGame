@@ -800,6 +800,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private recordingEnemyMetrics = false;
     private enemyPathBuildsThisTick = 0;
     private enemyFlowBuildsThisTick = 0;
+    private radioPlaylistOrder: number[] = [];
+    private lastRadioTrackIndex = -1;
 
     private generateRoomCode(): string {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -4670,7 +4672,28 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.state.waveNumber = 0;
         this.state.currentRadioTrackIndex = -1;
         this.state.currentRadioStartUnixMs = 0;
+        this.shuffleRadioPlaylist();
         this.startNextWaveReadyCountdown();
+    }
+
+    private shuffleRadioPlaylist(): void {
+        const order = Array.from({ length: RADIO_TRACK_COUNT }, (_, index) => index);
+        for (let i = order.length - 1; i > 0; i--) {
+            const j = rndInt(0, i);
+            [order[i], order[j]] = [order[j], order[i]];
+        }
+        if (order.length > 1 && order[0] === this.lastRadioTrackIndex) {
+            const swapIndex = order.findIndex((trackIndex) => trackIndex !== this.lastRadioTrackIndex);
+            if (swapIndex > 0) [order[0], order[swapIndex]] = [order[swapIndex], order[0]];
+        }
+        this.radioPlaylistOrder = order;
+    }
+
+    private getRadioTrackIndexForWave(waveIndex: number): number {
+        if (this.radioPlaylistOrder.length !== RADIO_TRACK_COUNT) this.shuffleRadioPlaylist();
+        const trackIndex = this.radioPlaylistOrder[waveIndex % this.radioPlaylistOrder.length] ?? 0;
+        this.lastRadioTrackIndex = trackIndex;
+        return trackIndex;
     }
 
     private tickEnemyWaves(metrics?: TickMetrics) {
@@ -4818,7 +4841,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const waveNumber = waveIndex + 1;
         this.state.waveNumber = waveNumber;
         const startedAtUnixMs = Date.now();
-        const radioTrackIndex = waveIndex % RADIO_TRACK_COUNT;
+        const radioTrackIndex = this.getRadioTrackIndexForWave(waveIndex);
         const radioStartUnixMs = startedAtUnixMs + 1000;
         this.state.currentRadioTrackIndex = radioTrackIndex;
         this.state.currentRadioStartUnixMs = radioStartUnixMs;
