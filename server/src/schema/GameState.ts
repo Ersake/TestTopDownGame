@@ -172,4 +172,6 @@ export class GameRoomState extends Schema {
     @type("boolean") gameStarted: boolean = false;
     @type("boolean") gameOver:    boolean = false;
     @type("int8")    gameOverCountdown: number = 0;
+    @type("int8")    gameOverRetryReadyPlayers: number = 0;
+    @type("int8")    gameOverRetryTotalPlayers: number = 0;
 }

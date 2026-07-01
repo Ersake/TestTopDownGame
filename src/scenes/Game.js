@@ -738,6 +738,22 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 8, align: 'center',
         }).setOrigin(0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0);
 
+        this.retryButton = this.add.text(this.centreX, this.centreY + 88, 'Retry', {
+            fontFamily: 'Arial Black', fontSize: 34, color: '#ddffdd',
+            stroke: '#000000', strokeThickness: 7, align: 'center',
+        }).setOrigin(0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        this.retryButton.on('pointerover', () => this.retryButton.setColor('#ffffff'));
+        this.retryButton.on('pointerout', () => this.retryButton.setColor('#ddffdd'));
+        this.retryButton.on('pointerdown', () => {
+            this.retryGame();
+        });
+
+        this.retryReadyText = this.add.text(this.centreX + 92, this.centreY + 88, '', {
+            fontFamily: 'Arial Black', fontSize: 22, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5, align: 'left',
+        }).setOrigin(0, 0.5).setDepth(UI_DEPTH).setVisible(false).setScrollFactor(0);
+
         this.quitButton = this.add.text(this.centreX, this.centreY + 118, 'Quit', {
             fontFamily: 'Arial Black', fontSize: 34, color: '#ffdddd',
             stroke: '#000000', strokeThickness: 7, align: 'center',
@@ -815,6 +831,8 @@ export class Game extends Phaser.Scene {
             this.buffListText,
             this.skillPointText,
             this.gameOverText,
+            this.retryButton,
+            this.retryReadyText,
             this.quitButton,
             this.roomCodeText,
             this.nextWaveCountdownText,
@@ -1854,6 +1872,11 @@ export class Game extends Phaser.Scene {
     }
 
     handleReadyPressed(event) {
+        if (RoomClient.room?.state?.gameOver) {
+            event?.preventDefault?.();
+            this.retryGame();
+            return;
+        }
         if (!this.isNextWaveReadyPromptVisible()) return;
         event?.preventDefault?.();
         RoomClient.sendReadyForNextWave();
@@ -2743,6 +2766,7 @@ export class Game extends Phaser.Scene {
             if (this.isMapEditor) {
                 if (
                     gameObjects.includes(this.quitButton)
+                    || gameObjects.includes(this.retryButton)
                     || gameObjects.includes(this.hitboxToggleButton)
                     || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 ) {
@@ -2778,6 +2802,7 @@ export class Game extends Phaser.Scene {
             if (
                 gameObjects.includes(this.hitboxToggleButton)
                 || gameObjects.includes(this.quitButton)
+                || gameObjects.includes(this.retryButton)
                 || gameObjects.some(gameObject => this.isHotbarGameObject(gameObject))
                 || gameObjects.some(gameObject => this.craftingUiObjects.has(gameObject))
                 || gameObjects.some(gameObject => this.enchantmentUiObjects.has(gameObject))
@@ -4201,6 +4226,8 @@ export class Game extends Phaser.Scene {
                 this.updateGameOverCountdown(countdown);
             }
         });
+        state.listen('gameOverRetryReadyPlayers', () => this.updateGameOverRetryUi());
+        state.listen('gameOverRetryTotalPlayers', () => this.updateGameOverRetryUi());
 
         state.listen('gameStarted', (started) => {
             if (started) {
@@ -4221,8 +4248,13 @@ export class Game extends Phaser.Scene {
                 this.updateNextWaveReadyUi();
                 this.updateGameOverCountdown(state.gameOverCountdown || 10);
                 this.gameOverText.setVisible(true);
+                this.retryButton
+                    .setPosition(this.centreX, this.centreY + 88)
+                    .setVisible(true)
+                    .setInteractive({ useHandCursor: true });
+                this.updateGameOverRetryUi();
                 this.quitButton
-                    .setPosition(this.centreX, this.centreY + 118)
+                    .setPosition(this.centreX, this.centreY + 144)
                     .setVisible(true);
                 this.hitboxToggleButton.setVisible(false);
                 this.setDebugRoundControlsVisible(false);
@@ -4230,6 +4262,9 @@ export class Game extends Phaser.Scene {
                 this.gameStarted = true;
                 this.suppressLevelResetEffects();
                 this.gameOverText.setVisible(false);
+                this.retryButton.setVisible(false);
+                this.retryButton.disableInteractive();
+                this.retryReadyText.setVisible(false);
                 this.quitButton.setVisible(false);
                 this.hitboxToggleButton.setVisible(false);
                 this.setDebugRoundControlsVisible(false);
@@ -4238,7 +4273,21 @@ export class Game extends Phaser.Scene {
         });
 
         // Apply current state if we joined a room already in progress
-        if (state.gameStarted) {
+        if (state.gameOver) {
+            this.gameStarted = false;
+            this.stopRadioSong(true);
+            this.updateGameOverCountdown(state.gameOverCountdown || 10);
+            this.gameOverText.setVisible(true);
+            this.retryButton
+                .setPosition(this.centreX, this.centreY + 88)
+                .setVisible(true)
+                .setInteractive({ useHandCursor: true });
+            this.quitButton
+                .setPosition(this.centreX, this.centreY + 144)
+                .setVisible(true);
+            this.updateGameOverRetryUi();
+            this.tutorialText.setVisible(false);
+        } else if (state.gameStarted) {
             this.gameStarted = true;
             this.tutorialText.setVisible(false);
         } else {
@@ -4306,11 +4355,37 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setText(`Game Over\nRestarting in ${safeCountdown}`);
     }
 
+    updateGameOverRetryUi() {
+        if (!this.retryButton || !this.retryReadyText) return;
+        const state = RoomClient.room?.state;
+        const visible = !!state?.gameOver;
+        this.retryButton.setVisible(visible);
+        if (!visible) {
+            this.retryReadyText.setVisible(false);
+            return;
+        }
+
+        const readyPlayers = Math.max(0, Math.floor(state?.gameOverRetryReadyPlayers || 0));
+        const totalPlayers = Math.max(0, Math.floor(state?.gameOverRetryTotalPlayers || state?.players?.size || 0));
+        this.retryReadyText
+            .setText(`Ready ${readyPlayers}/${totalPlayers}`)
+            .setPosition(this.retryButton.x + this.retryButton.width * 0.5 + 22, this.retryButton.y)
+            .setVisible(totalPlayers > 1);
+    }
+
+    retryGame() {
+        if (!RoomClient.room?.state?.gameOver) return;
+        RoomClient.sendRetryGame();
+    }
+
     async quitToLobby() {
         if (this.isQuittingToLobby) return;
         this.isQuittingToLobby = true;
 
         this.gameOverText.setVisible(false);
+        this.retryButton.setVisible(false);
+        this.retryButton.disableInteractive();
+        this.retryReadyText.setVisible(false);
         this.quitButton.setVisible(false);
         this.hitboxToggleButton.setVisible(false);
         this.setDebugRoundControlsVisible(false);
@@ -7181,6 +7256,9 @@ export class Game extends Phaser.Scene {
         this.nextWaveCountdownText?.setVisible(false);
         this.nextWaveReadyText?.setVisible(false);
         this.nextWavePromptText?.setVisible(false);
+        this.retryButton?.setVisible(false);
+        this.retryButton?.disableInteractive();
+        this.retryReadyText?.setVisible(false);
         if (this.treeReplenishText) {
             this.tweens.killTweensOf(this.treeReplenishText);
             this.treeReplenishText.setAlpha(0).setVisible(false);

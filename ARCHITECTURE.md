@@ -102,6 +102,7 @@ Important server files:
 | `"bowVolleyStart"`, `"bowVolleyAim"`, `"bowVolleyRelease"`, `"bowVolleyCancel"` | Bow Volley input helpers | Starts, updates, releases, or cancels server-owned bow secondary targeting. Volley reuses synced bow charge state and auto-releases after full charge. |
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"readyForNextWave"` | `RoomClient.sendReadyForNextWave()` | Marks the player ready when they press R during the server-owned wave countdown; if all connected players are ready, the next wave starts early. |
+| `"retryGame"` | `RoomClient.sendRetryGame()` | Marks the player ready to retry during game over; one-player rooms restart immediately, multiplayer rooms restart when all connected players are ready. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
 | `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"` | Placement helpers | Requests server-authoritative deployable placement or hammer removal. |
@@ -177,6 +178,7 @@ Durable game facts should usually be schema state, not transient messages.
 | `gameStarted` | `boolean` | Whether simulation has started. |
 | `gameOver` | `boolean` | Whether the room is in game-over state. |
 | `gameOverCountdown` | `int8` | Countdown value displayed during game-over flow. |
+| `gameOverRetryReadyPlayers`, `gameOverRetryTotalPlayers` | `int8` | Retry ready-up fraction displayed next to the game-over Retry button. |
 | `mode` | `string` | Room mode, usually `"game"` or development-only `"map-editor"`. |
 | `activeMapName` | `string` | Saved map loaded into a normal game room, or empty when none is active. |
 
@@ -220,7 +222,7 @@ Current server-owned systems include:
 - Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Enemy targeting resolves each player to the walkable navigation cell nearest to the player's actual foot position before range, line-of-sight, aim, flow-field, and rush decisions; enemy line-of-sight treats solid map cells and layer-3 tables as blockers, melee and caster line-of-sight also check the real player hitbox center and foot, and melee/Dark Knight impact damage is blocked if a solid map cell separates the attack from the player. Caster fireballs aim at the real player hitbox center after line-of-sight is confirmed, not at the resolved navigation target cell. Actual damage overlap still uses the real player hitbox. Dark Knight hit stun is 50% as effective as normal enemy hit stun; Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Boss1 spawns once at the beginning of wave 5, has 50 health, drops 15 XP, chases the closest player with normal enemy flow-field movement at 144 px/s, and uses caster range without line-of-sight to place a fixed bomb circle at the target player's feet. Boss bomb damage is server-authoritative: after a 2.5-second fuse, the room damages living players whose hitbox overlaps the 1.25x Volley-radius circle for 5 damage and broadcasts impact presentation. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio plus deterministic shared radio playback. Clients store the wave radio track and start timestamp even while inactive, then seek to the elapsed offset when focus returns so all tabs hear the same track position. After clearing wave 9 and every 10 waves after that, the server tops living trees back up to 25 in valid random spots and broadcasts `"treesReplenished"` for the client toast.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
-- Player health, a narrow/tall shifted player damage hitbox, 150ms server-owned post-hit invulnerability, 2-second join/revive invulnerability, death, revive progress, revive completion, and game-over checks.
+- Player health, a narrow/tall shifted player damage hitbox, 150ms server-owned post-hit invulnerability, 2-second join/revive invulnerability, death, revive progress, revive completion, and game-over checks. Game over stops client radio playback; the Retry button sends a server-owned retry ready signal, immediately resetting one-player rooms and resetting multiplayer rooms once all connected players are ready.
 - Team score, player kills, and elapsed round time.
 
 ### Performance Sensitivity

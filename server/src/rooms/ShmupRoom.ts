@@ -781,6 +781,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private nextEnemySpawnAllowedAtMs = 0;
     private nextEnemyWaveStartMs: number | null = null;
     private nextWaveReadyPlayerIds = new Set<string>();
+    private gameOverRetryReadyPlayerIds = new Set<string>();
     private nextEnemyDiagnosticAtMs = 0;
     private campfireHealElapsedMs = 0;
     private gameOverRestartMs   = 0;
@@ -1057,6 +1058,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         this.onMessage("readyForNextWave", (client) => {
             this.readyPlayerForNextWave(client.sessionId);
+        });
+
+        this.onMessage("retryGame", (client) => {
+            this.readyPlayerForGameOverRetry(client.sessionId);
         });
     }
 
@@ -3116,6 +3121,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.state.waveNumber = 0;
         this.state.gameOver = false;
         this.state.gameOverCountdown = 0;
+        this.clearGameOverRetryReadyState();
         this.gameOverRestartMs = 0;
         if (this.state.gameStarted && this.state.players.size > 0) this.startEnemyWaveSchedule();
         this.updateRoomListingMetadata();
@@ -3127,6 +3133,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
         this.nextWaveReadyPlayerIds.delete(client.sessionId);
+        this.gameOverRetryReadyPlayerIds.delete(client.sessionId);
         if (this.nextEnemyWaveStartMs !== null) {
             this.updateNextWaveReadyState();
             if (this.areAllPlayersReadyForNextWave()) {
@@ -3134,6 +3141,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 this.state.nextWaveCountdown = 0;
             }
         }
+        this.updateGameOverRetryReadyState();
         this.logRoomEvent("player left", {
             playerId: client.sessionId,
             players: this.state.players.size,
@@ -4754,6 +4762,40 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private areAllPlayersReadyForNextWave(): boolean {
         const totalPlayers = this.state.players.size;
         return totalPlayers > 0 && this.nextWaveReadyPlayerIds.size >= totalPlayers;
+    }
+
+    private clearGameOverRetryReadyState(): void {
+        this.gameOverRetryReadyPlayerIds.clear();
+        if (this.state.gameOverRetryReadyPlayers !== 0) this.state.gameOverRetryReadyPlayers = 0;
+        if (this.state.gameOverRetryTotalPlayers !== 0) this.state.gameOverRetryTotalPlayers = 0;
+    }
+
+    private updateGameOverRetryReadyState(): void {
+        for (const sessionId of this.gameOverRetryReadyPlayerIds) {
+            if (!this.state.players.has(sessionId)) this.gameOverRetryReadyPlayerIds.delete(sessionId);
+        }
+
+        const totalPlayers = this.state.players.size;
+        const readyPlayers = Math.min(this.gameOverRetryReadyPlayerIds.size, totalPlayers);
+        this.state.gameOverRetryTotalPlayers = Math.min(totalPlayers, 127);
+        this.state.gameOverRetryReadyPlayers = Math.min(readyPlayers, 127);
+    }
+
+    private readyPlayerForGameOverRetry(sessionId: string): void {
+        if (!this.state.gameOver || this.isMapEditor()) return;
+        if (!this.state.players.has(sessionId)) return;
+
+        const totalPlayers = this.state.players.size;
+        if (totalPlayers <= 1) {
+            this.resetLevel();
+            return;
+        }
+
+        this.gameOverRetryReadyPlayerIds.add(sessionId);
+        this.updateGameOverRetryReadyState();
+        if (this.gameOverRetryReadyPlayerIds.size >= totalPlayers) {
+            this.resetLevel();
+        }
     }
 
     private hasLivingEnemies(): boolean {
@@ -6689,6 +6731,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
         this.state.gameOver = true;
         this.activeAxeAttacks = [];
+        this.gameOverRetryReadyPlayerIds.clear();
+        this.updateGameOverRetryReadyState();
         this.gameOverRestartMs = GAME_OVER_RESTART_SECONDS * 1000;
         this.state.gameOverCountdown = GAME_OVER_RESTART_SECONDS;
         this.updateRoomListingMetadata();

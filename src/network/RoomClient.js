@@ -335,6 +335,11 @@ class RoomClient {
         this.room.send("readyForNextWave", {});
     }
 
+    sendRetryGame() {
+        if (!this.room) return;
+        this.room.send("retryGame", {});
+    }
+
     _lastInput = "";
 }
 
