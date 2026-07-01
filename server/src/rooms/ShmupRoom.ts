@@ -4660,6 +4660,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.clearNextWaveReadyState();
         this.nextEnemyDiagnosticAtMs = 0;
         this.state.waveNumber = 0;
+        this.state.currentRadioTrackIndex = -1;
+        this.state.currentRadioStartUnixMs = 0;
         this.startNextWaveReadyCountdown();
     }
 
@@ -4774,13 +4776,17 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const waveNumber = waveIndex + 1;
         this.state.waveNumber = waveNumber;
         const startedAtUnixMs = Date.now();
+        const radioTrackIndex = waveIndex % RADIO_TRACK_COUNT;
+        const radioStartUnixMs = startedAtUnixMs + 1000;
+        this.state.currentRadioTrackIndex = radioTrackIndex;
+        this.state.currentRadioStartUnixMs = radioStartUnixMs;
         this.broadcast("enemyWaveStarted", {
             minute: waveIndex,
             waveIndex,
             waveNumber,
             startedAtUnixMs,
-            radioTrackIndex: waveIndex % RADIO_TRACK_COUNT,
-            radioStartUnixMs: startedAtUnixMs + 1000,
+            radioTrackIndex,
+            radioStartUnixMs,
         });
 
         let spawnIndex = 0;

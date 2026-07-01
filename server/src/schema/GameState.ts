@@ -163,6 +163,8 @@ export class GameRoomState extends Schema {
 
     @type("int32")   elapsedSeconds: number = 0;
     @type("int32")   waveNumber: number = 0;
+    @type("int8")    currentRadioTrackIndex: number = -1;
+    @type("float64") currentRadioStartUnixMs: number = 0;
     @type("int8")    nextWaveCountdown: number = 0;
     @type("int8")    nextWaveReadyPlayers: number = 0;
     @type("int8")    nextWaveTotalPlayers: number = 0;

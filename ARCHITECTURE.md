@@ -169,6 +169,8 @@ Durable game facts should usually be schema state, not transient messages.
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
 | `waveNumber` | `int32` | Current 1-based enemy wave displayed by the client HUD. |
+| `currentRadioTrackIndex` | `int8` | Server-selected shared radio track for the active wave, or `-1` when none is active. |
+| `currentRadioStartUnixMs` | `float64` | Unix millisecond timestamp for the active wave radio start; late joiners seek from this. |
 | `nextWaveCountdown` | `int8` | Visible pre-wave/inter-wave countdown in seconds; 0 means no ready-up countdown is active. |
 | `nextWaveReadyPlayers`, `nextWaveTotalPlayers` | `int8` | Ready-up fraction displayed during the pre-wave/inter-wave countdown. |
 | `teamScore` | `int32` | Shared score. |

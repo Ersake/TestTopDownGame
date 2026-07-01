@@ -4182,6 +4182,9 @@ export class Game extends Phaser.Scene {
         state.listen('waveNumber', (waveNumber) => {
             this.updateWaveText(waveNumber || 0);
         });
+        this.syncSharedRadioFromState(state);
+        state.listen('currentRadioTrackIndex', () => this.syncSharedRadioFromState(state));
+        state.listen('currentRadioStartUnixMs', () => this.syncSharedRadioFromState(state));
 
         this.updateNextWaveReadyUi();
         state.listen('nextWaveCountdown', (countdown) => {
@@ -6003,7 +6006,8 @@ export class Game extends Phaser.Scene {
         const radioTrackIndex = Number(event?.radioTrackIndex);
         const startedAtUnixMs = Number(event?.startedAtUnixMs);
         const radioStartUnixMs = Number(event?.radioStartUnixMs);
-        if (!Number.isFinite(radioTrackIndex) || !Number.isFinite(startedAtUnixMs)) return;
+        if (!Number.isFinite(radioTrackIndex)) return;
+        if (!Number.isFinite(startedAtUnixMs) && !Number.isFinite(radioStartUnixMs)) return;
 
         const trackIndex = Phaser.Math.Wrap(Math.floor(radioTrackIndex), 0, RADIO_PLAYLIST.length);
         const startUnixMs = Number.isFinite(radioStartUnixMs) ? radioStartUnixMs : startedAtUnixMs + RADIO_FADE_IN_DELAY_MS;
@@ -6015,6 +6019,24 @@ export class Game extends Phaser.Scene {
         };
         this.radioPlayingWave = true;
         this.syncRadioToSharedWave();
+    }
+
+    syncSharedRadioFromState(state) {
+        if (!state || this.isMapEditor) return;
+        const radioTrackIndex = Number(state.currentRadioTrackIndex);
+        const radioStartUnixMs = Number(state.currentRadioStartUnixMs);
+        if (!Number.isFinite(radioTrackIndex) || radioTrackIndex < 0 || !Number.isFinite(radioStartUnixMs) || radioStartUnixMs <= 0) {
+            this.sharedRadioWave = null;
+            if (this.radioPlayingWave) this.stopRadioSong(true);
+            return;
+        }
+
+        this.handleSharedRadioWave({
+            radioTrackIndex,
+            radioStartUnixMs,
+            waveNumber: state.waveNumber || 0,
+            waveIndex: Math.max(0, (state.waveNumber || 1) - 1),
+        });
     }
 
     syncRadioToSharedWave({ force = false } = {}) {
