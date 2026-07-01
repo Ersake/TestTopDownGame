@@ -72,6 +72,13 @@ export default {
         damage: createDirectionalAnimations('dk-damage', ASSETS.spritesheet.dkTakeDamage.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
         death: createDirectionalAnimations('dk-death', ASSETS.spritesheet.dkDeath.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
+    boss1: {
+        run: createDirectionalAnimations('boss1-run', ASSETS.spritesheet.boss1Run.key, ENEMY_DIRECTIONS),
+        idle: createDirectionalAnimations('boss1-idle', ASSETS.spritesheet.boss1Idle.key, ENEMY_DIRECTIONS),
+        damage: createDirectionalAnimations('boss1-damage', ASSETS.spritesheet.boss1Idle.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        death: createDirectionalAnimations('boss1-death', ASSETS.spritesheet.boss1Death.key, ENEMY_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        deathRun: createDirectionalAnimations('boss1-death-run', ASSETS.spritesheet.boss1DeathRun.key, ENEMY_DIRECTIONS),
+    },
     fireball: {
         key: 'fireball-fly',
         texture: ASSETS.spritesheet.fireball.key,

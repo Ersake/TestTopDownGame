@@ -129,6 +129,8 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"playerHurt"` | One-shot player hurt presentation. |
 | `"bowVolleyTelegraph"` | One-shot shared red Volley warning circle presentation before impact. |
 | `"bowVolleyImpact"` | One-shot Volley impact/removal presentation. |
+| `"bossBombTelegraph"` | One-shot shared boss bomb warning circle presentation before impact. |
+| `"bossBombImpact"` | One-shot boss bomb impact/removal presentation. |
 | `"craftResult"` | Acceptance or rejection feedback for a crafting request. |
 | `"itemCrafted"` | One-shot presentation for successful crafting. |
 | `"upgradePicked"` | One-shot upgrade-spend sound sent only to the upgrading client. |
@@ -182,7 +184,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Enemy State
 
-`EnemyState` includes position, enemy type, power, health, max health, facing direction, action, attack sequence, damage sequence, death state, and death sequence.
+`EnemyState` includes position, enemy type, power, health, max health, facing direction, action, attack sequence, damage sequence, death state, and death sequence. Enemy type `5` is the first boss enemy.
 
 ### Map Chunk State
 
@@ -213,7 +215,7 @@ Current server-owned systems include:
 - Tree damage, tree removal, and log spawning.
 - Wood pickup, including hammer wood gathering upgrade multipliers.
 - Player-placed campfires with a per-player active cap of 1.
-- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Enemy targeting resolves each player to the walkable navigation cell nearest to the player's actual foot position before range, line-of-sight, aim, flow-field, and rush decisions; enemy line-of-sight treats solid map cells and layer-3 tables as blockers, melee and caster line-of-sight also check the real player hitbox center and foot, and melee/Dark Knight impact damage is blocked if a solid map cell separates the attack from the player. Caster fireballs aim at the real player hitbox center after line-of-sight is confirmed, not at the resolved navigation target cell. Actual damage overlap still uses the real player hitbox. Dark Knight hit stun is 50% as effective as normal enemy hit stun; Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio. After clearing wave 9 and every 10 waves after that, the server tops living trees back up to 25 in valid random spots and broadcasts `"treesReplenished"` for the client toast.
+- Enemy spawning, waves, target selection, movement, attacks, stun, death, and removal. Enemy targeting resolves each player to the walkable navigation cell nearest to the player's actual foot position before range, line-of-sight, aim, flow-field, and rush decisions; enemy line-of-sight treats solid map cells and layer-3 tables as blockers, melee and caster line-of-sight also check the real player hitbox center and foot, and melee/Dark Knight impact damage is blocked if a solid map cell separates the attack from the player. Caster fireballs aim at the real player hitbox center after line-of-sight is confirmed, not at the resolved navigation target cell. Actual damage overlap still uses the real player hitbox. Dark Knight hit stun is 50% as effective as normal enemy hit stun; Dark Knight rush/charge and attack cooldown states take damage but are not interrupted by hit stun. Boss1 spawns once at the beginning of wave 5, has 50 health, drops 15 XP, chases the closest player with normal enemy flow-field movement at 144 px/s, and uses caster range without line-of-sight to place a fixed bomb circle at the target player's feet. Boss bomb damage is server-authoritative: after a 2.5-second fuse, the room damages living players whose hitbox overlaps the 1.25x Volley-radius circle for 5 damage and broadcasts impact presentation. Caltrops slowing is applied server-side through a private spatial index and short enemy slow timer. Before wave 1 and after each fully cleared wave, the server starts a 30-second ready-up countdown, syncs the ready fraction, starts early if all connected players press R and send `"readyForNextWave"`, then updates `waveNumber` and broadcasts `"enemyWaveStarted"` for horn audio. After clearing wave 9 and every 10 waves after that, the server tops living trees back up to 25 in valid random spots and broadcasts `"treesReplenished"` for the client toast.
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, a narrow/tall shifted player damage hitbox, 150ms server-owned post-hit invulnerability, 2-second join/revive invulnerability, death, revive progress, revive completion, and game-over checks.

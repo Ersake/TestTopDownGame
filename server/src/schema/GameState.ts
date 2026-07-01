@@ -65,8 +65,8 @@ export class EnemyState extends Schema {
     @type("int8")    shipId: number = 0;
     @type("int8")    enemyType: number = 1;
     @type("int8")    power: number = 1;
-    @type("int8")    health: number = 1;
-    @type("int8")    maxHealth: number = 3;
+    @type("int16")   health: number = 1;
+    @type("int16")   maxHealth: number = 3;
     @type("string")  facingDirection: string = "S";
     @type("string")  action: string = "run";
     @type("int32")   attackSeq: number = 0;

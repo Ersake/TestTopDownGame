@@ -26,6 +26,8 @@ const PLAYER_BODY_DEPTH = 100;
 const PLAYER_WEAPON_DEPTH = 101;
 const ENEMY_DISPLAY_SIZE = 128;
 const DARK_KNIGHT_DISPLAY_SIZE = ENEMY_DISPLAY_SIZE * 1.5;
+const BOSS1_DEATH_RUN_SPEED = 195;
+const BOSS1_DEATH_RUN_OFFSCREEN_MARGIN = 160;
 const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
@@ -67,6 +69,8 @@ const BOW_VOLLEY_PREVIEW_COLOR = 0xffffff;
 const BOW_VOLLEY_PREVIEW_ALPHA = 0.48;
 const BOW_VOLLEY_TELEGRAPH_COLOR = 0xff2020;
 const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
+const BOSS_BOMB_FILL_COLOR = 0xff2020;
+const BOSS_BOMB_FILL_ALPHA = 0.2;
 const BOW_VOLLEY_DOT_LENGTH = 10;
 const BOW_VOLLEY_DOT_GAP = 8;
 const BOW_VOLLEY_TELEGRAPH_FALLBACK_MS = 700;
@@ -201,6 +205,8 @@ const FIREBALL_CAST_SOUND_VOLUME = 0.375;
 const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
 const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
 const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.495;
+const BOSS_FUSE_SOUND_VOLUME = 0.5;
+const BOSS_EXPLOSION_SOUND_VOLUME = 0.65;
 const ANVIL_HIT_SOUND_VOLUME = 0.5;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_DAMAGE_FLASH_BLINK_MS = 90;
@@ -582,6 +588,8 @@ export class Game extends Phaser.Scene {
         this.nextBowVolleyAimSendAt = 0;
         this.bowVolleyPreview = null;
         this.bowVolleyTelegraphs = new Map();
+        this.bossBombTelegraphs = new Map();
+        this.bossDeathRunSprites = new Set();
         this.nextHeldAttackAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
@@ -607,6 +615,7 @@ export class Game extends Phaser.Scene {
         this.radioPlayingWave = false;
         this.sfxGroupLastPlayedAt = new Map();
         this.activeSfxStacks = new Map();
+        this.activeSfxSounds = new Set();
         this.axeWhirlwindSoundNextAt = new Map();
         this.suppressServerEventAudioUntil = performance.now() + INITIAL_SERVER_AUDIO_SUPPRESS_MS;
         this.suppressResetEffectsUntil = 0;
@@ -618,6 +627,7 @@ export class Game extends Phaser.Scene {
             this.isTabActive = false;
             this.remoteAttackAudioDirty = true;
             this.suppressRemoteAttackAudioUntil = Number.POSITIVE_INFINITY;
+            this.stopAllSfx();
             this.stopAxeWhirlwind();
             this.cancelBowVolley();
         };
@@ -667,6 +677,7 @@ export class Game extends Phaser.Scene {
             this.stopAxeWhirlwind();
             this.cancelBowVolley();
             this.clearBowVolleyTelegraphs();
+            this.stopAllSfx();
             this.stopAllCasterChargeSounds();
             this.stopRadioSong(true);
             this.destroyDebugRoundControls();
@@ -2008,6 +2019,11 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.dk.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.dk.damage).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.dk.death).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.boss1.run).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.boss1.idle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.boss1.damage).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.boss1.death).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.boss1.deathRun).forEach(animation => this.createAnimation(animation));
         this.createAnimation(ANIMATION.fireball);
         if (!this.anims.exists(CAMPFIRE_ANIMATION_KEY)) {
             this.anims.create({
@@ -3077,6 +3093,14 @@ export class Game extends Phaser.Scene {
         });
 
         // ── Players ──────────────────────────────────────────────────────────
+        room.onMessage('bossBombTelegraph', (event) => {
+            this.showBossBombTelegraph(event);
+        });
+
+        room.onMessage('bossBombImpact', (event) => {
+            this.showBossBombImpact(event);
+        });
+
         room.onMessage('playerLevelUp', (event) => {
             if (!this.shouldPlayWorldEventAudio()) return;
             this.playSfx(ASSETS.audio.levelUp.key, LEVEL_UP_SOUND_VOLUME, {
@@ -3128,6 +3152,7 @@ export class Game extends Phaser.Scene {
             this.closeEnchantmentMenu();
             this.cancelBowVolley();
             this.clearBowVolleyTelegraphs();
+            this.clearBossBombTelegraphs();
             this.stopRadioSong();
             this.createGrassNoiseLayer();
         });
@@ -4524,9 +4549,9 @@ export class Game extends Phaser.Scene {
             && (state.nextWaveTotalPlayers || 0) > 0;
     }
 
-    drawDottedCircle(graphics, x, y, radius, color, alpha) {
+    drawDottedCircle(graphics, x, y, radius, color, alpha, { clear = true } = {}) {
         if (!graphics) return;
-        graphics.clear();
+        if (clear) graphics.clear();
         graphics.lineStyle(2, color, alpha);
 
         const circumference = Math.PI * 2 * radius;
@@ -4575,6 +4600,74 @@ export class Game extends Phaser.Scene {
             graphics?.destroy?.();
         });
         this.bowVolleyTelegraphs.clear();
+    }
+
+    showBossBombTelegraph(event) {
+        const id = typeof event?.id === 'string' ? event.id : '';
+        const x = Number(event?.x);
+        const y = Number(event?.y);
+        const radius = Number(event?.radius) || BOW_VOLLEY_RADIUS;
+        if (!id || !Number.isFinite(x) || !Number.isFinite(y)) return;
+
+        this.removeBossBombTelegraph(id);
+        const graphics = this.add.graphics().setDepth(HITBOX_DEPTH - 2);
+        this.registerWorldObject(graphics);
+        graphics.fillStyle(BOSS_BOMB_FILL_COLOR, BOSS_BOMB_FILL_ALPHA);
+        graphics.fillCircle(x, y, radius);
+        this.drawDottedCircle(graphics, x, y, radius, BOW_VOLLEY_TELEGRAPH_COLOR, BOW_VOLLEY_TELEGRAPH_ALPHA, { clear: false });
+        const fuseSound = this.playSfx(ASSETS.audio.bossFuse.key, BOSS_FUSE_SOUND_VOLUME, {
+            serverEvent: true,
+            spatial: true,
+            worldX: x,
+            worldY: y,
+        });
+
+        const impactDelayMs = Math.max(0, Number(event?.impactDelayMs) || 0);
+        const timer = this.time.delayedCall(impactDelayMs + BOW_VOLLEY_TELEGRAPH_FALLBACK_MS, () => {
+            this.removeBossBombTelegraph(id);
+        });
+        this.bossBombTelegraphs.set(id, { graphics, timer, fuseSound });
+    }
+
+    showBossBombImpact(event) {
+        const id = typeof event?.id === 'string' ? event.id : '';
+        const x = Number(event?.x);
+        const y = Number(event?.y);
+        if (id) this.removeBossBombTelegraph(id);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+        this.playSfx(ASSETS.audio.bossExplosion.key, BOSS_EXPLOSION_SOUND_VOLUME, {
+            serverEvent: true,
+            spatial: true,
+            worldX: x,
+            worldY: y,
+        });
+    }
+
+    removeBossBombTelegraph(id) {
+        const telegraph = this.bossBombTelegraphs.get(id);
+        if (!telegraph) return;
+        telegraph.timer?.remove?.(false);
+        if (telegraph.fuseSound?.isPlaying || telegraph.fuseSound?.isPaused) {
+            telegraph.fuseSound.stop();
+        } else {
+            telegraph.fuseSound?.destroy?.();
+        }
+        telegraph.graphics?.destroy?.();
+        this.bossBombTelegraphs.delete(id);
+    }
+
+    clearBossBombTelegraphs() {
+        this.bossBombTelegraphs.forEach(({ graphics, timer, fuseSound }) => {
+            timer?.remove?.(false);
+            if (fuseSound?.isPlaying || fuseSound?.isPaused) {
+                fuseSound.stop();
+            } else {
+                fuseSound?.destroy?.();
+            }
+            graphics?.destroy?.();
+        });
+        this.bossBombTelegraphs.clear();
     }
 
     drawCampfireHealBar(graphics, campfire, progress) {
@@ -6055,6 +6148,7 @@ export class Game extends Phaser.Scene {
         groupWindowMs = 0,
         highPassHz = null,
     } = {}) {
+        if (!this.isDocumentActive()) return null;
         if (serverEvent && !this.shouldPlayServerEventAudio()) return null;
 
         let volume = this.getSfxVolume(baseVolume, { spatial, worldX, worldY, spatialFalloffPower });
@@ -6068,6 +6162,7 @@ export class Game extends Phaser.Scene {
         }
 
         const sound = this.sound.add(key, { volume });
+        this.activeSfxSounds.add(sound);
         const stackRecord = stackKey ? {
             sound,
             volume,
@@ -6090,6 +6185,7 @@ export class Game extends Phaser.Scene {
                 if (stack?.size) this.updateSfxStackVolumes(stackKey);
                 else this.activeSfxStacks.delete(stackKey);
             }
+            this.activeSfxSounds.delete(sound);
             sound.destroy();
         };
         sound.once('complete', cleanup);
@@ -6113,6 +6209,20 @@ export class Game extends Phaser.Scene {
             sound.once('stop', disconnectFilter);
         }
         return sound;
+    }
+
+    stopAllSfx() {
+        Array.from(this.activeSfxSounds).forEach((sound) => {
+            if (!sound) return;
+            if (sound.isPlaying || sound.isPaused) {
+                sound.stop();
+            } else {
+                sound.destroy();
+                this.activeSfxSounds.delete(sound);
+            }
+        });
+        this.activeSfxStacks.clear();
+        this.sfxGroupLastPlayedAt.clear();
     }
 
     applyHighPassFilter(sound, highPassHz) {
@@ -6485,6 +6595,58 @@ export class Game extends Phaser.Scene {
 
         const sprite = this.enemySprites.get(enemyId);
         if (sprite) sprite.clearTint();
+        if (animationState.animationKey === 'boss1') {
+            this.spawnBoss1DeathRun(sprite, direction);
+        }
+    }
+
+    spawnBoss1DeathRun(sourceSprite, direction) {
+        if (!sourceSprite) return;
+        const x = sourceSprite.x;
+        const y = sourceSprite.y;
+        const deathRun = this.add.sprite(x, y, ASSETS.spritesheet.boss1DeathRun.key, 0)
+            .setDepth(sourceSprite.depth || 100)
+            .setDisplaySize(ENEMY_DISPLAY_SIZE, ENEMY_DISPLAY_SIZE);
+        this.registerWorldObject(deathRun);
+        this.bossDeathRunSprites.add(deathRun);
+
+        const nearestEdge = this.getNearestWorldEdgeDirection(x, y - ENEMY_VISUAL_Y_OFFSET);
+        const runDirection = this.getDirectionFromVector(nearestEdge.x, nearestEdge.y) || direction || 'S';
+        const animation = ANIMATION.boss1.deathRun?.[runDirection];
+        if (animation) deathRun.play(animation.key);
+
+        const exit = this.getBoss1DeathRunExitPoint(x, y, nearestEdge.x, nearestEdge.y);
+        const distance = Math.hypot(exit.x - x, exit.y - y);
+        const duration = Math.max(1, (distance / BOSS1_DEATH_RUN_SPEED) * 1000);
+        this.tweens.add({
+            targets: deathRun,
+            x: exit.x,
+            y: exit.y,
+            duration,
+            onComplete: () => {
+                this.bossDeathRunSprites.delete(deathRun);
+                deathRun.destroy();
+            },
+        });
+    }
+
+    getNearestWorldEdgeDirection(x, y) {
+        const distances = [
+            { x: -1, y: 0, distance: Math.max(0, x) },
+            { x: 1, y: 0, distance: Math.max(0, this.worldWidth - x) },
+            { x: 0, y: -1, distance: Math.max(0, y) },
+            { x: 0, y: 1, distance: Math.max(0, this.worldHeight - y) },
+        ];
+        distances.sort((a, b) => a.distance - b.distance);
+        return distances[0] || { x: 1, y: 0 };
+    }
+
+    getBoss1DeathRunExitPoint(x, y, dx, dy) {
+        const margin = BOSS1_DEATH_RUN_OFFSCREEN_MARGIN;
+        if (Math.abs(dx) > Math.abs(dy)) {
+            return { x: dx < 0 ? -margin : this.worldWidth + margin, y };
+        }
+        return { x, y: dy < 0 ? -margin : this.worldHeight + margin };
     }
 
     flashEnemyDamage(enemyId) {
@@ -6542,6 +6704,7 @@ export class Game extends Phaser.Scene {
 
     getEnemyAnimationKey(enemy) {
         const enemyType = Number(enemy?.enemyType);
+        if (enemyType === 5) return 'boss1';
         if (enemyType === 4) return 'dk';
         if (enemyType === 3) return 'caster';
         if (enemyType === 2) return 'enemy2';
@@ -6834,6 +6997,7 @@ export class Game extends Phaser.Scene {
 
     clearAllSprites() {
         this.stopAllCasterChargeSounds();
+        this.stopAllSfx();
         this.playerSprites.forEach(s => s.destroy());
         this.playerWeaponSprites.forEach(s => s.destroy());
         this.playerHealthBars.forEach(({ background, fill }) => {
@@ -6860,6 +7024,10 @@ export class Game extends Phaser.Scene {
         this.axeWhirlwindSoundNextAt.clear();
         this.enemySprites.forEach(s => s.destroy());
         this.casterChargeEffects.forEach(effect => effect.destroy());
+        this.bossDeathRunSprites.forEach((sprite) => {
+            this.tweens.killTweensOf(sprite);
+            sprite.destroy();
+        });
         this.enemyHealthBars.forEach(({ background, fill }) => {
             background.destroy();
             fill.destroy();
@@ -6941,6 +7109,7 @@ export class Game extends Phaser.Scene {
         this.cancelBowCharge();
         this.cancelBowVolley();
         this.clearBowVolleyTelegraphs();
+        this.clearBossBombTelegraphs();
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
         this.localBowVolleyCooldownProgress = 0;
@@ -6968,6 +7137,7 @@ export class Game extends Phaser.Scene {
         this.enemySprites.clear();
         this.enemyAnimationState.clear();
         this.casterChargeEffects.clear();
+        this.bossDeathRunSprites.clear();
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();

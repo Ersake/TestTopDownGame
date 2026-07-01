@@ -60,6 +60,14 @@ export default {
             key: 'dk-attack-sound',
             args: ['assets/DKattacksound.mp3']
         },
+        bossFuse: {
+            key: 'boss-fuse',
+            args: ['assets/bossfuse.mp3']
+        },
+        bossExplosion: {
+            key: 'boss-explosion',
+            args: ['assets/bossexplosion.mp3']
+        },
         enemyWaveHorn: {
             key: 'enemy-wave-horn',
             args: ['assets/horngame.mp3']
@@ -416,6 +424,34 @@ export default {
         dkDeath: {
             key: 'dk-death',
             args: ['assets/DKDie.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boss1Run: {
+            key: 'boss1-run',
+            args: ['assets/Boss1Run.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boss1Idle: {
+            key: 'boss1-idle',
+            args: ['assets/Boss1Idle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boss1Death: {
+            key: 'boss1-death',
+            args: ['assets/Boss1Die.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boss1DeathRun: {
+            key: 'boss1-death-run',
+            args: ['assets/Boss1DeathRun.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

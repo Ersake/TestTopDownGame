@@ -158,6 +158,7 @@ const MELEE_PER_MINUTE = 5;
 const DARK_KNIGHT_WAVE_INTERVAL_MINUTES = 3;
 const ENEMY_TYPE_CASTER = 3;
 const ENEMY_TYPE_DARK_KNIGHT = 4;
+const ENEMY_TYPE_BOSS1 = 5;
 const MIN_BOW_CHARGE_MS = 100;
 const BASE_CASTER_CAST_RANGE = 375;
 const CASTER_CAST_RANGE = BASE_CASTER_CAST_RANGE;
@@ -176,6 +177,13 @@ const DARK_KNIGHT_ATTACK_IMPACT_DELAY_MS = 600;
 const DARK_KNIGHT_COOLDOWN_MS = 1560;
 const DARK_KNIGHT_AOE_RADIUS = 88;
 const DARK_KNIGHT_ATTACK_DAMAGE = 2;
+const BOSS1_WAVE_NUMBER = 5;
+const BOSS1_HEALTH = 50;
+const BOSS1_SPEED = 144;
+const BOSS1_BOMB_FUSE_MS = 2500;
+const BOSS1_BOMB_DAMAGE = 5;
+const BOSS1_BOMB_RADIUS = BOW_VOLLEY_RADIUS * 1.25;
+const BOSS1_XP = 15;
 const ENEMY1_SPEED = 100;
 const ENEMY2_SPEED = 114.75;
 const ENEMY1_HEALTH = 4;
@@ -502,7 +510,7 @@ interface ServerPlayer {
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
     alive: boolean;
 }
-type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "dkWalk" | "dkRush" | "dkAttack" | "dkCooldown" | "stun";
+type EnemyMode = "chase" | "windup" | "attack" | "casterCharge" | "casterAttack" | "dkWalk" | "dkRush" | "dkAttack" | "dkCooldown" | "bossFuse" | "stun";
 type DarkKnightTargetKind = "playerMark" | null;
 interface PathCell { col: number; row: number; }
 interface EnemyTarget {
@@ -527,6 +535,11 @@ interface ServerEnemy {
     mode: EnemyMode;
     modeMs: number;
     targetId: string | null;
+    previousTargetId: string | null;
+    bossBombId: string | null;
+    bossBombX: number;
+    bossBombY: number;
+    bossBombRadius: number;
     darkKnightTargetKind: DarkKnightTargetKind;
     darkKnightMarkX: number;
     darkKnightMarkY: number;
@@ -3654,8 +3667,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private shouldPreserveDarkKnightAttackCooldown(enemy: EnemyState): boolean {
-        if (enemy.enemyType !== ENEMY_TYPE_DARK_KNIGHT) return false;
         const se = this.serverEnemies.get(enemy.id);
+        if (enemy.enemyType === ENEMY_TYPE_BOSS1) return se?.mode === "bossFuse";
+        if (enemy.enemyType !== ENEMY_TYPE_DARK_KNIGHT) return false;
         return se?.mode === "dkRush" || se?.mode === "dkAttack" || se?.mode === "dkCooldown";
     }
 
@@ -3722,7 +3736,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!player) return;
 
         player.kills++;
-        const experience = enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? 2 : 1;
+        const experience = enemy.enemyType === ENEMY_TYPE_BOSS1
+            ? BOSS1_XP
+            : enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? 2 : 1;
         this.awardPlayerExperience(playerId, experience);
     }
 
@@ -4752,6 +4768,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const darkKnightCount = waveIndex > 0 && waveIndex % DARK_KNIGHT_WAVE_INTERVAL_MINUTES === 0
             ? waveIndex / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
             : 0;
+        const boss1Count = waveIndex + 1 === BOSS1_WAVE_NUMBER ? 1 : 0;
 
         const waveNumber = waveIndex + 1;
         this.state.waveNumber = waveNumber;
@@ -4766,6 +4783,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
         for (let i = 0; i < darkKnightCount; i++) {
             this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs, spawnIndex++);
+        }
+        for (let i = 0; i < boss1Count; i++) {
+            this.queueEnemySpawn(ENEMY_TYPE_BOSS1, waveStartMs, spawnIndex++);
         }
 
         const scheduledEnemyCount = spawnIndex;
@@ -4783,7 +4803,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
         console.log(
             `[ShmupRoom ${this.roomId}] wave ${waveIndex} scheduled: total=${scheduledEnemyCount}, `
-            + `melee=${meleeCount}, casters=${casterCount}, darkKnights=${darkKnightCount}, `
+            + `melee=${meleeCount}, casters=${casterCount}, darkKnights=${darkKnightCount}, boss1=${boss1Count}, `
             + `spawnInterval=${ENEMY_WAVE_SPAWN_INTERVAL_MS}ms, active=${this.state.enemies.size}, `
             + `queued=${this.pendingEnemySpawns.length}`,
         );
@@ -4894,6 +4914,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             mode: enemyType === ENEMY_TYPE_DARK_KNIGHT ? "dkWalk" : "chase",
             modeMs: 0,
             targetId: target?.id || null,
+            previousTargetId: null,
+            bossBombId: null,
+            bossBombX: 0,
+            bossBombY: 0,
+            bossBombRadius: BOSS1_BOMB_RADIUS,
             darkKnightTargetKind: null,
             darkKnightMarkX: e.x,
             darkKnightMarkY: e.y,
@@ -4959,9 +4984,16 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 const dy = target.targetY - enemy.y;
                 const distance = Math.hypot(dx, dy);
                 const isInAttackRange = distance <= ENEMY1_PLAYER_ATTACK_RANGE + ENEMY1_ATTACK_TRIGGER_EPSILON;
-                const hasMeleeLineOfSight = enemy.enemyType === ENEMY_TYPE_CASTER || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT
+                const hasMeleeLineOfSight = enemy.enemyType === ENEMY_TYPE_CASTER
+                    || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT
+                    || enemy.enemyType === ENEMY_TYPE_BOSS1
                     ? false
                     : this.hasEnemyLineOfSightToPlayer(enemy, se, target);
+
+                if (enemy.enemyType === ENEMY_TYPE_BOSS1) {
+                    this.tickBoss1Enemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
+                    return;
+                }
 
                 if (enemy.enemyType === ENEMY_TYPE_CASTER) {
                     this.tickCasterEnemy(id, enemy, se, target, dx, dy, distance, dtSec, dtMs);
@@ -5038,12 +5070,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getEnemyMaxHealth(enemyType: number): number {
+        if (enemyType === ENEMY_TYPE_BOSS1) return BOSS1_HEALTH;
         if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return DARK_KNIGHT_HEALTH;
         if (enemyType === 1) return ENEMY1_HEALTH;
         return DEFAULT_ENEMY_HEALTH;
     }
 
     private getEnemyMoveSpeed(enemyType: number): number {
+        if (enemyType === ENEMY_TYPE_BOSS1) return BOSS1_SPEED;
         if (enemyType === 1) return ENEMY1_SPEED;
         if (enemyType === 2) return ENEMY2_SPEED;
         return ENEMY2_SPEED;
@@ -5053,6 +5087,84 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         for (const playerId of this.enemyFlowFields.keys()) {
             if (!this.state.players.has(playerId)) this.enemyFlowFields.delete(playerId);
         }
+    }
+
+    private tickBoss1Enemy(
+        enemyId: string,
+        enemy: EnemyState,
+        se: ServerEnemy,
+        target: EnemyTarget,
+        dx: number,
+        dy: number,
+        distance: number,
+        dtSec: number,
+        dtMs: number,
+    ) {
+        if (se.mode === "bossFuse") {
+            enemy.action = "idle";
+            se.modeMs = Math.max(0, se.modeMs - dtMs);
+            return;
+        }
+
+        const preferredTarget = this.findNearestAlivePlayerExcluding(enemy.x, enemy.y, se.previousTargetId) || target;
+        se.targetId = preferredTarget.id;
+        const targetDx = preferredTarget.targetX - enemy.x;
+        const targetDy = preferredTarget.targetY - enemy.y;
+        const targetDistance = preferredTarget === target ? distance : Math.hypot(targetDx, targetDy);
+
+        if (targetDistance <= CASTER_CAST_RANGE) {
+            this.startBoss1Bomb(enemyId, enemy, se, preferredTarget);
+            return;
+        }
+
+        se.mode = "chase";
+        se.modeMs = 0;
+        enemy.action = "run";
+        if (targetDistance <= 0) return;
+
+        const remainingDistance = Math.max(0, targetDistance - CASTER_CAST_RANGE);
+        const move = Math.min(this.getEnemyMoveSpeed(enemy.enemyType) * this.getEnemyCaltropsSpeedMultiplier(enemy) * dtSec, remainingDistance);
+        if (move <= 0) {
+            this.startBoss1Bomb(enemyId, enemy, se, preferredTarget);
+            return;
+        }
+
+        if (!this.moveEnemyUsingFlowField(enemy, se, preferredTarget, move, targetDx, targetDy, targetDistance)) {
+            enemy.action = "idle";
+        }
+    }
+
+    private startBoss1Bomb(enemyId: string, enemy: EnemyState, se: ServerEnemy, target: EnemyTarget): void {
+        this.faceEnemyTowardPoint(enemy, target.targetX, target.targetY);
+        se.mode = "bossFuse";
+        se.modeMs = BOSS1_BOMB_FUSE_MS;
+        se.targetId = target.id;
+        se.previousTargetId = target.id;
+        se.path = [];
+        enemy.action = "idle";
+
+        const bombId = `boss-bomb-${nextId()}`;
+        const bombX = target.player.x;
+        const bombY = target.player.y;
+        const radius = BOSS1_BOMB_RADIUS;
+        se.bossBombId = bombId;
+        se.bossBombX = bombX;
+        se.bossBombY = bombY;
+        se.bossBombRadius = radius;
+
+        this.broadcast("bossBombTelegraph", {
+            id: bombId,
+            enemyId,
+            targetId: target.id,
+            x: bombX,
+            y: bombY,
+            radius,
+            impactDelayMs: BOSS1_BOMB_FUSE_MS,
+        });
+
+        setTimeout(() => {
+            this.applyBoss1BombImpact(enemyId, bombId, bombX, bombY, radius, target.id);
+        }, BOSS1_BOMB_FUSE_MS);
     }
 
     private tickCasterEnemy(
@@ -6289,6 +6401,79 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     // ─── Enemy bullets ────────────────────────────────────────────────────────
+    private findNearestAlivePlayerExcluding(x: number, y: number, excludedId: string | null): EnemyTarget | null {
+        if (!excludedId) return this.findNearestAlivePlayer(x, y);
+
+        return this.measureEnemySubphase("targeting", () => {
+            this.incrementEnemyCounter("targetSearches");
+            let nearest: EnemyTarget | null = null;
+
+            this.state.players.forEach((player, id) => {
+                if (id === excludedId) return;
+                this.incrementEnemyCounter("targetPlayerChecks");
+                const sp = this.serverPlayers.get(id);
+                if (!sp || !sp.alive || player.isDead) return;
+                const resolvedTarget = this.resolveEnemyTargetForPlayer(id, player);
+                if (!resolvedTarget) return;
+
+                const dx = resolvedTarget.targetX - x;
+                const dy = resolvedTarget.targetY - y;
+                const target: EnemyTarget = {
+                    id,
+                    player,
+                    ...resolvedTarget,
+                    distanceSq: dx * dx + dy * dy,
+                };
+                if (!nearest || target.distanceSq < nearest.distanceSq) {
+                    nearest = target;
+                }
+            });
+
+            return nearest;
+        });
+    }
+
+    private applyBoss1BombImpact(enemyId: string, bombId: string, x: number, y: number, radius: number, previousTargetId: string): void {
+        this.broadcast("bossBombImpact", { id: bombId, enemyId, x, y, radius });
+        if (this.state.gameOver) return;
+
+        this.state.players.forEach((player, playerId) => {
+            const sp = this.serverPlayers.get(playerId);
+            if (!sp || !sp.alive || player.isDead) return;
+            if (!circleOverlapsAabb(
+                x,
+                y,
+                radius,
+                player.x,
+                this.playerHitboxCenterY(player.y),
+                PLAYER_HW,
+                PLAYER_HH,
+            )) return;
+
+            const hurt = this.damagePlayer(playerId, sp, player, BOSS1_BOMB_DAMAGE, enemyId);
+            if (hurt) this.broadcast("playerHurt", hurt);
+        });
+
+        const boss = this.state.enemies.get(enemyId);
+        const se = this.serverEnemies.get(enemyId);
+        if (!boss || boss.isDead || !se || se.bossBombId !== bombId) return;
+
+        se.bossBombId = null;
+        se.bossBombX = 0;
+        se.bossBombY = 0;
+        se.bossBombRadius = BOSS1_BOMB_RADIUS;
+        se.previousTargetId = previousTargetId;
+        se.mode = "chase";
+        se.modeMs = 0;
+        boss.action = "run";
+        const nextTarget = this.findNearestAlivePlayerExcluding(boss.x, boss.y, previousTargetId)
+            || this.findNearestAlivePlayer(boss.x, boss.y);
+        se.targetId = nextTarget?.id || null;
+        if (nextTarget) {
+            this.faceEnemyTowardPoint(boss, nextTarget.targetX, nextTarget.targetY);
+        }
+    }
+
     private applyEnemyAttackImpact(enemyId: string, attackOrigin: AttackOrigin, vector: AttackVector) {
         if (this.state.gameOver || !this.state.enemies.has(enemyId)) return;
 
