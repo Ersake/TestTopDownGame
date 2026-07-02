@@ -142,12 +142,59 @@ export default {
             key: 'firecharge',
             args: ['assets/firecharge.png']
         },
+        bossCircleExplosion1: {
+            key: 'boss-circle-explosion-1',
+            args: ['assets/Circle_explosion1.png']
+        },
+        bossCircleExplosion2: {
+            key: 'boss-circle-explosion-2',
+            args: ['assets/Circle_explosion2.png']
+        },
+        bossCircleExplosion3: {
+            key: 'boss-circle-explosion-3',
+            args: ['assets/Circle_explosion3.png']
+        },
+        bossCircleExplosion4: {
+            key: 'boss-circle-explosion-4',
+            args: ['assets/Circle_explosion4.png']
+        },
+        bossCircleExplosion5: {
+            key: 'boss-circle-explosion-5',
+            args: ['assets/Circle_explosion5.png']
+        },
+        bossCircleExplosion6: {
+            key: 'boss-circle-explosion-6',
+            args: ['assets/Circle_explosion6.png']
+        },
+        bossCircleExplosion7: {
+            key: 'boss-circle-explosion-7',
+            args: ['assets/Circle_explosion7.png']
+        },
+        bossCircleExplosion8: {
+            key: 'boss-circle-explosion-8',
+            args: ['assets/Circle_explosion8.png']
+        },
+        bossCircleExplosion9: {
+            key: 'boss-circle-explosion-9',
+            args: ['assets/Circle_explosion9.png']
+        },
+        bossCircleExplosion10: {
+            key: 'boss-circle-explosion-10',
+            args: ['assets/Circle_explosion10.png']
+        },
         topdownTilesetPalette: {
             key: 'topdown-tileset-palette',
             args: ['assets/Topdowntileset.png']
         },
     },
     'spritesheet': {
+        bossBomb: {
+            key: 'boss-bomb',
+            args: ['assets/bomb-Sheet-export.png', {
+                frameWidth: 32,
+                frameHeight: 32,
+            }]
+        },
         campfire: {
             key: 'campfire',
             args: ['assets/campfire.png', {

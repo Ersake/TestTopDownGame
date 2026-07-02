@@ -178,7 +178,7 @@ const DARK_KNIGHT_COOLDOWN_MS = 1560;
 const DARK_KNIGHT_AOE_RADIUS = 88;
 const DARK_KNIGHT_ATTACK_DAMAGE = 2;
 const BOSS1_WAVE_NUMBER = 5;
-const BOSS1_HEALTH = 50;
+const BOSS1_HEALTH_PER_PLAYER = 25;
 const BOSS1_SPEED = 144;
 const BOSS1_BOMB_FUSE_MS = 2500;
 const BOSS1_BOMB_DAMAGE = 5;
@@ -5148,10 +5148,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getEnemyMaxHealth(enemyType: number): number {
-        if (enemyType === ENEMY_TYPE_BOSS1) return BOSS1_HEALTH;
+        if (enemyType === ENEMY_TYPE_BOSS1) return this.getBoss1MaxHealth();
         if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return DARK_KNIGHT_HEALTH;
         if (enemyType === 1) return ENEMY1_HEALTH;
         return DEFAULT_ENEMY_HEALTH;
+    }
+
+    private getBoss1MaxHealth(): number {
+        return Math.max(1, this.state.players.size) * BOSS1_HEALTH_PER_PLAYER;
     }
 
     private getEnemyMoveSpeed(enemyType: number): number {

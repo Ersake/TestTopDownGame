@@ -71,6 +71,7 @@ const BOW_VOLLEY_TELEGRAPH_COLOR = 0xff2020;
 const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
 const BOSS_BOMB_FILL_COLOR = 0xff2020;
 const BOSS_BOMB_FILL_ALPHA = 0.2;
+const BOSS_BOMB_SPRITE_SIZE = 42;
 const BOW_VOLLEY_DOT_LENGTH = 10;
 const BOW_VOLLEY_DOT_GAP = 8;
 const BOW_VOLLEY_TELEGRAPH_FALLBACK_MS = 700;
@@ -206,7 +207,7 @@ const FIREBALL_SOUND_FALLOFF_POWER = 1.25;
 const FIREBALL_STACK_VOLUME_MULTIPLIER = 0.72;
 const DARK_KNIGHT_ATTACK_SOUND_VOLUME = 0.495;
 const BOSS_FUSE_SOUND_VOLUME = 0.5;
-const BOSS_EXPLOSION_SOUND_VOLUME = 0.65;
+const BOSS_EXPLOSION_SOUND_VOLUME = 0.52;
 const ANVIL_HIT_SOUND_VOLUME = 0.5;
 const ENEMY_DAMAGE_FLASH_MS = 90;
 const PLAYER_DAMAGE_FLASH_BLINK_MS = 90;
@@ -2009,6 +2010,8 @@ export class Game extends Phaser.Scene {
     // ─── Animations ───────────────────────────────────────────────────────────
     initAnimations() {
         this.createAnimation(ANIMATION.explosion);
+        this.createAnimation(ANIMATION.bossCircleExplosion);
+        this.createAnimation(ANIMATION.bossBomb);
 
         Object.values(ANIMATION.player.idle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.run).forEach(animation => this.createAnimation(animation));
@@ -4695,6 +4698,12 @@ export class Game extends Phaser.Scene {
         graphics.fillStyle(BOSS_BOMB_FILL_COLOR, BOSS_BOMB_FILL_ALPHA);
         graphics.fillCircle(x, y, radius);
         this.drawDottedCircle(graphics, x, y, radius, BOW_VOLLEY_TELEGRAPH_COLOR, BOW_VOLLEY_TELEGRAPH_ALPHA, { clear: false });
+        const bombSprite = this.add.sprite(x, y, ASSETS.spritesheet.bossBomb.key, 0)
+            .setOrigin(0.5)
+            .setDepth(HITBOX_DEPTH - 1)
+            .setDisplaySize(BOSS_BOMB_SPRITE_SIZE, BOSS_BOMB_SPRITE_SIZE);
+        bombSprite.play(ANIMATION.bossBomb.key);
+        this.registerWorldObject(bombSprite);
         const fuseSound = this.playSfx(ASSETS.audio.bossFuse.key, BOSS_FUSE_SOUND_VOLUME, {
             serverEvent: true,
             spatial: true,
@@ -4706,22 +4715,37 @@ export class Game extends Phaser.Scene {
         const timer = this.time.delayedCall(impactDelayMs + BOW_VOLLEY_TELEGRAPH_FALLBACK_MS, () => {
             this.removeBossBombTelegraph(id);
         });
-        this.bossBombTelegraphs.set(id, { graphics, timer, fuseSound });
+        this.bossBombTelegraphs.set(id, { graphics, bombSprite, timer, fuseSound });
     }
 
     showBossBombImpact(event) {
         const id = typeof event?.id === 'string' ? event.id : '';
         const x = Number(event?.x);
         const y = Number(event?.y);
+        const radius = Number(event?.radius) || BOW_VOLLEY_RADIUS;
         if (id) this.removeBossBombTelegraph(id);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
+        this.playBossCircleExplosion(x, y, radius);
         this.playSfx(ASSETS.audio.bossExplosion.key, BOSS_EXPLOSION_SOUND_VOLUME, {
             serverEvent: true,
             spatial: true,
             worldX: x,
             worldY: y,
         });
+    }
+
+    playBossCircleExplosion(x, y, radius = BOW_VOLLEY_RADIUS) {
+        const size = Math.max(32, radius * 2);
+        const explosion = this.add.sprite(x, y, ASSETS.image.bossCircleExplosion1.key)
+            .setOrigin(0.5)
+            .setDepth(HITBOX_DEPTH - 1)
+            .setDisplaySize(size, size);
+        this.registerWorldObject(explosion);
+        explosion.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+            explosion.destroy();
+        });
+        explosion.play(ANIMATION.bossCircleExplosion.key);
     }
 
     removeBossBombTelegraph(id) {
@@ -4734,11 +4758,12 @@ export class Game extends Phaser.Scene {
             telegraph.fuseSound?.destroy?.();
         }
         telegraph.graphics?.destroy?.();
+        telegraph.bombSprite?.destroy?.();
         this.bossBombTelegraphs.delete(id);
     }
 
     clearBossBombTelegraphs() {
-        this.bossBombTelegraphs.forEach(({ graphics, timer, fuseSound }) => {
+        this.bossBombTelegraphs.forEach(({ graphics, bombSprite, timer, fuseSound }) => {
             timer?.remove?.(false);
             if (fuseSound?.isPlaying || fuseSound?.isPaused) {
                 fuseSound.stop();
@@ -4746,6 +4771,7 @@ export class Game extends Phaser.Scene {
                 fuseSound?.destroy?.();
             }
             graphics?.destroy?.();
+            bombSprite?.destroy?.();
         });
         this.bossBombTelegraphs.clear();
     }
@@ -5207,7 +5233,7 @@ export class Game extends Phaser.Scene {
 
         this.anims.create({
             key: animation.key,
-            frames: this.anims.generateFrameNumbers(animation.texture, animation.config),
+            frames: animation.frames || this.anims.generateFrameNumbers(animation.texture, animation.config),
             frameRate: animation.frameRate,
             repeat: animation.repeat,
         });
