@@ -1051,6 +1051,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             this.selectUpgrade(client, data);
         });
 
+        this.onMessage("refundUpgradeTree", (client, data) => {
+            this.refundUpgradeTree(client, data);
+        });
+
         this.onMessage("setOutfitColor", (client, data) => {
             this.setPlayerOutfitColor(client.sessionId, data);
         });
@@ -2308,6 +2312,31 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         client.send("upgradePicked", { upgradeId, item, slot });
     }
 
+    private refundUpgradeTree(client: Client, data: unknown) {
+        const sessionId = client.sessionId;
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp || !sp.alive || player.isDead || this.state.gameOver || !this.state.gameStarted) return;
+
+        const item = String((data as { item?: unknown })?.item || "");
+        const slot = Number((data as { slot?: unknown })?.slot);
+        if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
+        if (!item || this.getHotbarItem(player, slot) !== item) return;
+        if (!this.isPlayerNearEnchantmentTable(player)) return;
+
+        const tree = UPGRADE_TREES_BY_ITEM[item];
+        if (!tree || tree.length <= 0) return;
+
+        const refundedPoints = tree.reduce((total, node) => total + this.getPlayerUpgradeRank(player, node.id), 0);
+        if (refundedPoints <= 0) return;
+
+        tree.forEach((node) => this.setPlayerUpgradeRank(player, node.id, 0));
+        player.pendingUpgradeChoices = Math.max(0, Math.floor(player.pendingUpgradeChoices || 0)) + refundedPoints;
+        if (this.isShieldItem(item)) this.refreshAllShieldSlotMaxHp(player, 0);
+
+        client.send("upgradeTreeRefunded", { item, slot, refundedPoints });
+    }
+
     private getUpgradeNodeForItem(item: string, upgradeId: string): UpgradeNodeConfig | null {
         return UPGRADE_TREES_BY_ITEM[item]?.find((node) => node.id === upgradeId) || null;
     }
@@ -2350,6 +2379,63 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 return Math.max(0, player.woodGatherUpgrades || 0);
             default:
                 return 0;
+        }
+    }
+
+    private setPlayerUpgradeRank(player: PlayerState, upgradeId: string, rank: number): void {
+        const nextRank = Math.max(0, Math.floor(rank));
+        switch (upgradeId) {
+            case "axe_primary_attack_speed":
+                player.axeSwingSpeedUpgrades = nextRank;
+                break;
+            case "axe_primary_damage":
+                player.axePrimaryDamageUpgrades = nextRank;
+                break;
+            case "axe_whirlwind_cooldown":
+                player.axeWhirlwindCooldownUpgrades = nextRank;
+                break;
+            case "axe_whirlwind_aoe":
+                player.axeWhirlwindAoeUpgrades = nextRank;
+                break;
+            case "axe_whirlwind_damage":
+                player.axeWhirlwindDamageUpgrades = nextRank;
+                break;
+            case "bow_primary_attack_speed":
+                player.bowChargeTimeUpgrades = nextRank;
+                break;
+            case "bow_pierce":
+                player.bowPierceUpgrades = nextRank;
+                break;
+            case "bow_damage":
+                player.bowDamageUpgrades = nextRank;
+                break;
+            case "bow_volley_cooldown":
+                player.bowVolleyCooldownUpgrades = nextRank;
+                break;
+            case "bow_volley_aoe":
+                player.bowVolleyAoeUpgrades = nextRank;
+                break;
+            case "bow_volley_damage":
+                player.bowVolleyDamageUpgrades = nextRank;
+                break;
+            case "shield_primary_attack_speed":
+                player.shieldPrimaryAttackSpeedUpgrades = nextRank;
+                break;
+            case "shield_primary_damage":
+                player.shieldPrimaryDamageUpgrades = nextRank;
+                break;
+            case "shield_max_hp":
+                player.shieldMaxHpUpgrades = nextRank;
+                break;
+            case "shield_recharge":
+                player.shieldRechargeUpgrades = nextRank;
+                break;
+            case "shield_size":
+                player.shieldSizeUpgrades = nextRank;
+                break;
+            case "hammer_wood_gather":
+                player.woodGatherUpgrades = nextRank;
+                break;
         }
     }
 

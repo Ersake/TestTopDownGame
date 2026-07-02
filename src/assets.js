@@ -60,6 +60,10 @@ export default {
             key: 'upgrade-sound',
             args: ['assets/upgrade sound.mp3']
         },
+        button2: {
+            key: 'button-2',
+            args: ['assets/button2 audley_fergine-ui-button-click-5-327756.mp3']
+        },
         fireballCharge: {
             key: 'fireball-charge',
             args: ['assets/fireballcharge.mp3']

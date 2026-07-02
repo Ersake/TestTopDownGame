@@ -265,6 +265,11 @@ class RoomClient {
         this.room.send("selectUpgrade", { upgradeId, item, slot });
     }
 
+    sendRefundUpgradeTree(item = '', slot = 0) {
+        if (!this.room) return;
+        this.room.send("refundUpgradeTree", { item, slot });
+    }
+
     sendSetOutfitColor(outfitColor) {
         if (!this.room) return;
         this.room.send("setOutfitColor", { outfitColor });

@@ -1519,16 +1519,20 @@ export class Game extends Phaser.Scene {
         return object;
     }
 
-    addEnchantmentDynamicObject(object) {
-        if (!object) return object;
-        this.enchantmentUi?.dynamicObjects?.add(object);
-        return this.addEnchantmentUiObject(object);
+    addEnchantmentDynamicObject(...objects) {
+        objects.flat().forEach((object) => {
+            if (!object) return;
+            this.enchantmentUi?.dynamicObjects?.add(object);
+            this.addEnchantmentUiObject(object);
+        });
+        return objects[0] || null;
     }
 
     clearEnchantmentDynamicObjects() {
         this.enchantmentUi?.dynamicObjects?.forEach((object) => {
             object?.destroy?.();
             this.enchantmentUiObjects.delete(object);
+            this.fixedUiObjects.delete(object);
         });
         if (this.enchantmentUi) this.enchantmentUi.dynamicObjects = new Set();
     }
@@ -1609,7 +1613,10 @@ export class Game extends Phaser.Scene {
         this.enchantmentSelectedItem = '';
         this.enchantmentSelectedSlot = 0;
         this.clearEnchantmentDynamicObjects();
-        this.enchantmentUi?.objects?.forEach((object) => object?.destroy?.());
+        this.enchantmentUi?.objects?.forEach((object) => {
+            object?.destroy?.();
+            this.fixedUiObjects.delete(object);
+        });
         this.enchantmentUiObjects.clear();
         this.enchantmentUi = null;
     }
@@ -1624,6 +1631,9 @@ export class Game extends Phaser.Scene {
         const slotX = ui.slotX;
         const slotY = ui.slotY;
         const tree = ENCHANTMENT_SKILL_TREES[item];
+        const spentPointsInCurrentTree = tree
+            ? tree.nodes.reduce((total, node) => total + this.getUpgradeRankForNode(node), 0)
+            : 0;
 
         if (item) {
             const icon = this.createInventoryItemIcon(item, slotX, slotY, 54, UI_DEPTH + 36);
@@ -1752,6 +1762,42 @@ export class Game extends Phaser.Scene {
                 this.addEnchantmentDynamicObject(zone);
             }
         });
+
+        if (spentPointsInCurrentTree > 0) {
+            const buttonWidth = 220;
+            const buttonHeight = 54;
+            const buttonX = ui.panel.x + ui.panel.width - CRAFTING_PANEL_PADDING - buttonWidth * 0.5;
+            const buttonY = ui.panel.y + ui.panel.height - CRAFTING_PANEL_PADDING - buttonHeight * 0.5;
+            const refundButton = this.add.rectangle(buttonX, buttonY, buttonWidth, buttonHeight, 0x181818, 0.94)
+                .setOrigin(0.5)
+                .setStrokeStyle(4, 0xffd37a, 0.95)
+                .setDepth(UI_DEPTH + 38)
+                .setScrollFactor(0)
+                .setInteractive({ useHandCursor: true });
+            const refundLabel = this.add.text(buttonX - 18, buttonY - 6, 'Refund Points', {
+                fontFamily: 'Arial Black', fontSize: 18, color: '#ffffff',
+                align: 'center',
+                stroke: '#000000', strokeThickness: 5,
+            }).setOrigin(0.5).setDepth(UI_DEPTH + 39).setScrollFactor(0);
+            const refundCountLabel = this.add.text(buttonX + buttonWidth * 0.5 - 18, buttonY + 15, `+${spentPointsInCurrentTree}`, {
+                fontFamily: 'Arial Black', fontSize: 17, color: '#8cff9d',
+                align: 'center',
+                stroke: '#000000', strokeThickness: 5,
+            }).setOrigin(1, 0.5).setDepth(UI_DEPTH + 39).setScrollFactor(0);
+            refundButton.on('pointerdown', (_pointer, _x, _y, event) => {
+                event?.stopPropagation?.();
+                this.refundCurrentEnchantmentTree();
+            });
+            refundLabel.setInteractive({ useHandCursor: true }).on('pointerdown', (_pointer, _x, _y, event) => {
+                event?.stopPropagation?.();
+                this.refundCurrentEnchantmentTree();
+            });
+            refundCountLabel.setInteractive({ useHandCursor: true }).on('pointerdown', (_pointer, _x, _y, event) => {
+                event?.stopPropagation?.();
+                this.refundCurrentEnchantmentTree();
+            });
+            this.addEnchantmentDynamicObject(refundButton, refundLabel, refundCountLabel);
+        }
     }
 
     getUpgradeRankForNode(node) {
@@ -1780,6 +1826,15 @@ export class Game extends Phaser.Scene {
         const maxRank = this.getUpgradeMaxRankForNode(node);
         if (maxRank !== null && this.getUpgradeRankForNode(node) >= maxRank) return;
         RoomClient.sendSelectUpgrade(node.id, this.enchantmentSelectedItem, this.enchantmentSelectedSlot);
+    }
+
+    refundCurrentEnchantmentTree() {
+        if (!this.enchantmentSelectedItem || !this.enchantmentSelectedSlot) return;
+        const tree = ENCHANTMENT_SKILL_TREES[this.enchantmentSelectedItem];
+        if (!tree) return;
+        const spentPoints = tree.nodes.reduce((total, node) => total + this.getUpgradeRankForNode(node), 0);
+        if (spentPoints <= 0) return;
+        RoomClient.sendRefundUpgradeTree(this.enchantmentSelectedItem, this.enchantmentSelectedSlot);
     }
 
     tryDropHotbarItemIntoEnchantmentSlot(slot, pointer) {
@@ -3233,6 +3288,11 @@ export class Game extends Phaser.Scene {
 
         room.onMessage('upgradePicked', () => {
             this.playSfx(ASSETS.audio.upgradeSound.key, UPGRADE_PICKED_SOUND_VOLUME, { serverEvent: true });
+        });
+
+        room.onMessage('upgradeTreeRefunded', () => {
+            this.playSfx(ASSETS.audio.button2.key, UPGRADE_PICKED_SOUND_VOLUME, { serverEvent: true });
+            this.renderEnchantmentUi();
         });
 
         room.onMessage('reviveStarted', () => {
