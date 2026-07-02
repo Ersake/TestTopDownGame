@@ -95,7 +95,7 @@ const PLAYER_DASH_DURATION_MS = 160;
 const PLAYER_DASH_COOLDOWN_MS = 2000;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
-const SHIELD_BASH_COOLDOWN_MS = 650;
+const SHIELD_BASH_COOLDOWN_MS = 1300;
 const AXE_ATTACK_IMPACT_DELAY_MS = 200;
 const AXE_ATTACK_LINGER_MS = 400;
 const TREE_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
@@ -142,6 +142,10 @@ const BOW_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 10;
 const BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK = 3;
 const BOW_VOLLEY_AOE_UPGRADE_MAX_RANK = 5;
 const BOW_VOLLEY_DAMAGE_UPGRADE_MAX_RANK = 3;
+const SHIELD_PRIMARY_DAMAGE_UPGRADE_MAX_RANK = 5;
+const SHIELD_MAX_HP_UPGRADE_MAX_RANK = 5;
+const SHIELD_RECHARGE_UPGRADE_MAX_RANK = 5;
+const SHIELD_SIZE_UPGRADE_MAX_RANK = 3;
 const BASE_ACTIVE_CAMPFIRE_LIMIT = 1;
 const ATTACK_HIT_START_OFFSET = 10;
 const ATTACK_HIT_END_OFFSET = 40;
@@ -248,7 +252,7 @@ const ITEM_BONE = "bone";
 const HOTBAR_SLOT_COUNT = 9;
 const WOOD_SHIELD_MAX_HP = 10;
 const BONE_SHIELD_MAX_HP = 20;
-const SHIELD_REGEN_INTERVAL_MS = 3000;
+const SHIELD_REGEN_INTERVAL_MS = 5000;
 const SHIELD_BLOCK_BREAK_COOLDOWN_MS = 5000;
 const OUTFIT_COLOR_COUNT = 5;
 const EMPTY_HOTBAR_ITEM = "";
@@ -270,6 +274,11 @@ const UPGRADE_IDS = new Set([
     "bow_volley_cooldown",
     "bow_volley_aoe",
     "bow_volley_damage",
+    "shield_primary_attack_speed",
+    "shield_primary_damage",
+    "shield_max_hp",
+    "shield_recharge",
+    "shield_size",
     "hammer_wood_gather",
 ]);
 type UpgradeNodeConfig = {
@@ -292,6 +301,20 @@ const UPGRADE_TREES_BY_ITEM: Record<string, UpgradeNodeConfig[]> = {
         { id: "bow_volley_cooldown", maxRank: BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK },
         { id: "bow_volley_aoe", prerequisite: "bow_volley_cooldown", maxRank: BOW_VOLLEY_AOE_UPGRADE_MAX_RANK },
         { id: "bow_volley_damage", prerequisite: "bow_volley_aoe", maxRank: BOW_VOLLEY_DAMAGE_UPGRADE_MAX_RANK },
+    ],
+    [ITEM_WOOD_SHIELD]: [
+        { id: "shield_primary_attack_speed", maxRank: UPGRADE_MAX_RANK },
+        { id: "shield_primary_damage", prerequisite: "shield_primary_attack_speed", maxRank: SHIELD_PRIMARY_DAMAGE_UPGRADE_MAX_RANK },
+        { id: "shield_max_hp", maxRank: SHIELD_MAX_HP_UPGRADE_MAX_RANK },
+        { id: "shield_recharge", prerequisite: "shield_max_hp", maxRank: SHIELD_RECHARGE_UPGRADE_MAX_RANK },
+        { id: "shield_size", prerequisite: "shield_recharge", maxRank: SHIELD_SIZE_UPGRADE_MAX_RANK },
+    ],
+    [ITEM_BONE_SHIELD]: [
+        { id: "shield_primary_attack_speed", maxRank: UPGRADE_MAX_RANK },
+        { id: "shield_primary_damage", prerequisite: "shield_primary_attack_speed", maxRank: SHIELD_PRIMARY_DAMAGE_UPGRADE_MAX_RANK },
+        { id: "shield_max_hp", maxRank: SHIELD_MAX_HP_UPGRADE_MAX_RANK },
+        { id: "shield_recharge", prerequisite: "shield_max_hp", maxRank: SHIELD_RECHARGE_UPGRADE_MAX_RANK },
+        { id: "shield_size", prerequisite: "shield_recharge", maxRank: SHIELD_SIZE_UPGRADE_MAX_RANK },
     ],
     [ITEM_HAMMER]: [
         { id: "hammer_wood_gather" },
@@ -936,7 +959,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const targetY = data?.targetY;
 
             if (this.isShieldItem(attackItem)) {
-                sp.attackCooldownMs = SHIELD_BASH_COOLDOWN_MS;
+                sp.attackCooldownMs = this.getPlayerShieldBashCooldownMs(player);
                 this.applyShieldBash(client.sessionId, attackDirection, targetX, targetY);
                 return;
             }
@@ -2258,6 +2281,22 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             case "bow_volley_damage":
                 player.bowVolleyDamageUpgrades++;
                 break;
+            case "shield_primary_attack_speed":
+                player.shieldPrimaryAttackSpeedUpgrades++;
+                break;
+            case "shield_primary_damage":
+                player.shieldPrimaryDamageUpgrades++;
+                break;
+            case "shield_max_hp":
+                player.shieldMaxHpUpgrades++;
+                this.refreshAllShieldSlotMaxHp(player, 3);
+                break;
+            case "shield_recharge":
+                player.shieldRechargeUpgrades++;
+                break;
+            case "shield_size":
+                player.shieldSizeUpgrades++;
+                break;
             case "hammer_wood_gather":
                 player.woodGatherUpgrades++;
                 break;
@@ -2297,6 +2336,16 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 return Math.max(0, player.bowVolleyAoeUpgrades || 0);
             case "bow_volley_damage":
                 return Math.max(0, player.bowVolleyDamageUpgrades || 0);
+            case "shield_primary_attack_speed":
+                return Math.max(0, player.shieldPrimaryAttackSpeedUpgrades || 0);
+            case "shield_primary_damage":
+                return Math.max(0, player.shieldPrimaryDamageUpgrades || 0);
+            case "shield_max_hp":
+                return Math.max(0, player.shieldMaxHpUpgrades || 0);
+            case "shield_recharge":
+                return Math.max(0, player.shieldRechargeUpgrades || 0);
+            case "shield_size":
+                return Math.max(0, player.shieldSizeUpgrades || 0);
             case "hammer_wood_gather":
                 return Math.max(0, player.woodGatherUpgrades || 0);
             default:
@@ -2375,7 +2424,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
     private normalizeHotbarShieldSlot(player: PlayerState, index: number) {
         const item = player.hotbarItems[index] || EMPTY_HOTBAR_ITEM;
-        const maxHp = this.getShieldMaxHpForItem(item);
+        const maxHp = this.getShieldMaxHpForItem(item, player);
         if (maxHp <= 0) {
             player.hotbarShieldHp[index] = 0;
             player.hotbarShieldMaxHp[index] = 0;
@@ -2388,10 +2437,27 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.hotbarShieldHp[index] = previousMaxHp <= 0 ? maxHp : clamp(currentHp, 0, maxHp);
     }
 
-    private getShieldMaxHpForItem(item: string): number {
-        if (item === ITEM_WOOD_SHIELD) return WOOD_SHIELD_MAX_HP;
-        if (item === ITEM_BONE_SHIELD) return BONE_SHIELD_MAX_HP;
+    private getShieldMaxHpForItem(item: string, player: PlayerState): number {
+        const bonusHp = 3 * clamp(Math.floor(player.shieldMaxHpUpgrades || 0), 0, SHIELD_MAX_HP_UPGRADE_MAX_RANK);
+        if (item === ITEM_WOOD_SHIELD) return WOOD_SHIELD_MAX_HP + bonusHp;
+        if (item === ITEM_BONE_SHIELD) return BONE_SHIELD_MAX_HP + bonusHp;
         return 0;
+    }
+
+    private refreshAllShieldSlotMaxHp(player: PlayerState, currentHpBonus: number = 0): void {
+        this.normalizeHotbar(player);
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            const item = player.hotbarItems[i] || EMPTY_HOTBAR_ITEM;
+            const maxHp = this.getShieldMaxHpForItem(item, player);
+            if (maxHp <= 0) {
+                player.hotbarShieldHp[i] = 0;
+                player.hotbarShieldMaxHp[i] = 0;
+                continue;
+            }
+            const currentHp = Math.max(0, Math.floor(player.hotbarShieldHp[i] || 0));
+            player.hotbarShieldMaxHp[i] = maxHp;
+            player.hotbarShieldHp[i] = clamp(currentHp + Math.max(0, Math.floor(currentHpBonus)), 0, maxHp);
+        }
     }
 
     private getHotbarItem(player: PlayerState, slot: number): string {
@@ -2430,7 +2496,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private initializeHotbarShieldSlot(player: PlayerState, index: number, item: string) {
-        const maxHp = this.getShieldMaxHpForItem(item);
+        const maxHp = this.getShieldMaxHpForItem(item, player);
         player.hotbarShieldMaxHp[index] = maxHp;
         player.hotbarShieldHp[index] = maxHp;
     }
@@ -2707,6 +2773,21 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private getPlayerAxePrimaryDamage(player: PlayerState): number {
         const rank = clamp(Math.floor(player.axePrimaryDamageUpgrades || 0), 0, AXE_PRIMARY_DAMAGE_UPGRADE_MAX_RANK);
         return 1 + rank;
+    }
+
+    private getPlayerShieldBashCooldownMs(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.shieldPrimaryAttackSpeedUpgrades || 0), 0, UPGRADE_MAX_RANK);
+        return SHIELD_BASH_COOLDOWN_MS / (1 + 0.25 * rank);
+    }
+
+    private getPlayerShieldBashDamage(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.shieldPrimaryDamageUpgrades || 0), 0, SHIELD_PRIMARY_DAMAGE_UPGRADE_MAX_RANK);
+        return 1 + rank;
+    }
+
+    private getPlayerShieldRegenIntervalMs(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.shieldRechargeUpgrades || 0), 0, SHIELD_RECHARGE_UPGRADE_MAX_RANK);
+        return SHIELD_REGEN_INTERVAL_MS / (1 + 0.10 * rank);
     }
 
     private getPlayerAxeWhirlwindCooldownMs(player: PlayerState): number {
@@ -3058,11 +3139,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
     private updateShieldRegeneration(player: PlayerState, sp: ServerPlayer, dtMs: number) {
         this.normalizeHotbar(player);
+        const regenIntervalMs = this.getPlayerShieldRegenIntervalMs(player);
         sp.shieldRegenMs += dtMs;
-        if (sp.shieldRegenMs < SHIELD_REGEN_INTERVAL_MS) return;
+        if (sp.shieldRegenMs < regenIntervalMs) return;
 
-        const regenSteps = Math.floor(sp.shieldRegenMs / SHIELD_REGEN_INTERVAL_MS);
-        sp.shieldRegenMs -= regenSteps * SHIELD_REGEN_INTERVAL_MS;
+        const regenSteps = Math.floor(sp.shieldRegenMs / regenIntervalMs);
+        sp.shieldRegenMs -= regenSteps * regenIntervalMs;
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
             const maxHp = Math.max(0, Math.floor(player.hotbarShieldMaxHp[i] || 0));
             if (maxHp <= 0) continue;
@@ -3264,6 +3346,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.bowVolleyCooldownUpgrades = 0;
             player.bowVolleyAoeUpgrades = 0;
             player.bowVolleyDamageUpgrades = 0;
+            player.shieldPrimaryAttackSpeedUpgrades = 0;
+            player.shieldPrimaryDamageUpgrades = 0;
+            player.shieldMaxHpUpgrades = 0;
+            player.shieldRechargeUpgrades = 0;
+            player.shieldSizeUpgrades = 0;
             player.woodGatherUpgrades = 0;
             player.campfireUpgrades = 0;
             player.pendingCampfireCharges = 0;
@@ -3653,7 +3740,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
 
         hitEnemyIds.forEach((enemyId) => {
-            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, 1);
+            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, this.getPlayerShieldBashDamage(player));
             if (enemyHit) this.broadcast("enemyHit", enemyHit);
         });
     }

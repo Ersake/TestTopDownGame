@@ -71,7 +71,7 @@ const BOW_VOLLEY_TELEGRAPH_COLOR = 0xff2020;
 const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
 const SHIELD_BLOCK_COLOR = 0x89cff0;
 const SHIELD_BLOCK_ALPHA = 0.72;
-const SHIELD_BLOCK_RADIUS = 44;
+const SHIELD_BLOCK_RADIUS = 44 * 0.9;
 const SHIELD_BLOCK_SOUND_VOLUME = 0.58;
 const SHIELD_BREAK_SOUND_VOLUME = 0.68;
 const SHIELD_BLOCK_SOUND_COOLDOWN_MS = 180;
@@ -355,11 +355,31 @@ const PLAYER_BUFFS = [
     { field: 'bowVolleyCooldownUpgrades', label: 'Volley cooldown' },
     { field: 'bowVolleyAoeUpgrades', label: 'Volley size' },
     { field: 'bowVolleyDamageUpgrades', label: 'Volley damage' },
+    { field: 'shieldPrimaryAttackSpeedUpgrades', label: 'Shield attack speed' },
+    { field: 'shieldPrimaryDamageUpgrades', label: 'Shield primary damage' },
+    { field: 'shieldMaxHpUpgrades', label: 'Shield max HP' },
+    { field: 'shieldRechargeUpgrades', label: 'Shield recharge' },
+    { field: 'shieldSizeUpgrades', label: 'Shield size' },
     { field: 'woodGatherUpgrades', label: 'Wood gathering' },
 ];
 const ENCHANTMENT_MAX_RANK = 3;
 const AXE_PRIMARY_DAMAGE_MAX_RANK = 10;
 const AXE_WHIRLWIND_AOE_MAX_RANK = 2;
+const SHIELD_PRIMARY_DAMAGE_MAX_RANK = 5;
+const SHIELD_MAX_HP_MAX_RANK = 5;
+const SHIELD_RECHARGE_MAX_RANK = 5;
+const SHIELD_SIZE_MAX_RANK = 3;
+const SHIELD_SKILL_TREE = {
+    title: 'Shield Skills',
+    displayName: 'Shield',
+    nodes: [
+        { id: 'shield_primary_attack_speed', label: '+25% primary attack speed', field: 'shieldPrimaryAttackSpeedUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 0, row: 0 },
+        { id: 'shield_primary_damage', label: '+1 primary damage', field: 'shieldPrimaryDamageUpgrades', prerequisite: 'shield_primary_attack_speed', maxRank: SHIELD_PRIMARY_DAMAGE_MAX_RANK, column: 0, row: 1 },
+        { id: 'shield_max_hp', label: '+3 max shield HP', field: 'shieldMaxHpUpgrades', maxRank: SHIELD_MAX_HP_MAX_RANK, column: 1, row: 0 },
+        { id: 'shield_recharge', label: '+10% shield recharge', field: 'shieldRechargeUpgrades', prerequisite: 'shield_max_hp', maxRank: SHIELD_RECHARGE_MAX_RANK, column: 1, row: 1 },
+        { id: 'shield_size', label: '+25% shield size', field: 'shieldSizeUpgrades', prerequisite: 'shield_recharge', maxRank: SHIELD_SIZE_MAX_RANK, column: 1, row: 2 },
+    ],
+};
 const ENCHANTMENT_SKILL_TREES = {
     [ITEM_WOOD_AXE]: {
         title: 'Axe Skills',
@@ -384,6 +404,8 @@ const ENCHANTMENT_SKILL_TREES = {
             { id: 'bow_volley_damage', label: '+1 volley damage', field: 'bowVolleyDamageUpgrades', prerequisite: 'bow_volley_aoe', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 2 },
         ],
     },
+    [ITEM_WOOD_SHIELD]: SHIELD_SKILL_TREE,
+    [ITEM_BONE_SHIELD]: SHIELD_SKILL_TREE,
     [ITEM_HAMMER]: {
         title: 'Hammer Skills',
         displayName: 'Hammer',
@@ -3436,6 +3458,7 @@ export class Game extends Phaser.Scene {
                 axeWhirlwindDamageUpgrades: player.axeWhirlwindDamageUpgrades || 0,
                 bowVolleyAoeUpgrades: player.bowVolleyAoeUpgrades || 0,
                 bowVolleyDamageUpgrades: player.bowVolleyDamageUpgrades || 0,
+                shieldSizeUpgrades: player.shieldSizeUpgrades || 0,
                 lastBowChargeSeq: player.bowChargeSeq || 0,
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
@@ -3810,6 +3833,11 @@ export class Game extends Phaser.Scene {
             player.listen('bowVolleyDamageUpgrades', (stacks) => {
                 const animationState = this.playerAnimationState.get(playerSessionId);
                 if (animationState) animationState.bowVolleyDamageUpgrades = stacks || 0;
+            });
+            player.listen('shieldSizeUpgrades', (stacks) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.shieldSizeUpgrades = stacks || 0;
+                this.updatePlayerShieldBar(playerSessionId);
             });
 
             if (player.isDead) {
@@ -7377,8 +7405,10 @@ export class Game extends Phaser.Scene {
         }
 
         if (circle) {
+            const sizeRank = Phaser.Math.Clamp(Math.floor(animationState.shieldSizeUpgrades || 0), 0, SHIELD_SIZE_MAX_RANK);
+            const radius = SHIELD_BLOCK_RADIUS * (1 + 0.25 * sizeRank);
             circle.setVisible(true);
-            this.drawDottedCircle(circle, sprite.x, sprite.y - PLAYER_VISUAL_Y_OFFSET + PLAYER_HITBOX_Y_OFFSET, SHIELD_BLOCK_RADIUS, SHIELD_BLOCK_COLOR, SHIELD_BLOCK_ALPHA);
+            this.drawDottedCircle(circle, sprite.x, sprite.y - PLAYER_VISUAL_Y_OFFSET + PLAYER_HITBOX_Y_OFFSET, radius, SHIELD_BLOCK_COLOR, SHIELD_BLOCK_ALPHA);
         }
     }
 
