@@ -118,7 +118,8 @@ const BUILD_PATH_COLUMNS = Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE);
 const BUILD_PATH_ROWS = Math.ceil(WORLD_HEIGHT / BUILD_GRID_SIZE);
 const BUILD_PATH_CELL_COUNT = BUILD_PATH_COLUMNS * BUILD_PATH_ROWS;
 const BUILD_RANGE = 192;
-const FIRST_LEVEL_UP_KILLS = 5;
+const FIRST_LEVEL_UP_XP = 10;
+const LEVEL_XP_GROWTH_FACTOR = 1.8;
 const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const REVIVE_HEALTH = 3;
@@ -147,7 +148,7 @@ const ATTACK_HIT_END_OFFSET = 40;
 const ATTACK_HIT_ORIGIN_Y_OFFSET = 18;
 const ATTACK_TARGET_MIN_DISTANCE = 4;
 const LOG_WORLD_PADDING = 16;
-const ENEMY_WAVE_SPAWN_INTERVAL_MS = 900;
+const ENEMY_WAVE_SPAWN_INTERVAL_MS = 2000;
 const ENEMY_WAVE_MAX_SPAWNS_PER_TICK = 2;
 const ENEMY_NEXT_WAVE_DELAY_MS = 30000;
 const DEBUG_MAX_ROUND = 99;
@@ -171,7 +172,8 @@ const CASTER_CHARGE_MS = 1100;
 const CASTER_ATTACK_MS = 500;
 const CASTER_FIREBALL_SPEED = 225;
 const CASTER_FIREBALL_DAMAGE = 1;
-const DARK_KNIGHT_HEALTH = 10;
+const DARK_KNIGHT_BASE_HEALTH = 10;
+const DARK_KNIGHT_HEALTH_PER_PLAYER = 10;
 const DARK_KNIGHT_DETECTION_RANGE = BASE_CASTER_CAST_RANGE;
 const DARK_KNIGHT_WALK_SPEED = 88;
 const DARK_KNIGHT_RUSH_SPEED = 230;
@@ -183,6 +185,7 @@ const DARK_KNIGHT_COOLDOWN_MS = 1560;
 const DARK_KNIGHT_AOE_RADIUS = 88;
 const DARK_KNIGHT_ATTACK_DAMAGE = 2;
 const BOSS1_WAVE_NUMBER = 5;
+const BOSS1_BASE_HEALTH = 25;
 const BOSS1_HEALTH_PER_PLAYER = 25;
 const BOSS1_SPEED = 144;
 const BOSS1_BOMB_FUSE_MS = 2500;
@@ -2971,7 +2974,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         ps.kills = 0;
         ps.level = 1;
         ps.experience = 0;
-        ps.experienceToNext = FIRST_LEVEL_UP_KILLS;
+        ps.experienceToNext = FIRST_LEVEL_UP_XP;
         ps.wood = 0;
         ps.facingDirection = "N";
         ps.attackDirection = "N";
@@ -3089,7 +3092,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.kills = 0;
             player.level = 1;
             player.experience = 0;
-            player.experienceToNext = FIRST_LEVEL_UP_KILLS;
+            player.experienceToNext = FIRST_LEVEL_UP_XP;
             player.isDead = false;
             player.reviveProgress = 0;
             player.facingDirection = "N";
@@ -3877,7 +3880,13 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getExperienceToNextLevel(level: number): number {
-        return Math.min(INT32_MAX, FIRST_LEVEL_UP_KILLS * Math.pow(2, Math.max(0, level - 1)));
+        const levelNumber = Math.max(1, Math.floor(level));
+        let totalExperience = 0;
+        for (let currentLevel = 1; currentLevel <= levelNumber; currentLevel++) {
+            totalExperience += Math.ceil(FIRST_LEVEL_UP_XP * Math.pow(LEVEL_XP_GROWTH_FACTOR, currentLevel - 1));
+            if (totalExperience >= INT32_MAX) return INT32_MAX;
+        }
+        return totalExperience;
     }
 
     private getAttackVector(attackOrigin: AttackOrigin, direction: string, targetX: unknown, targetY: unknown): { x: number; y: number } {
@@ -5302,14 +5311,18 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
     private getEnemyMaxHealth(enemyType: number): number {
         if (enemyType === ENEMY_TYPE_BOSS1) return this.getBoss1MaxHealth();
-        if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return DARK_KNIGHT_HEALTH;
+        if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return this.getDarkKnightMaxHealth();
         if (enemyType === ENEMY_TYPE_CASTER) return CASTER_HEALTH;
         if (enemyType === 1) return ENEMY1_HEALTH;
         return DEFAULT_ENEMY_HEALTH;
     }
 
+    private getDarkKnightMaxHealth(): number {
+        return DARK_KNIGHT_BASE_HEALTH + Math.max(1, this.state.players.size) * DARK_KNIGHT_HEALTH_PER_PLAYER;
+    }
+
     private getBoss1MaxHealth(): number {
-        return Math.max(1, this.state.players.size) * BOSS1_HEALTH_PER_PLAYER;
+        return BOSS1_BASE_HEALTH + Math.max(1, this.state.players.size) * BOSS1_HEALTH_PER_PLAYER;
     }
 
     private getEnemyMoveSpeed(enemyType: number): number {

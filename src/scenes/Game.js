@@ -1121,7 +1121,7 @@ export class Game extends Phaser.Scene {
 
         this.experienceBarBackground = this.add.graphics().setDepth(UI_DEPTH).setScrollFactor(0);
         this.experienceBarFill = this.add.graphics().setDepth(UI_DEPTH + 1).setScrollFactor(0);
-        this.experienceBarText = this.add.text(this.centreX, y + HUD_BAR_HEIGHT * 0.5, 'XP: 0 / 5', {
+        this.experienceBarText = this.add.text(this.centreX, y + HUD_BAR_HEIGHT * 0.5, 'XP: 0 / 10', {
             fontFamily: 'Arial Black', fontSize: 12, color: '#ffffff',
             stroke: '#000000', strokeThickness: 3,
         }).setOrigin(0.5).setDepth(UI_DEPTH + 2).setScrollFactor(0);
@@ -7074,7 +7074,7 @@ export class Game extends Phaser.Scene {
 
     updateLocalExperienceState(player) {
         const experience = Math.max(0, player.experience || 0);
-        const experienceToNext = Math.max(1, player.experienceToNext || 5);
+        const experienceToNext = Math.max(1, player.experienceToNext || 10);
         const level = Math.max(1, player.level || 1);
         this.localExperienceState = { experience, experienceToNext, level };
         this.updateExperienceBar(experience, experienceToNext, level);
