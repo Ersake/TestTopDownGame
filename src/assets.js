@@ -36,6 +36,18 @@ export default {
             key: 'player-hurt',
             args: ['assets/playerhurt.mp3']
         },
+        shieldBlock1: {
+            key: 'shield-block-1',
+            args: ['assets/shieldblock1 yodguard-shield_impact-3-382411.mp3']
+        },
+        shieldBlock2: {
+            key: 'shield-block-2',
+            args: ['assets/shieldblock2 yodguard-shield_impact-1-382410.mp3']
+        },
+        shieldBreak: {
+            key: 'shield-break',
+            args: ['assets/shield break freesound_community-shield-guard-6963.mp3']
+        },
         reviveSound: {
             key: 'revive-sound',
             args: ['assets/revivesound.mp3']

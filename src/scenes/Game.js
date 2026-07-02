@@ -69,6 +69,12 @@ const BOW_VOLLEY_PREVIEW_COLOR = 0xffffff;
 const BOW_VOLLEY_PREVIEW_ALPHA = 0.48;
 const BOW_VOLLEY_TELEGRAPH_COLOR = 0xff2020;
 const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
+const SHIELD_BLOCK_COLOR = 0x89cff0;
+const SHIELD_BLOCK_ALPHA = 0.72;
+const SHIELD_BLOCK_RADIUS = 44;
+const SHIELD_BLOCK_SOUND_VOLUME = 0.58;
+const SHIELD_BREAK_SOUND_VOLUME = 0.68;
+const SHIELD_BLOCK_SOUND_COOLDOWN_MS = 180;
 const BOSS_BOMB_FILL_COLOR = 0xff2020;
 const BOSS_BOMB_FILL_ALPHA = 0.2;
 const BOSS_BOMB_SPRITE_SIZE = 42;
@@ -224,6 +230,8 @@ const PLAYER_HEALTH_BAR_HEIGHT = 6;
 const PLAYER_HEALTH_BAR_Y_OFFSET = -48;
 const PLAYER_HEALTH_BAR_DEPTH = 130;
 const PLAYER_HEALTH_BAR_FILL_COLOR = 0x10ff35;
+const PLAYER_SHIELD_BAR_Y_OFFSET = PLAYER_HEALTH_BAR_Y_OFFSET - PLAYER_HEALTH_BAR_HEIGHT - 3;
+const PLAYER_SHIELD_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 2;
 const PLAYER_BOW_CHARGE_BAR_Y_OFFSET = PLAYER_HEALTH_BAR_Y_OFFSET + PLAYER_HEALTH_BAR_HEIGHT + 3;
 const PLAYER_BOW_CHARGE_BAR_DEPTH = PLAYER_HEALTH_BAR_DEPTH + 1;
 const PLAYER_BOW_CHARGE_BAR_COLOR = 0xffffff;
@@ -261,6 +269,11 @@ const HOTBAR_COOLDOWN_OVERLAY_COLOR = 0x000000;
 const HOTBAR_COOLDOWN_OVERLAY_ALPHA = 0.55;
 const HOTBAR_ACTIVE_OVERLAY_COLOR = 0xffffff;
 const HOTBAR_ACTIVE_OVERLAY_ALPHA = 0.42;
+const HOTBAR_SHIELD_BAR_WIDTH = 39;
+const HOTBAR_SHIELD_BAR_HEIGHT = 5;
+const HOTBAR_SHIELD_BAR_Y_OFFSET = -HOTBAR_SLOT_SIZE * 0.5 - 8;
+const HOTBAR_SHIELD_BAR_BACKGROUND_COLOR = 0x050505;
+const HOTBAR_SHIELD_BAR_FILL_COLOR = SHIELD_BLOCK_COLOR;
 const OUTFIT_TAN_INDEX = 4;
 const OUTFIT_COLOR_BUTTON_RADIUS = 11;
 const OUTFIT_COLOR_BUTTON_X = 40;
@@ -453,6 +466,7 @@ export class Game extends Phaser.Scene {
             this.updateLocalPlayerAnimation();
             this.updateRemotePlayerAnimations();
             this.updatePlayerHealthBars();
+            this.updatePlayerShieldBars();
             this.updatePlayerDashCooldownBars();
             this.updatePlayerNameLabels();
             return;
@@ -468,6 +482,7 @@ export class Game extends Phaser.Scene {
         this.updateLocalPlayerAnimation();
         this.updateRemotePlayerAnimations();
         this.updatePlayerHealthBars();
+        this.updatePlayerShieldBars();
         this.updatePlayerBowChargeBars();
         this.updatePlayerDashCooldownBars();
         this.updatePlayerReviveBars();
@@ -509,6 +524,8 @@ export class Game extends Phaser.Scene {
         this.playerWeaponSprites = new Map();
         this.playerAnimationState = new Map();
         this.playerHealthBars = new Map();
+        this.playerShieldBars = new Map();
+        this.playerShieldBlockCircles = new Map();
         this.playerBowChargeBars = new Map();
         this.playerDashCooldownBars = new Map();
         this.playerReviveBars = new Map();
@@ -521,10 +538,16 @@ export class Game extends Phaser.Scene {
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
         this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+        this.hotbarShieldHp = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+        this.hotbarShieldMaxHp = [0, 0, 0, 0, 0, 0, 0, 0, 0];
         this.hotbarDrag = null;
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
         this.localBowVolleyCooldownProgress = 0;
+        this.localShieldBlockCooldownProgress = 0;
+        this.shieldBlockPointerId = null;
+        this.shieldBlockPointer = null;
+        this.shieldBlockSoundNextAt = new Map();
         this.skillPointText = null;
         this.treeReplenishText = null;
         this.enchantmentUi = null;
@@ -1156,6 +1179,8 @@ export class Game extends Phaser.Scene {
             slot.countLabel?.destroy();
             slot.cooldownOverlay?.destroy();
             slot.activeOverlay?.destroy();
+            slot.shieldBarBackground?.destroy();
+            slot.shieldBarFill?.destroy();
         });
         this.hotbarSlots = [];
 
@@ -1204,13 +1229,20 @@ export class Game extends Phaser.Scene {
             const activeOverlay = this.add.graphics()
                 .setDepth(UI_DEPTH + 8)
                 .setScrollFactor(0);
+            const shieldBarBackground = this.add.graphics()
+                .setDepth(UI_DEPTH + 9)
+                .setScrollFactor(0);
+            const shieldBarFill = this.add.graphics()
+                .setDepth(UI_DEPTH + 10)
+                .setScrollFactor(0);
 
-            this.hotbarSlots.push({ box, icon, label, countLabel, cooldownOverlay, activeOverlay, slot });
-            this.registerFixedUi(box, icon, label, countLabel, cooldownOverlay, activeOverlay);
+            this.hotbarSlots.push({ box, icon, label, countLabel, cooldownOverlay, activeOverlay, shieldBarBackground, shieldBarFill, slot });
+            this.registerFixedUi(box, icon, label, countLabel, cooldownOverlay, activeOverlay, shieldBarBackground, shieldBarFill);
         }
 
         this.updateHotbarSelection();
         this.updateHotbarAxeOverlays();
+        this.updateHotbarShieldBars();
     }
 
     beginHotbarDrag(slot, pointer) {
@@ -1313,6 +1345,7 @@ export class Game extends Phaser.Scene {
         const activeProgress = Phaser.Math.Clamp(this.localAxeWhirlwindProgress || 0, 0, 1);
         const axeCooldownProgress = Phaser.Math.Clamp(this.localAxeWhirlwindCooldownProgress || 0, 0, 1);
         const bowCooldownProgress = Phaser.Math.Clamp(this.localBowVolleyCooldownProgress || 0, 0, 1);
+        const shieldCooldownProgress = Phaser.Math.Clamp(this.localShieldBlockCooldownProgress || 0, 0, 1);
         this.hotbarSlots.forEach(({ box, cooldownOverlay, activeOverlay, slot }) => {
             if (!cooldownOverlay) return;
             cooldownOverlay.clear();
@@ -1324,6 +1357,8 @@ export class Game extends Phaser.Scene {
                 ? axeCooldownProgress
                 : item === ITEM_WOOD_BOW
                     ? bowCooldownProgress
+                    : this.isShieldItem(item)
+                        ? shieldCooldownProgress
                     : 0;
             const x = box.x - HOTBAR_SLOT_SIZE * 0.5;
             const bottomY = box.y + HOTBAR_SLOT_SIZE * 0.5;
@@ -1340,14 +1375,40 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updateHotbarShieldBars() {
+        this.hotbarSlots.forEach(({ box, shieldBarBackground, shieldBarFill, slot }) => {
+            shieldBarBackground?.clear();
+            shieldBarFill?.clear();
+            if (!box || !shieldBarBackground || !shieldBarFill) return;
+
+            const item = this.getItemForHotbarSlot(slot);
+            if (!this.isShieldItem(item)) return;
+            const index = slot - 1;
+            const maxHp = Math.max(0, this.hotbarShieldMaxHp[index] || 0);
+            const hp = Phaser.Math.Clamp(this.hotbarShieldHp[index] || 0, 0, maxHp);
+            if (maxHp <= 0) return;
+
+            const x = box.x - HOTBAR_SHIELD_BAR_WIDTH * 0.5;
+            const y = box.y + HOTBAR_SHIELD_BAR_Y_OFFSET;
+            shieldBarBackground.fillStyle(HOTBAR_SHIELD_BAR_BACKGROUND_COLOR, 0.95);
+            shieldBarBackground.fillRect(x, y, HOTBAR_SHIELD_BAR_WIDTH, HOTBAR_SHIELD_BAR_HEIGHT);
+            if (hp > 0) {
+                shieldBarFill.fillStyle(HOTBAR_SHIELD_BAR_FILL_COLOR, 1);
+                shieldBarFill.fillRect(x, y, HOTBAR_SHIELD_BAR_WIDTH * (hp / maxHp), HOTBAR_SHIELD_BAR_HEIGHT);
+            }
+        });
+    }
+
     isHotbarGameObject(gameObject) {
-        return this.hotbarSlots.some(({ box, icon, label, countLabel, cooldownOverlay, activeOverlay }) => (
+        return this.hotbarSlots.some(({ box, icon, label, countLabel, cooldownOverlay, activeOverlay, shieldBarBackground, shieldBarFill }) => (
             gameObject === box
             || gameObject === icon
             || gameObject === label
             || gameObject === countLabel
             || gameObject === cooldownOverlay
             || gameObject === activeOverlay
+            || gameObject === shieldBarBackground
+            || gameObject === shieldBarFill
         ));
     }
 
@@ -1368,16 +1429,23 @@ export class Game extends Phaser.Scene {
         if (!player?.hotbarItems) return;
         const nextItems = [];
         const nextCounts = [];
+        const nextShieldHp = [];
+        const nextShieldMaxHp = [];
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
             nextItems.push(player.hotbarItems[i] || '');
             nextCounts.push(player.hotbarCounts?.[i] || 0);
+            nextShieldHp.push(player.hotbarShieldHp?.[i] || 0);
+            nextShieldMaxHp.push(player.hotbarShieldMaxHp?.[i] || 0);
         }
         this.hotbarSlotItems = nextItems;
         this.hotbarSlotCounts = nextCounts;
+        this.hotbarShieldHp = nextShieldHp;
+        this.hotbarShieldMaxHp = nextShieldMaxHp;
         this.initHotbar();
         this.localActiveSlot = player.activeSlot || 1;
         this.updateHotbarSelection();
         this.updateHotbarAxeOverlays();
+        this.updateHotbarShieldBars();
         this.validateEnchantmentSelection();
     }
 
@@ -2874,6 +2942,10 @@ export class Game extends Phaser.Scene {
                     this.startBowVolley(pointer);
                     return;
                 }
+                if (this.isShieldItem(activeItem)) {
+                    this.startShieldBlock(pointer);
+                    return;
+                }
             }
         });
 
@@ -2945,6 +3017,9 @@ export class Game extends Phaser.Scene {
             if (this.bowVolleyPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
                 this.clearBowVolleyAutoRepeatIfReleased(pointer);
             }
+            if (this.shieldBlockPointerId === pointer.id && !this.isRightMouseButtonDown(pointer)) {
+                this.stopShieldBlock();
+            }
         });
 
         this.input.on('wheel', (_pointer, _gameObjects, _deltaX, deltaY) => {
@@ -2975,6 +3050,9 @@ export class Game extends Phaser.Scene {
             this.stopAxeWhirlwind();
             this.clearAxeWhirlwindPresentationState(sessionId, { updateAnimation: false });
         }
+        if (this.isShieldItem(animationState.activeItem) && slot !== animationState.activeSlot) {
+            this.stopShieldBlock();
+        }
         animationState.activeSlot = slot;
         animationState.activeItem = nextItem;
         this.syncBuildModeForActiveItem(animationState.activeItem);
@@ -3001,6 +3079,7 @@ export class Game extends Phaser.Scene {
             this.stopHeldAttack();
             this.cancelBowCharge();
             this.stopAxeWhirlwind();
+            this.stopShieldBlock();
         }
         if (this.buildGridGraphics) {
             this.buildGridGraphics.setVisible(this.isBuildModeActive);
@@ -3148,6 +3227,32 @@ export class Game extends Phaser.Scene {
             });
         });
 
+        room.onMessage('shieldBlock', (block) => {
+            if (!this.shouldPlayWorldEventAudio()) return;
+            const playerId = typeof block?.playerId === 'string' ? block.playerId : '';
+            const now = this.time.now;
+            const nextAllowedAt = this.shieldBlockSoundNextAt.get(playerId) || 0;
+            if (now < nextAllowedAt) return;
+            this.shieldBlockSoundNextAt.set(playerId, now + SHIELD_BLOCK_SOUND_COOLDOWN_MS);
+            const shieldBlockSound = Math.random() < 0.5 ? ASSETS.audio.shieldBlock1 : ASSETS.audio.shieldBlock2;
+            this.playSfx(shieldBlockSound.key, SHIELD_BLOCK_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(playerId),
+                worldX: block?.x,
+                worldY: block?.y,
+            });
+        });
+
+        room.onMessage('shieldBreak', (event) => {
+            if (!this.shouldPlayWorldEventAudio()) return;
+            this.playSfx(ASSETS.audio.shieldBreak.key, SHIELD_BREAK_SOUND_VOLUME, {
+                serverEvent: true,
+                spatial: !this.isLocalSession(event?.playerId),
+                worldX: event?.x,
+                worldY: event?.y,
+            });
+        });
+
         room.onMessage('bowVolleyTelegraph', (event) => {
             this.showBowVolleyTelegraph(event);
         });
@@ -3254,6 +3359,19 @@ export class Game extends Phaser.Scene {
                 player,
             });
             this.registerWorldObject(playerHealthBackground, playerHealthFill);
+            const playerShieldBackground = this.add.graphics().setDepth(PLAYER_SHIELD_BAR_DEPTH);
+            const playerShieldFill = this.add.graphics().setDepth(PLAYER_SHIELD_BAR_DEPTH + 1);
+            this.playerShieldBars.set(playerSessionId, {
+                background: playerShieldBackground,
+                fill: playerShieldFill,
+                player,
+            });
+            this.registerWorldObject(playerShieldBackground, playerShieldFill);
+            const shieldBlockCircle = this.add.graphics()
+                .setDepth(HITBOX_DEPTH - 3)
+                .setVisible(false);
+            this.playerShieldBlockCircles.set(playerSessionId, shieldBlockCircle);
+            this.registerWorldObject(shieldBlockCircle);
             const playerBowChargeFill = this.add.graphics()
                 .setDepth(PLAYER_BOW_CHARGE_BAR_DEPTH)
                 .setVisible(false);
@@ -3322,6 +3440,8 @@ export class Game extends Phaser.Scene {
                 bowCharging: !!player.bowCharging,
                 bowChargeProgress: player.bowChargeProgress || 0,
                 bowVolleyCooldownProgress: player.bowVolleyCooldownProgress || 0,
+                shieldBlocking: !!player.shieldBlocking,
+                shieldBlockCooldownProgress: player.shieldBlockCooldownProgress || 0,
                 bowFullyCharged: false,
                 bowAnimationPaused: false,
                 axeSwingSpeedUpgrades: player.axeSwingSpeedUpgrades || 0,
@@ -3382,6 +3502,7 @@ export class Game extends Phaser.Scene {
             player.listen('isDead', (isDead) => {
                 if (isDead) {
                     if (isLocal) this.cancelBowVolley();
+                    if (isLocal) this.stopShieldBlock();
                     this.playPlayerDeathAnimation(playerSessionId);
                 } else {
                     this.resetPlayerAfterRevive(playerSessionId);
@@ -3433,6 +3554,9 @@ export class Game extends Phaser.Scene {
                 if (animationState.axeWhirlwind && animationState.activeItem !== ITEM_WOOD_AXE) {
                     if (isLocal) this.stopAxeWhirlwind();
                     this.clearAxeWhirlwindPresentationState(playerSessionId, { updateAnimation: false });
+                }
+                if (isLocal && !this.isShieldItem(animationState.activeItem)) {
+                    this.stopShieldBlock();
                 }
                 if (isLocal) {
                     this.syncBuildModeForActiveItem(animationState.activeItem);
@@ -3583,6 +3707,26 @@ export class Game extends Phaser.Scene {
                 }
             });
 
+            player.listen('shieldBlocking', (active) => {
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.shieldBlocking = !!active;
+                if (isLocal && !active) {
+                    this.shieldBlockPointerId = null;
+                    this.shieldBlockPointer = null;
+                }
+                this.updatePlayerShieldBar(playerSessionId);
+            });
+
+            player.listen('shieldBlockCooldownProgress', (progress) => {
+                const normalizedProgress = Phaser.Math.Clamp(progress || 0, 0, 1);
+                const animationState = this.playerAnimationState.get(playerSessionId);
+                if (animationState) animationState.shieldBlockCooldownProgress = normalizedProgress;
+                if (isLocal) {
+                    this.localShieldBlockCooldownProgress = normalizedProgress;
+                    this.updateHotbarAxeOverlays();
+                }
+            });
+
             player.listen('health', () => {
                 this.updatePlayerHealthBar(playerSessionId);
                 if (isLocal) this.updateHudHealthBar(player.health, player.maxHealth);
@@ -3682,6 +3826,7 @@ export class Game extends Phaser.Scene {
                 this.localAxeWhirlwindProgress = Phaser.Math.Clamp(player.axeWhirlwindProgress || 0, 0, 1);
                 this.localAxeWhirlwindCooldownProgress = Phaser.Math.Clamp(player.axeWhirlwindCooldownProgress || 0, 0, 1);
                 this.localBowVolleyCooldownProgress = Phaser.Math.Clamp(player.bowVolleyCooldownProgress || 0, 0, 1);
+                this.localShieldBlockCooldownProgress = Phaser.Math.Clamp(player.shieldBlockCooldownProgress || 0, 0, 1);
                 this.syncLocalHotbarFromPlayer(player);
                 this.updateHotbarSelection();
                 this.syncBuildModeForActiveItem(player.activeItem || '');
@@ -3698,12 +3843,26 @@ export class Game extends Phaser.Scene {
 
                 if (player.hotbarItems) {
                     const syncHotbar = () => this.syncLocalHotbarFromPlayer(player);
+                    const syncShieldBars = () => {
+                        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+                            this.hotbarShieldHp[i] = player.hotbarShieldHp?.[i] || 0;
+                            this.hotbarShieldMaxHp[i] = player.hotbarShieldMaxHp?.[i] || 0;
+                        }
+                        this.updateHotbarShieldBars();
+                        this.updatePlayerShieldBar(playerSessionId);
+                    };
                     player.hotbarItems.onAdd(syncHotbar);
                     player.hotbarItems.onChange(syncHotbar);
                     player.hotbarItems.onRemove(syncHotbar);
                     player.hotbarCounts?.onAdd(syncHotbar);
                     player.hotbarCounts?.onChange(syncHotbar);
                     player.hotbarCounts?.onRemove(syncHotbar);
+                    player.hotbarShieldHp?.onAdd(syncShieldBars);
+                    player.hotbarShieldHp?.onChange(syncShieldBars);
+                    player.hotbarShieldHp?.onRemove(syncShieldBars);
+                    player.hotbarShieldMaxHp?.onAdd(syncShieldBars);
+                    player.hotbarShieldMaxHp?.onChange(syncShieldBars);
+                    player.hotbarShieldMaxHp?.onRemove(syncShieldBars);
                 }
 
                 player.listen('kills', (kills) => {
@@ -3752,6 +3911,13 @@ export class Game extends Phaser.Scene {
                 healthBar.background.destroy();
                 healthBar.fill.destroy();
             }
+            const shieldBar = this.playerShieldBars.get(sessionId);
+            if (shieldBar) {
+                shieldBar.background.destroy();
+                shieldBar.fill.destroy();
+            }
+            const shieldCircle = this.playerShieldBlockCircles.get(sessionId);
+            if (shieldCircle) shieldCircle.destroy();
             const bowChargeBar = this.playerBowChargeBars.get(sessionId);
             if (bowChargeBar) bowChargeBar.fill.destroy();
             const dashCooldownBar = this.playerDashCooldownBars.get(sessionId);
@@ -3783,7 +3949,10 @@ export class Game extends Phaser.Scene {
             this.playerWeaponSprites.delete(sessionId);
             this.playerAnimationState.delete(sessionId);
             this.axeWhirlwindSoundNextAt.delete(sessionId);
+            this.shieldBlockSoundNextAt.delete(sessionId);
             this.playerHealthBars.delete(sessionId);
+            this.playerShieldBars.delete(sessionId);
+            this.playerShieldBlockCircles.delete(sessionId);
             this.playerBowChargeBars.delete(sessionId);
             this.playerDashCooldownBars.delete(sessionId);
             this.playerReviveBars.delete(sessionId);
@@ -5404,6 +5573,30 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    startShieldBlock(pointer) {
+        const sessionId = this.localSessionId;
+        const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
+        if (!this.gameStarted || !sessionId || !animationState || animationState.dead || this.isBuildModeActive) return;
+        if (!this.isShieldItem(animationState.activeItem)) return;
+        if ((animationState.shieldBlockCooldownProgress || this.localShieldBlockCooldownProgress || 0) > 0) return;
+        const shieldIndex = Math.max(0, (this.localActiveSlot || 1) - 1);
+        if ((this.hotbarShieldHp[shieldIndex] || 0) <= 0) return;
+
+        this.stopHeldAttack();
+        this.cancelBowCharge();
+        this.cancelBowVolley();
+        this.stopAxeWhirlwind();
+        this.shieldBlockPointerId = pointer.id;
+        this.shieldBlockPointer = pointer;
+        RoomClient.sendShieldBlockStart();
+    }
+
+    stopShieldBlock() {
+        this.shieldBlockPointerId = null;
+        this.shieldBlockPointer = null;
+        RoomClient.sendShieldBlockStop();
+    }
+
     startBowCharge(pointer) {
         const sessionId = this.localSessionId;
         const animationState = sessionId ? this.playerAnimationState.get(sessionId) : null;
@@ -6959,6 +7152,12 @@ export class Game extends Phaser.Scene {
         });
     }
 
+    updatePlayerShieldBars() {
+        this.playerShieldBars.forEach((_shieldBar, sessionId) => {
+            this.updatePlayerShieldBar(sessionId);
+        });
+    }
+
     updatePlayerBowChargeBars() {
         this.playerBowChargeBars.forEach((_chargeBar, sessionId) => {
             this.updatePlayerBowChargeBar(sessionId);
@@ -7148,6 +7347,41 @@ export class Game extends Phaser.Scene {
         }
     }
 
+    updatePlayerShieldBar(sessionId) {
+        const shieldBar = this.playerShieldBars.get(sessionId);
+        const circle = this.playerShieldBlockCircles.get(sessionId);
+        const sprite = this.playerSprites.get(sessionId);
+        const animationState = this.playerAnimationState.get(sessionId);
+        if (!shieldBar || !sprite || !animationState) return;
+
+        const player = shieldBar.player;
+        const isBlocking = !!animationState.shieldBlocking && !animationState.dead && this.isShieldItem(player.activeItem || '');
+        shieldBar.background.clear();
+        shieldBar.fill.clear();
+        circle?.clear();
+        circle?.setVisible(false);
+        if (!isBlocking) return;
+
+        const shieldIndex = Math.max(0, (player.activeSlot || 1) - 1);
+        const maxHp = Math.max(0, player.hotbarShieldMaxHp?.[shieldIndex] || 0);
+        const hp = Phaser.Math.Clamp(player.hotbarShieldHp?.[shieldIndex] || 0, 0, maxHp);
+        if (maxHp <= 0) return;
+
+        const x = sprite.x - PLAYER_HEALTH_BAR_WIDTH * 0.5;
+        const y = sprite.y + PLAYER_SHIELD_BAR_Y_OFFSET;
+        shieldBar.background.fillStyle(0x050505, 1);
+        shieldBar.background.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH, PLAYER_HEALTH_BAR_HEIGHT);
+        if (hp > 0) {
+            shieldBar.fill.fillStyle(SHIELD_BLOCK_COLOR, 1);
+            shieldBar.fill.fillRect(x, y, PLAYER_HEALTH_BAR_WIDTH * (hp / maxHp), PLAYER_HEALTH_BAR_HEIGHT);
+        }
+
+        if (circle) {
+            circle.setVisible(true);
+            this.drawDottedCircle(circle, sprite.x, sprite.y - PLAYER_VISUAL_Y_OFFSET + PLAYER_HITBOX_Y_OFFSET, SHIELD_BLOCK_RADIUS, SHIELD_BLOCK_COLOR, SHIELD_BLOCK_ALPHA);
+        }
+    }
+
     updatePlayerBowChargeBar(sessionId) {
         const chargeBar = this.playerBowChargeBars.get(sessionId);
         const sprite = this.playerSprites.get(sessionId);
@@ -7246,6 +7480,11 @@ export class Game extends Phaser.Scene {
             background.destroy();
             fill.destroy();
         });
+        this.playerShieldBars.forEach(({ background, fill }) => {
+            background.destroy();
+            fill.destroy();
+        });
+        this.playerShieldBlockCircles.forEach(circle => circle.destroy());
         this.playerBowChargeBars.forEach(({ fill }) => {
             fill.destroy();
         });
@@ -7264,6 +7503,7 @@ export class Game extends Phaser.Scene {
         });
         this.offscreenPlayerIndicators.forEach(indicator => indicator.destroy());
         this.axeWhirlwindSoundNextAt.clear();
+        this.shieldBlockSoundNextAt.clear();
         this.enemySprites.forEach(s => s.destroy());
         this.casterChargeEffects.forEach(effect => effect.destroy());
         this.bossDeathRunSprites.forEach((sprite) => {
@@ -7355,6 +7595,9 @@ export class Game extends Phaser.Scene {
         this.localAxeWhirlwindProgress = 0;
         this.localAxeWhirlwindCooldownProgress = 0;
         this.localBowVolleyCooldownProgress = 0;
+        this.localShieldBlockCooldownProgress = 0;
+        this.shieldBlockPointerId = null;
+        this.shieldBlockPointer = null;
         this.nextWaveCountdownText?.setVisible(false);
         this.nextWaveReadyText?.setVisible(false);
         this.nextWavePromptText?.setVisible(false);
@@ -7366,10 +7609,13 @@ export class Game extends Phaser.Scene {
             this.treeReplenishText.setAlpha(0).setVisible(false);
         }
         this.updateHotbarAxeOverlays();
+        this.updateHotbarShieldBars();
         this.playerSprites.clear();
         this.playerWeaponSprites.clear();
         this.playerAnimationState.clear();
         this.playerHealthBars.clear();
+        this.playerShieldBars.clear();
+        this.playerShieldBlockCircles.clear();
         this.playerBowChargeBars.clear();
         this.playerDashCooldownBars.clear();
         this.playerReviveBars.clear();

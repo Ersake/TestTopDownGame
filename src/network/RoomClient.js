@@ -220,6 +220,16 @@ class RoomClient {
         this.room.send("axeWhirlwind", { active: !!active });
     }
 
+    sendShieldBlockStart() {
+        if (!this.room) return;
+        this.room.send("shieldBlockStart", {});
+    }
+
+    sendShieldBlockStop() {
+        if (!this.room) return;
+        this.room.send("shieldBlockStop", {});
+    }
+
     sendEquipSlot(slot) {
         if (!this.room) return;
         this.room.send("equipSlot", { slot });

@@ -246,6 +246,10 @@ const ITEM_WOOD_CALTROPS = "wood_caltrops";
 const ITEM_WOOD = "wood";
 const ITEM_BONE = "bone";
 const HOTBAR_SLOT_COUNT = 9;
+const WOOD_SHIELD_MAX_HP = 10;
+const BONE_SHIELD_MAX_HP = 20;
+const SHIELD_REGEN_INTERVAL_MS = 3000;
+const SHIELD_BLOCK_BREAK_COOLDOWN_MS = 5000;
 const OUTFIT_COLOR_COUNT = 5;
 const EMPTY_HOTBAR_ITEM = "";
 const EMPTY_HOTBAR_COUNT = 0;
@@ -519,6 +523,8 @@ interface ServerPlayer {
     axeWhirlwindTickMs: number;
     axeWhirlwindElapsedMs: number;
     axeWhirlwindCooldownMs: number;
+    shieldBlockCooldownMs: number;
+    shieldRegenMs: number;
     revivingTargetId: string | null;
     invulnerableUntilMs: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
@@ -980,6 +986,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         this.onMessage("axeWhirlwind", (client, data) => {
             this.setAxeWhirlwind(client.sessionId, !!(data as { active?: unknown })?.active);
+        });
+
+        this.onMessage("shieldBlockStart", (client) => {
+            this.setShieldBlocking(client.sessionId, true);
+        });
+
+        this.onMessage("shieldBlockStop", (client) => {
+            this.setShieldBlocking(client.sessionId, false);
         });
 
         this.onMessage("equipSlot", (client, data) => {
@@ -2105,6 +2119,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         const slot = Number((data as { slot?: unknown })?.slot);
         if (!Number.isInteger(slot) || slot < 1 || slot > HOTBAR_SLOT_COUNT) return;
 
+        const previousSlot = player.activeSlot;
         player.activeSlot = slot;
         player.activeItem = this.getHotbarItem(player, slot);
         if (player.activeItem !== ITEM_WOOD_BOW) {
@@ -2113,6 +2128,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
         if (player.activeItem !== ITEM_WOOD_AXE) {
             this.setAxeWhirlwind(sessionId, false);
+        }
+        if (!this.isShieldItem(player.activeItem)) {
+            this.setShieldBlocking(sessionId, false);
+        }
+        if (player.shieldBlocking && slot !== previousSlot) {
+            this.setShieldBlocking(sessionId, false);
         }
     }
 
@@ -2142,10 +2163,18 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         const fromItem = player.hotbarItems[fromIndex];
         const fromCount = player.hotbarCounts[fromIndex] || EMPTY_HOTBAR_COUNT;
+        const fromShieldHp = player.hotbarShieldHp[fromIndex] || 0;
+        const fromShieldMaxHp = player.hotbarShieldMaxHp[fromIndex] || 0;
         player.hotbarItems[fromIndex] = player.hotbarItems[toIndex] || EMPTY_HOTBAR_ITEM;
         player.hotbarCounts[fromIndex] = player.hotbarCounts[toIndex] || EMPTY_HOTBAR_COUNT;
+        player.hotbarShieldHp[fromIndex] = player.hotbarShieldHp[toIndex] || 0;
+        player.hotbarShieldMaxHp[fromIndex] = player.hotbarShieldMaxHp[toIndex] || 0;
         player.hotbarItems[toIndex] = fromItem;
         player.hotbarCounts[toIndex] = fromCount;
+        player.hotbarShieldHp[toIndex] = fromShieldHp;
+        player.hotbarShieldMaxHp[toIndex] = fromShieldMaxHp;
+        this.normalizeHotbarShieldSlot(player, fromIndex);
+        this.normalizeHotbarShieldSlot(player, toIndex);
 
         if (player.activeSlot === fromSlot) {
             player.activeSlot = toSlot;
@@ -2158,6 +2187,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
         if (player.activeItem !== ITEM_WOOD_AXE) {
             this.setAxeWhirlwind(sessionId, false);
+        }
+        if (!this.isShieldItem(player.activeItem)) {
+            this.setShieldBlocking(sessionId, false);
+        }
+        if (player.shieldBlocking && (player.activeSlot === fromSlot || player.activeSlot === toSlot)) {
+            this.setShieldBlocking(sessionId, false);
         }
     }
 
@@ -2272,6 +2307,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private initializeHotbar(player: PlayerState) {
         player.hotbarItems.clear();
         player.hotbarCounts.clear();
+        player.hotbarShieldHp.clear();
+        player.hotbarShieldMaxHp.clear();
         player.hotbarItems.push(
             ITEM_WOOD_AXE,
             ITEM_WOOD_BOW,
@@ -2294,9 +2331,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             EMPTY_HOTBAR_COUNT,
             EMPTY_HOTBAR_COUNT,
         );
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            player.hotbarShieldHp.push(0);
+            player.hotbarShieldMaxHp.push(0);
+        }
         player.activeSlot = 1;
         player.activeItem = ITEM_WOOD_AXE;
         player.attackItem = ITEM_WOOD_AXE;
+        player.shieldBlocking = false;
+        player.shieldBlockCooldownProgress = 0;
     }
 
     private normalizeHotbar(player: PlayerState) {
@@ -2312,9 +2355,43 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         while (player.hotbarCounts.length > HOTBAR_SLOT_COUNT) {
             player.hotbarCounts.pop();
         }
+        while (player.hotbarShieldHp.length < HOTBAR_SLOT_COUNT) {
+            player.hotbarShieldHp.push(0);
+        }
+        while (player.hotbarShieldHp.length > HOTBAR_SLOT_COUNT) {
+            player.hotbarShieldHp.pop();
+        }
+        while (player.hotbarShieldMaxHp.length < HOTBAR_SLOT_COUNT) {
+            player.hotbarShieldMaxHp.push(0);
+        }
+        while (player.hotbarShieldMaxHp.length > HOTBAR_SLOT_COUNT) {
+            player.hotbarShieldMaxHp.pop();
+        }
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
             if (!player.hotbarItems[i]) player.hotbarCounts[i] = EMPTY_HOTBAR_COUNT;
+            this.normalizeHotbarShieldSlot(player, i);
         }
+    }
+
+    private normalizeHotbarShieldSlot(player: PlayerState, index: number) {
+        const item = player.hotbarItems[index] || EMPTY_HOTBAR_ITEM;
+        const maxHp = this.getShieldMaxHpForItem(item);
+        if (maxHp <= 0) {
+            player.hotbarShieldHp[index] = 0;
+            player.hotbarShieldMaxHp[index] = 0;
+            return;
+        }
+
+        const previousMaxHp = Math.max(0, Math.floor(player.hotbarShieldMaxHp[index] || 0));
+        const currentHp = Math.max(0, Math.floor(player.hotbarShieldHp[index] || 0));
+        player.hotbarShieldMaxHp[index] = maxHp;
+        player.hotbarShieldHp[index] = previousMaxHp <= 0 ? maxHp : clamp(currentHp, 0, maxHp);
+    }
+
+    private getShieldMaxHpForItem(item: string): number {
+        if (item === ITEM_WOOD_SHIELD) return WOOD_SHIELD_MAX_HP;
+        if (item === ITEM_BONE_SHIELD) return BONE_SHIELD_MAX_HP;
+        return 0;
     }
 
     private getHotbarItem(player: PlayerState, slot: number): string {
@@ -2326,6 +2403,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.normalizeHotbar(player);
         player.hotbarItems[slot - 1] = item;
         player.hotbarCounts[slot - 1] = item ? player.hotbarCounts[slot - 1] || EMPTY_HOTBAR_COUNT : EMPTY_HOTBAR_COUNT;
+        this.initializeHotbarShieldSlot(player, slot - 1, item);
         if (player.activeSlot === slot) {
             player.activeItem = item;
         }
@@ -2345,9 +2423,16 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 ? BONE_STACK_MAX
                 : Number.MAX_SAFE_INTEGER;
         player.hotbarCounts[slot - 1] = item ? clamp(Math.floor(count), 0, maxCount) : EMPTY_HOTBAR_COUNT;
+        this.initializeHotbarShieldSlot(player, slot - 1, item);
         if (player.activeSlot === slot) {
             player.activeItem = item;
         }
+    }
+
+    private initializeHotbarShieldSlot(player: PlayerState, index: number, item: string) {
+        const maxHp = this.getShieldMaxHpForItem(item);
+        player.hotbarShieldMaxHp[index] = maxHp;
+        player.hotbarShieldHp[index] = maxHp;
     }
 
     private findFirstEmptyHotbarSlot(player: PlayerState): number {
@@ -2470,6 +2555,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (emptyIndex < 0) return false;
         player.hotbarItems[emptyIndex] = item;
         player.hotbarCounts[emptyIndex] = EMPTY_HOTBAR_COUNT;
+        this.initializeHotbarShieldSlot(player, emptyIndex, item);
         if (player.activeSlot === emptyIndex + 1) {
             player.activeItem = item;
         }
@@ -2937,6 +3023,54 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.axeWhirlwindCooldownProgress = 0;
     }
 
+    private setShieldBlocking(sessionId: string, active: boolean) {
+        const player = this.state.players.get(sessionId);
+        const sp = this.serverPlayers.get(sessionId);
+        if (!player || !sp) return;
+
+        if (!active) {
+            player.shieldBlocking = false;
+            return;
+        }
+        if (!sp.alive || player.isDead || this.state.gameOver || !this.isShieldItem(player.activeItem)) return;
+        this.normalizeHotbar(player);
+        const shieldIndex = player.activeSlot - 1;
+        if (shieldIndex < 0 || shieldIndex >= HOTBAR_SLOT_COUNT) return;
+        if ((player.hotbarShieldHp[shieldIndex] || 0) <= 0 || sp.shieldBlockCooldownMs > 0) return;
+
+        this.cancelRevive(sessionId);
+        this.clearBowCharge(player, sp);
+        this.clearBowVolley(sp);
+        this.setAxeWhirlwind(sessionId, false);
+        player.shieldBlocking = true;
+        player.attackItem = player.activeItem;
+    }
+
+    private updateShieldBlockCooldown(player: PlayerState, sp: ServerPlayer, dtMs: number) {
+        if (sp.shieldBlockCooldownMs <= 0) {
+            if (player.shieldBlockCooldownProgress !== 0) player.shieldBlockCooldownProgress = 0;
+            return;
+        }
+
+        sp.shieldBlockCooldownMs = Math.max(0, sp.shieldBlockCooldownMs - dtMs);
+        player.shieldBlockCooldownProgress = clamp(sp.shieldBlockCooldownMs / SHIELD_BLOCK_BREAK_COOLDOWN_MS, 0, 1);
+    }
+
+    private updateShieldRegeneration(player: PlayerState, sp: ServerPlayer, dtMs: number) {
+        this.normalizeHotbar(player);
+        sp.shieldRegenMs += dtMs;
+        if (sp.shieldRegenMs < SHIELD_REGEN_INTERVAL_MS) return;
+
+        const regenSteps = Math.floor(sp.shieldRegenMs / SHIELD_REGEN_INTERVAL_MS);
+        sp.shieldRegenMs -= regenSteps * SHIELD_REGEN_INTERVAL_MS;
+        for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+            const maxHp = Math.max(0, Math.floor(player.hotbarShieldMaxHp[i] || 0));
+            if (maxHp <= 0) continue;
+            const currentHp = clamp(Math.floor(player.hotbarShieldHp[i] || 0), 0, maxHp);
+            player.hotbarShieldHp[i] = Math.min(maxHp, currentHp + regenSteps);
+        }
+    }
+
     private updateAxeWhirlwindCooldown(player: PlayerState, sp: ServerPlayer, dtMs: number) {
         if (sp.axeWhirlwindCooldownMs <= 0) {
             if (player.axeWhirlwindCooldownProgress !== 0) player.axeWhirlwindCooldownProgress = 0;
@@ -3024,6 +3158,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             axeWhirlwindTickMs: 0,
             axeWhirlwindElapsedMs: 0,
             axeWhirlwindCooldownMs: 0,
+            shieldBlockCooldownMs: 0,
+            shieldRegenMs: 0,
             revivingTargetId: null,
             invulnerableUntilMs: this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
@@ -3110,6 +3246,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.bowChargeProgress = 0;
             player.bowChargeSeq = 0;
             player.bowVolleyCooldownProgress = 0;
+            player.shieldBlocking = false;
+            player.shieldBlockCooldownProgress = 0;
             player.pendingUpgradeChoices = 0;
             player.axeSwingSpeedUpgrades = 0;
             player.axePrimaryDamageUpgrades = 0;
@@ -3163,6 +3301,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindElapsedMs = 0;
             sp.axeWhirlwindCooldownMs = 0;
+            sp.shieldBlockCooldownMs = 0;
+            sp.shieldRegenMs = 0;
             sp.revivingTargetId = null;
             sp.invulnerableUntilMs = PLAYER_SPAWN_INVULNERABILITY_MS;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
@@ -4408,6 +4548,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         targetSp.axeWhirlwindTickMs = 0;
         targetSp.axeWhirlwindElapsedMs = 0;
         targetSp.axeWhirlwindCooldownMs = 0;
+        targetSp.shieldBlockCooldownMs = 0;
+        targetSp.shieldRegenMs = 0;
         targetSp.invulnerableUntilMs = this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
@@ -4424,6 +4566,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         target.bowCharging = false;
         target.bowChargeProgress = 0;
         target.bowVolleyCooldownProgress = 0;
+        target.shieldBlocking = false;
+        target.shieldBlockCooldownProgress = 0;
     }
 
     // ─── Player movement & firing ─────────────────────────────────────────────
@@ -4445,6 +4589,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         : 0;
                     this.updateBowVolleyCooldown(player, sp, dtMs);
                     this.updateAxeWhirlwindCooldown(player, sp, dtMs);
+                    this.updateShieldBlockCooldown(player, sp, dtMs);
+                    this.updateShieldRegeneration(player, sp, dtMs);
                 });
 
                 const inputX = Number(right) - Number(left);
@@ -6905,7 +7051,46 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!sp.alive || player.isDead || damage <= 0) return null;
         if (this.elapsedMs < sp.invulnerableUntilMs) return null;
 
-        player.health = Math.max(0, player.health - damage);
+        let remainingDamage = Math.max(0, Math.floor(damage));
+        if (player.shieldBlocking && this.isShieldItem(player.activeItem)) {
+            this.normalizeHotbar(player);
+            const shieldIndex = player.activeSlot - 1;
+            const shieldHp = shieldIndex >= 0 && shieldIndex < HOTBAR_SLOT_COUNT
+                ? Math.max(0, Math.floor(player.hotbarShieldHp[shieldIndex] || 0))
+                : 0;
+            if (shieldHp > 0) {
+                const absorbed = Math.min(shieldHp, remainingDamage);
+                const nextShieldHp = shieldHp - absorbed;
+                player.hotbarShieldHp[shieldIndex] = nextShieldHp;
+                remainingDamage -= absorbed;
+                this.broadcast("shieldBlock", {
+                    playerId: sid,
+                    attackerId,
+                    x: player.x,
+                    y: player.y,
+                    absorbed,
+                    shieldHp: nextShieldHp,
+                    shieldMaxHp: player.hotbarShieldMaxHp[shieldIndex] || 0,
+                });
+                if (nextShieldHp <= 0) {
+                    player.shieldBlocking = false;
+                    sp.shieldBlockCooldownMs = SHIELD_BLOCK_BREAK_COOLDOWN_MS;
+                    player.shieldBlockCooldownProgress = 1;
+                    this.broadcast("shieldBreak", {
+                        playerId: sid,
+                        attackerId,
+                        x: player.x,
+                        y: player.y,
+                    });
+                }
+            } else {
+                player.shieldBlocking = false;
+            }
+        }
+
+        if (remainingDamage <= 0) return null;
+
+        player.health = Math.max(0, player.health - remainingDamage);
         sp.invulnerableUntilMs = this.elapsedMs + PLAYER_HIT_INVULNERABILITY_MS;
         this.triggerPlayerDamageFlash(player, PLAYER_DAMAGE_FLASH_MS);
         const payload = {
@@ -6937,6 +7122,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.clearBowVolley(sp);
         sp.bowVolleyCooldownMs = 0;
         this.clearAxeWhirlwindState(player, sp);
+        sp.shieldBlockCooldownMs = 0;
+        player.shieldBlocking = false;
+        player.shieldBlockCooldownProgress = 0;
         sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         player.isDead = true;
         player.health = 0;
@@ -6999,6 +7187,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             sp.axeWhirlwindTickMs = 0;
             sp.axeWhirlwindElapsedMs = 0;
             sp.axeWhirlwindCooldownMs = 0;
+            sp.shieldBlockCooldownMs = 0;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
             sp.revivingTargetId = null;
             sp.invulnerableUntilMs = 0;
@@ -7010,6 +7199,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.axeWhirlwind = false;
             player.axeWhirlwindProgress = 0;
             player.axeWhirlwindCooldownProgress = 0;
+            player.shieldBlocking = false;
+            player.shieldBlockCooldownProgress = 0;
             player.axeWhirlwindHitSeq = 0;
             player.bowCharging = false;
             player.bowChargeProgress = 0;

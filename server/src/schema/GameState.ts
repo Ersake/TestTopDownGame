@@ -56,6 +56,10 @@ export class PlayerState extends Schema {
     @type("int16")   pendingCampfireCharges: number = 0;
     @type(["string"]) hotbarItems = new ArraySchema<string>();
     @type(["int16"])  hotbarCounts = new ArraySchema<number>();
+    @type(["int16"])  hotbarShieldHp = new ArraySchema<number>();
+    @type(["int16"])  hotbarShieldMaxHp = new ArraySchema<number>();
+    @type("boolean") shieldBlocking: boolean = false;
+    @type("float32") shieldBlockCooldownProgress: number = 0;
 }
 
 export class EnemyState extends Schema {
