@@ -192,7 +192,8 @@ const BOSS1_XP = 15;
 const RADIO_TRACK_COUNT = 7;
 const ENEMY1_SPEED = 100;
 const ENEMY2_SPEED = 114.75;
-const ENEMY1_HEALTH = 4;
+const ENEMY1_HEALTH = 5;
+const CASTER_HEALTH = 2;
 const DEFAULT_ENEMY_HEALTH = 3;
 const ENEMY1_ATTACK_RANGE = 20;
 const ENEMY1_PLAYER_ATTACK_RANGE = 72;
@@ -3832,10 +3833,20 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         player.kills++;
         this.addBoneToHotbar(player, 1);
-        const experience = enemy.enemyType === ENEMY_TYPE_BOSS1
-            ? BOSS1_XP
-            : enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? 2 : 1;
+        if (enemy.enemyType === ENEMY_TYPE_BOSS1 || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT) {
+            const experience = enemy.enemyType === ENEMY_TYPE_BOSS1 ? BOSS1_XP : 2;
+            this.awardAllPlayersExperience(experience);
+            return;
+        }
+
+        const experience = enemy.enemyType === ENEMY_TYPE_CASTER ? 2 : 1;
         this.awardPlayerExperience(playerId, experience);
+    }
+
+    private awardAllPlayersExperience(amount: number) {
+        this.state.players.forEach((_player, playerId) => {
+            this.awardPlayerExperience(playerId, amount);
+        });
     }
 
     private awardPlayerExperience(playerId: string, amount: number) {
@@ -4916,12 +4927,26 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
     private scheduleEnemyWave(waveIndex: number, metrics?: TickMetrics) {
         const waveStartMs = this.elapsedMs;
-        const meleeCount = waveIndex === 0 ? INITIAL_MELEE_WAVE_COUNT : waveIndex * MELEE_PER_MINUTE;
-        const casterCount = waveIndex === 0 ? 0 : waveIndex < DARK_KNIGHT_WAVE_INTERVAL_MINUTES ? 1 : 2;
-        const darkKnightCount = waveIndex > 0 && waveIndex % DARK_KNIGHT_WAVE_INTERVAL_MINUTES === 0
-            ? waveIndex / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
-            : 0;
-        const boss1Count = waveIndex + 1 === BOSS1_WAVE_NUMBER ? 1 : 0;
+        const customEnemyTypes = this.getCustomWaveEnemyTypes(waveIndex);
+        let meleeCount = 0;
+        let casterCount = 0;
+        let darkKnightCount = 0;
+        let boss1Count = 0;
+        if (customEnemyTypes) {
+            customEnemyTypes.forEach((enemyType) => {
+                if (enemyType === ENEMY_TYPE_CASTER) casterCount++;
+                else if (enemyType === ENEMY_TYPE_DARK_KNIGHT) darkKnightCount++;
+                else if (enemyType === ENEMY_TYPE_BOSS1) boss1Count++;
+                else meleeCount++;
+            });
+        } else {
+            meleeCount = waveIndex === 0 ? INITIAL_MELEE_WAVE_COUNT : waveIndex * MELEE_PER_MINUTE;
+            casterCount = waveIndex === 0 ? 0 : waveIndex < DARK_KNIGHT_WAVE_INTERVAL_MINUTES ? 1 : 2;
+            darkKnightCount = waveIndex > 0 && waveIndex % DARK_KNIGHT_WAVE_INTERVAL_MINUTES === 0
+                ? waveIndex / DARK_KNIGHT_WAVE_INTERVAL_MINUTES
+                : 0;
+            boss1Count = waveIndex + 1 === BOSS1_WAVE_NUMBER ? 1 : 0;
+        }
 
         const waveNumber = waveIndex + 1;
         this.state.waveNumber = waveNumber;
@@ -4940,17 +4965,23 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
 
         let spawnIndex = 0;
-        for (let i = 0; i < meleeCount; i++) {
-            this.queueEnemySpawn(rndInt(1, 2), waveStartMs, spawnIndex++);
-        }
-        for (let i = 0; i < casterCount; i++) {
-            this.queueEnemySpawn(ENEMY_TYPE_CASTER, waveStartMs, spawnIndex++);
-        }
-        for (let i = 0; i < darkKnightCount; i++) {
-            this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs, spawnIndex++);
-        }
-        for (let i = 0; i < boss1Count; i++) {
-            this.queueEnemySpawn(ENEMY_TYPE_BOSS1, waveStartMs, spawnIndex++);
+        if (customEnemyTypes) {
+            customEnemyTypes.forEach((enemyType) => {
+                this.queueEnemySpawn(enemyType, waveStartMs, spawnIndex++);
+            });
+        } else {
+            for (let i = 0; i < meleeCount; i++) {
+                this.queueEnemySpawn(rndInt(1, 2), waveStartMs, spawnIndex++);
+            }
+            for (let i = 0; i < casterCount; i++) {
+                this.queueEnemySpawn(ENEMY_TYPE_CASTER, waveStartMs, spawnIndex++);
+            }
+            for (let i = 0; i < darkKnightCount; i++) {
+                this.queueEnemySpawn(ENEMY_TYPE_DARK_KNIGHT, waveStartMs, spawnIndex++);
+            }
+            for (let i = 0; i < boss1Count; i++) {
+                this.queueEnemySpawn(ENEMY_TYPE_BOSS1, waveStartMs, spawnIndex++);
+            }
         }
 
         const scheduledEnemyCount = spawnIndex;
@@ -4972,6 +5003,43 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             + `spawnInterval=${ENEMY_WAVE_SPAWN_INTERVAL_MS}ms, active=${this.state.enemies.size}, `
             + `queued=${this.pendingEnemySpawns.length}`,
         );
+    }
+
+    private getCustomWaveEnemyTypes(waveIndex: number): number[] | null {
+        switch (waveIndex + 1) {
+            case 1:
+                return [
+                    ...Array(10).fill(1),
+                    ...Array(5).fill(2),
+                ];
+            case 2:
+                return [
+                    ...Array(12).fill(2),
+                    ENEMY_TYPE_CASTER,
+                    ...Array(13).fill(2),
+                ];
+            case 3:
+                return [
+                    ...Array(10).fill(1),
+                    ENEMY_TYPE_CASTER,
+                    ENEMY_TYPE_CASTER,
+                    ENEMY_TYPE_DARK_KNIGHT,
+                ];
+            case 4:
+                return [
+                    ...Array(13).fill(1),
+                    ...Array(13).fill(2),
+                    ...Array(13).fill(ENEMY_TYPE_CASTER),
+                ];
+            case 5:
+                return [
+                    ENEMY_TYPE_BOSS1,
+                    ...Array(25).fill(2),
+                    ...Array(20).fill(1),
+                ];
+            default:
+                return null;
+        }
     }
 
     private queueEnemySpawn(enemyType: number, waveStartMs: number, spawnIndex: number) {
@@ -5235,6 +5303,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private getEnemyMaxHealth(enemyType: number): number {
         if (enemyType === ENEMY_TYPE_BOSS1) return this.getBoss1MaxHealth();
         if (enemyType === ENEMY_TYPE_DARK_KNIGHT) return DARK_KNIGHT_HEALTH;
+        if (enemyType === ENEMY_TYPE_CASTER) return CASTER_HEALTH;
         if (enemyType === 1) return ENEMY1_HEALTH;
         return DEFAULT_ENEMY_HEALTH;
     }

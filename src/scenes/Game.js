@@ -72,6 +72,11 @@ const BOW_VOLLEY_TELEGRAPH_ALPHA = 0.72;
 const BOSS_BOMB_FILL_COLOR = 0xff2020;
 const BOSS_BOMB_FILL_ALPHA = 0.2;
 const BOSS_BOMB_SPRITE_SIZE = 42;
+const BOSS_BOMB_FUSE_BAR_WIDTH = 34;
+const BOSS_BOMB_FUSE_BAR_HEIGHT = 4;
+const BOSS_BOMB_FUSE_BAR_Y_OFFSET = -32;
+const BOSS_BOMB_FUSE_BAR_BACKGROUND_COLOR = 0x340000;
+const BOSS_BOMB_FUSE_BAR_FILL_COLOR = 0xff2020;
 const BOW_VOLLEY_DOT_LENGTH = 10;
 const BOW_VOLLEY_DOT_GAP = 8;
 const BOW_VOLLEY_TELEGRAPH_FALLBACK_MS = 700;
@@ -4742,10 +4747,31 @@ export class Game extends Phaser.Scene {
         });
 
         const impactDelayMs = Math.max(0, Number(event?.impactDelayMs) || 0);
+        const fuseStartedAt = this.time.now;
+        const fuseBar = this.add.graphics().setDepth(HITBOX_DEPTH);
+        this.registerWorldObject(fuseBar);
+        const drawFuseBar = () => {
+            const progress = impactDelayMs > 0
+                ? Phaser.Math.Clamp(1 - ((this.time.now - fuseStartedAt) / impactDelayMs), 0, 1)
+                : 0;
+            const barX = x - BOSS_BOMB_FUSE_BAR_WIDTH * 0.5;
+            const barY = y + BOSS_BOMB_FUSE_BAR_Y_OFFSET;
+            fuseBar.clear();
+            fuseBar.fillStyle(BOSS_BOMB_FUSE_BAR_BACKGROUND_COLOR, 0.9);
+            fuseBar.fillRect(barX, barY, BOSS_BOMB_FUSE_BAR_WIDTH, BOSS_BOMB_FUSE_BAR_HEIGHT);
+            fuseBar.fillStyle(BOSS_BOMB_FUSE_BAR_FILL_COLOR, 1);
+            fuseBar.fillRect(barX, barY, BOSS_BOMB_FUSE_BAR_WIDTH * progress, BOSS_BOMB_FUSE_BAR_HEIGHT);
+        };
+        drawFuseBar();
+        const fuseBarTimer = this.time.addEvent({
+            delay: 50,
+            loop: true,
+            callback: drawFuseBar,
+        });
         const timer = this.time.delayedCall(impactDelayMs + BOW_VOLLEY_TELEGRAPH_FALLBACK_MS, () => {
             this.removeBossBombTelegraph(id);
         });
-        this.bossBombTelegraphs.set(id, { graphics, bombSprite, timer, fuseSound });
+        this.bossBombTelegraphs.set(id, { graphics, bombSprite, fuseBar, fuseBarTimer, timer, fuseSound });
     }
 
     showBossBombImpact(event) {
@@ -4782,6 +4808,7 @@ export class Game extends Phaser.Scene {
         const telegraph = this.bossBombTelegraphs.get(id);
         if (!telegraph) return;
         telegraph.timer?.remove?.(false);
+        telegraph.fuseBarTimer?.remove?.(false);
         if (telegraph.fuseSound?.isPlaying || telegraph.fuseSound?.isPaused) {
             telegraph.fuseSound.stop();
         } else {
@@ -4789,12 +4816,14 @@ export class Game extends Phaser.Scene {
         }
         telegraph.graphics?.destroy?.();
         telegraph.bombSprite?.destroy?.();
+        telegraph.fuseBar?.destroy?.();
         this.bossBombTelegraphs.delete(id);
     }
 
     clearBossBombTelegraphs() {
-        this.bossBombTelegraphs.forEach(({ graphics, bombSprite, timer, fuseSound }) => {
+        this.bossBombTelegraphs.forEach(({ graphics, bombSprite, fuseBar, fuseBarTimer, timer, fuseSound }) => {
             timer?.remove?.(false);
+            fuseBarTimer?.remove?.(false);
             if (fuseSound?.isPlaying || fuseSound?.isPaused) {
                 fuseSound.stop();
             } else {
@@ -4802,6 +4831,7 @@ export class Game extends Phaser.Scene {
             }
             graphics?.destroy?.();
             bombSprite?.destroy?.();
+            fuseBar?.destroy?.();
         });
         this.bossBombTelegraphs.clear();
     }
