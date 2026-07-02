@@ -134,6 +134,18 @@ export default {
             key: 'wood-bow-icon',
             args: ['assets/Bow - wooden.png']
         },
+        woodShieldIcon: {
+            key: 'wood-shield-icon',
+            args: ['assets/woodshieldicon.png']
+        },
+        boneShieldIcon: {
+            key: 'bone-shield-icon',
+            args: ['assets/boneshieldicon.png']
+        },
+        bonesIcon: {
+            key: 'bones-icon',
+            args: ['assets/bones.png']
+        },
         hammerIcon: {
             key: 'hammer-icon',
             args: ['assets/hammer.png']
@@ -286,6 +298,13 @@ export default {
                 frameHeight: 128,
             }]
         },
+        playerShieldSlam: {
+            key: 'player-shield-slam',
+            args: ['assets/Playershieldslam.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
         woodAxeIdle: {
             key: 'wood-axe-idle',
             args: ['assets/WoodAxeIdle.png', {
@@ -338,6 +357,48 @@ export default {
         woodBowAttack: {
             key: 'wood-bow-attack',
             args: ['assets/WoodBowAttack.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodShieldIdle: {
+            key: 'wood-shield-idle',
+            args: ['assets/WoodshieldIdle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodShieldRun: {
+            key: 'wood-shield-run',
+            args: ['assets/Woodshieldrun.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        woodShieldBash: {
+            key: 'wood-shield-bash',
+            args: ['assets/Woodshieldbash.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boneShieldIdle: {
+            key: 'bone-shield-idle',
+            args: ['assets/BoneshieldIdle.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boneShieldRun: {
+            key: 'bone-shield-run',
+            args: ['assets/Boneshieldrun.png', {
+                frameWidth: 128,
+                frameHeight: 128,
+            }]
+        },
+        boneShieldBash: {
+            key: 'bone-shield-bash',
+            args: ['assets/Boneshieldbash.png', {
                 frameWidth: 128,
                 frameHeight: 128,
             }]

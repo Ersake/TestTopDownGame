@@ -56,6 +56,8 @@ const WORKBENCH_INTERACT_RANGE = 80;
 const LAYER3_ROW_OBJECT_HALF_WIDTH = MAP_TILE_SIZE;
 const LAYER3_ROW_OBJECT_HALF_HEIGHT = MAP_TILE_SIZE * 0.5;
 const CAMPFIRE_CRAFT_WOOD_COST = 10;
+const WOOD_SHIELD_CRAFT_WOOD_COST = 10;
+const BONE_SHIELD_CRAFT_BONE_COST = 10;
 const CALTROPS_FRAME = 449;
 const CALTROPS_SLOW_RADIUS = 44;
 const CALTROPS_SPEED_MULTIPLIER = 0.6;
@@ -93,6 +95,7 @@ const PLAYER_DASH_DURATION_MS = 160;
 const PLAYER_DASH_COOLDOWN_MS = 2000;
 const ATTACK_LOCK_MS = 350;
 const ATTACK_COOLDOWN_MS = 850;
+const SHIELD_BASH_COOLDOWN_MS = 650;
 const AXE_ATTACK_IMPACT_DELAY_MS = 200;
 const AXE_ATTACK_LINGER_MS = 400;
 const TREE_ATTACK_IMPACT_DELAY_MS = AXE_ATTACK_IMPACT_DELAY_MS;
@@ -120,6 +123,8 @@ const REVIVE_DURATION_MS = 2500;
 const REVIVE_RADIUS = 64;
 const REVIVE_HEALTH = 3;
 const ATTACK_HIT_RADIUS = 33;
+const SHIELD_BASH_RADIUS = 48;
+const SHIELD_BASH_FORWARD_OFFSET = 48;
 const AXE_WHIRLWIND_RADIUS = 56;
 const AXE_WHIRLWIND_TICK_MS = 500;
 const AXE_WHIRLWIND_MAX_DURATION_MS = 4000;
@@ -229,15 +234,19 @@ const ENEMY_FLOW_DIRECTION_ROWS = new Int8Array([-1, 0, 1, 0, -1, 1, 1, -1]);
 const GAME_OVER_RESTART_SECONDS = 10;
 const ITEM_WOOD_AXE = "wood_axe";
 const ITEM_WOOD_BOW = "wood_bow";
+const ITEM_WOOD_SHIELD = "wood_shield";
+const ITEM_BONE_SHIELD = "bone_shield";
 const ITEM_HAMMER = "hammer";
 const ITEM_CAMPFIRE = "campfire";
 const ITEM_WOOD_CALTROPS = "wood_caltrops";
 const ITEM_WOOD = "wood";
+const ITEM_BONE = "bone";
 const HOTBAR_SLOT_COUNT = 9;
 const OUTFIT_COLOR_COUNT = 5;
 const EMPTY_HOTBAR_ITEM = "";
 const EMPTY_HOTBAR_COUNT = 0;
 const WOOD_STACK_MAX = 99;
+const BONE_STACK_MAX = 99;
 const CAMPFIRE_HEAL_RADIUS = 320;
 const CAMPFIRE_HEAL_INTERVAL_MS = 10000;
 const CAMPFIRE_HEAL_AMOUNT = 1;
@@ -904,19 +913,25 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const player = this.state.players.get(client.sessionId);
             if (!sp || !sp.alive || !player || this.state.gameOver) return;
             if (sp.attackCooldownMs > 0) return;
-            if (player.activeItem !== ITEM_WOOD_AXE) return;
+            if (player.activeItem !== ITEM_WOOD_AXE && !this.isShieldItem(player.activeItem)) return;
             this.cancelRevive(client.sessionId);
 
             const attackDirection = normalizeAttackDirection(data?.direction, player.facingDirection || "N");
-            const attackItem = ITEM_WOOD_AXE;
+            const attackItem = player.activeItem;
             player.facingDirection = attackDirection;
             player.attackDirection = attackDirection;
             player.attackItem = attackItem;
             player.attackSeq++;
-            sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
             const targetX = data?.targetX;
             const targetY = data?.targetY;
 
+            if (this.isShieldItem(attackItem)) {
+                sp.attackCooldownMs = SHIELD_BASH_COOLDOWN_MS;
+                this.applyShieldBash(client.sessionId, attackDirection, targetX, targetY);
+                return;
+            }
+
+            sp.attackCooldownMs = this.getPlayerAxeCooldownMs(player);
             setTimeout(() => {
                 this.applyDelayedTreeAttackImpact(client.sessionId, attackDirection, targetX, targetY);
             }, TREE_ATTACK_IMPACT_DELAY_MS);
@@ -2320,7 +2335,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private setHotbarSlot(player: PlayerState, slot: number, item: string, count: number = 0) {
         this.normalizeHotbar(player);
         player.hotbarItems[slot - 1] = item;
-        const maxCount = item === ITEM_WOOD ? WOOD_STACK_MAX : Number.MAX_SAFE_INTEGER;
+        const maxCount = item === ITEM_WOOD
+            ? WOOD_STACK_MAX
+            : item === ITEM_BONE
+                ? BONE_STACK_MAX
+                : Number.MAX_SAFE_INTEGER;
         player.hotbarCounts[slot - 1] = item ? clamp(Math.floor(count), 0, maxCount) : EMPTY_HOTBAR_COUNT;
         if (player.activeSlot === slot) {
             player.activeItem = item;
@@ -2334,24 +2353,32 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private addWoodToHotbar(player: PlayerState, count: number): boolean {
+        return this.addStackItemToHotbar(player, ITEM_WOOD, WOOD_STACK_MAX, count);
+    }
+
+    private addBoneToHotbar(player: PlayerState, count: number): boolean {
+        return this.addStackItemToHotbar(player, ITEM_BONE, BONE_STACK_MAX, count);
+    }
+
+    private addStackItemToHotbar(player: PlayerState, stackItem: string, stackMax: number, count: number): boolean {
         this.normalizeHotbar(player);
         let remaining = Math.max(0, Math.floor(count));
         if (remaining <= 0) return false;
 
         let capacity = 0;
         for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
-            if (player.hotbarItems[i] === ITEM_WOOD) {
-                capacity += WOOD_STACK_MAX - clamp(Math.floor(player.hotbarCounts[i] || 0), 0, WOOD_STACK_MAX);
+            if (player.hotbarItems[i] === stackItem) {
+                capacity += stackMax - clamp(Math.floor(player.hotbarCounts[i] || 0), 0, stackMax);
             } else if (!player.hotbarItems[i]) {
-                capacity += WOOD_STACK_MAX;
+                capacity += stackMax;
             }
         }
         if (capacity < remaining) return false;
 
         for (let i = 0; i < HOTBAR_SLOT_COUNT && remaining > 0; i++) {
-            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
-            const current = clamp(Math.floor(player.hotbarCounts[i] || 0), 0, WOOD_STACK_MAX);
-            const room = WOOD_STACK_MAX - current;
+            if (player.hotbarItems[i] !== stackItem) continue;
+            const current = clamp(Math.floor(player.hotbarCounts[i] || 0), 0, stackMax);
+            const room = stackMax - current;
             if (room <= 0) continue;
             const added = Math.min(room, remaining);
             player.hotbarCounts[i] = current + added;
@@ -2361,8 +2388,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         while (remaining > 0) {
             const slot = this.findFirstEmptyHotbarSlot(player);
             if (slot <= 0) return false;
-            const added = Math.min(WOOD_STACK_MAX, remaining);
-            this.setHotbarSlot(player, slot, ITEM_WOOD, added);
+            const added = Math.min(stackMax, remaining);
+            this.setHotbarSlot(player, slot, stackItem, added);
             remaining -= added;
         }
 
@@ -2384,13 +2411,21 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private consumeHeldWood(player: PlayerState, count: number): boolean {
+        return this.consumeHeldStackItem(player, ITEM_WOOD, count);
+    }
+
+    private consumeHeldBone(player: PlayerState, count: number): boolean {
+        return this.consumeHeldStackItem(player, ITEM_BONE, count);
+    }
+
+    private consumeHeldStackItem(player: PlayerState, stackItem: string, count: number): boolean {
         this.normalizeHotbar(player);
         let remaining = Math.max(0, Math.floor(count));
         if (remaining <= 0) return false;
-        if (this.getTotalHeldWood(player) < remaining) return false;
+        if (this.getTotalHeldStackItem(player, stackItem) < remaining) return false;
 
         for (let i = 0; i < HOTBAR_SLOT_COUNT && remaining > 0; i++) {
-            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
+            if (player.hotbarItems[i] !== stackItem) continue;
             const current = Math.max(0, Math.floor(player.hotbarCounts[i] || 0));
             const consumed = Math.min(current, remaining);
             const next = current - consumed;
@@ -2406,9 +2441,17 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private getTotalHeldWood(player: PlayerState): number {
+        return this.getTotalHeldStackItem(player, ITEM_WOOD);
+    }
+
+    private getTotalHeldBone(player: PlayerState): number {
+        return this.getTotalHeldStackItem(player, ITEM_BONE);
+    }
+
+    private getTotalHeldStackItem(player: PlayerState, stackItem: string): number {
         this.normalizeHotbar(player);
         return player.hotbarItems.reduce((total, item, index) => {
-            return item === ITEM_WOOD ? total + Math.max(0, Math.floor(player.hotbarCounts[index] || 0)) : total;
+            return item === stackItem ? total + Math.max(0, Math.floor(player.hotbarCounts[index] || 0)) : total;
         }, 0);
     }
 
@@ -2464,10 +2507,14 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         };
 
         const craft = recipeId === "campfire"
-            ? { item: ITEM_CAMPFIRE, woodCost: CAMPFIRE_CRAFT_WOOD_COST }
+            ? { item: ITEM_CAMPFIRE, woodCost: CAMPFIRE_CRAFT_WOOD_COST, boneCost: 0 }
             : recipeId === "wood_caltrops"
-                ? { item: ITEM_WOOD_CALTROPS, woodCost: CALTROPS_CRAFT_WOOD_COST }
-                : null;
+                ? { item: ITEM_WOOD_CALTROPS, woodCost: CALTROPS_CRAFT_WOOD_COST, boneCost: 0 }
+                : recipeId === "wood_shield"
+                    ? { item: ITEM_WOOD_SHIELD, woodCost: WOOD_SHIELD_CRAFT_WOOD_COST, boneCost: 0 }
+                    : recipeId === "bone_shield"
+                        ? { item: ITEM_BONE_SHIELD, woodCost: 0, boneCost: BONE_SHIELD_CRAFT_BONE_COST }
+                        : null;
         if (!craft) return reject("That recipe is not available yet.");
 
         const sp = this.serverPlayers.get(client.sessionId);
@@ -2477,8 +2524,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
         if (!this.isPlayerNearWorkbench(player)) return reject("Move closer to a workbench.");
         if (this.getTotalHeldWood(player) < craft.woodCost) return reject("Not enough wood.");
-        if (!this.hasRoomForCraftedItem(player, craft.woodCost)) return reject("No empty hotbar slot.");
-        if (!this.consumeHeldWood(player, craft.woodCost)) return reject("Not enough wood.");
+        if (this.getTotalHeldBone(player) < craft.boneCost) return reject("Not enough bones.");
+        if (!this.hasRoomForCraftedItem(player, craft.woodCost, craft.boneCost)) return reject("No empty hotbar slot.");
+        if (craft.woodCost > 0 && !this.consumeHeldWood(player, craft.woodCost)) return reject("Not enough wood.");
+        if (craft.boneCost > 0 && !this.consumeHeldBone(player, craft.boneCost)) return reject("Not enough bones.");
 
         player.wood = this.getTotalHeldWood(player);
         if (craft.item === ITEM_CAMPFIRE) {
@@ -2491,13 +2540,13 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return true;
     }
 
-    private hasRoomForCraftedItem(player: PlayerState, woodCost: number): boolean {
+    private hasRoomForCraftedItem(player: PlayerState, woodCost: number, boneCost: number = 0): boolean {
         this.normalizeHotbar(player);
         if (this.findFirstEmptyHotbarSlot(player) > 0) return true;
 
-        let remainingCost = Math.max(0, Math.floor(woodCost));
+        let remainingCost = Math.max(0, Math.floor(woodCost)) + Math.max(0, Math.floor(boneCost));
         for (let i = 0; i < HOTBAR_SLOT_COUNT && remainingCost > 0; i++) {
-            if (player.hotbarItems[i] !== ITEM_WOOD) continue;
+            if (player.hotbarItems[i] !== ITEM_WOOD && player.hotbarItems[i] !== ITEM_BONE) continue;
             const current = Math.max(0, Math.floor(player.hotbarCounts[i] || 0));
             if (current <= remainingCost) return true;
             remainingCost -= current;
@@ -3430,6 +3479,41 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
     }
 
+    private isShieldItem(item: string): boolean {
+        return item === ITEM_WOOD_SHIELD || item === ITEM_BONE_SHIELD;
+    }
+
+    private applyShieldBash(attackerId: string, direction: string, targetX: unknown, targetY: unknown) {
+        const sp = this.serverPlayers.get(attackerId);
+        const player = this.state.players.get(attackerId);
+        if (!sp || !sp.alive || !player || player.isDead || this.state.gameOver || !this.isShieldItem(player.activeItem)) return;
+
+        const origin = { x: player.x, y: player.y };
+        const vector = this.getAttackVector(origin, direction, targetX, targetY);
+        const hitX = player.x + vector.x * SHIELD_BASH_FORWARD_OFFSET;
+        const hitY = player.y + ATTACK_HIT_ORIGIN_Y_OFFSET + vector.y * SHIELD_BASH_FORWARD_OFFSET;
+        const hitEnemyIds: string[] = [];
+
+        this.state.enemies.forEach((enemy, enemyId) => {
+            if (enemy.isDead) return;
+            if (!circleOverlapsAabb(
+                hitX,
+                hitY,
+                SHIELD_BASH_RADIUS,
+                enemy.x,
+                enemy.y,
+                ENEMY_MELEE_HIT_HW,
+                ENEMY_MELEE_HIT_HH,
+            )) return;
+            hitEnemyIds.push(enemyId);
+        });
+
+        hitEnemyIds.forEach((enemyId) => {
+            const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, 1);
+            if (enemyHit) this.broadcast("enemyHit", enemyHit);
+        });
+    }
+
     private damageTreesFromAxeWhirlwind(x: number, y: number, attackerId: string): TreeHitPayload[] {
         const hitPayloads: TreeHitPayload[] = [];
         const hitTreeIds: string[] = [];
@@ -3747,6 +3831,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!player) return;
 
         player.kills++;
+        this.addBoneToHotbar(player, 1);
         const experience = enemy.enemyType === ENEMY_TYPE_BOSS1
             ? BOSS1_XP
             : enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT ? 2 : 1;

@@ -270,10 +270,13 @@ const OUTFIT_COLOR_BUTTONS = [
 ];
 const ITEM_WOOD_AXE = 'wood_axe';
 const ITEM_WOOD_BOW = 'wood_bow';
+const ITEM_WOOD_SHIELD = 'wood_shield';
+const ITEM_BONE_SHIELD = 'bone_shield';
 const ITEM_HAMMER = 'hammer';
 const ITEM_CAMPFIRE = 'campfire';
 const ITEM_WOOD_CALTROPS = 'wood_caltrops';
 const ITEM_WOOD = 'wood';
+const ITEM_BONE = 'bone';
 const ENEMY_MAX_HEALTH = 3;
 const ENEMY_HEALTH_BAR_WIDTH = 48;
 const ENEMY_HEALTH_BAR_HEIGHT = 6;
@@ -395,12 +398,20 @@ const CRAFTING_RECIPES = [
         icon: 'caltrops',
     },
     {
-        id: 'sword_shield',
-        name: 'Sword and Shield',
-        description: 'Pretty good.',
-        cost: 'Cost: 10 wood, 10 bones',
-        enabled: false,
-        icon: 'placeholder',
+        id: 'wood_shield',
+        name: 'Wood Shield',
+        description: 'Bashes enemies in front of you for 1 damage.',
+        cost: 'Cost: 10 wood',
+        enabled: true,
+        icon: 'woodShield',
+    },
+    {
+        id: 'bone_shield',
+        name: 'Bone Shield',
+        description: 'Bashes enemies in front of you for 1 damage.',
+        cost: 'Cost: 10 bones',
+        enabled: true,
+        icon: 'boneShield',
     },
     {
         id: 'bone_bow',
@@ -1338,10 +1349,13 @@ export class Game extends Phaser.Scene {
     getHotbarIconKey(item) {
         if (item === ITEM_WOOD_AXE) return ASSETS.image.woodAxeIcon.key;
         if (item === ITEM_WOOD_BOW) return ASSETS.image.woodBowIcon.key;
+        if (item === ITEM_WOOD_SHIELD) return ASSETS.image.woodShieldIcon.key;
+        if (item === ITEM_BONE_SHIELD) return ASSETS.image.boneShieldIcon.key;
         if (item === ITEM_HAMMER) return ASSETS.image.hammerIcon.key;
         if (item === ITEM_CAMPFIRE) return ASSETS.spritesheet.campfire.key;
         if (item === ITEM_WOOD_CALTROPS) return ASSETS.spritesheet.topdownTileset.key;
         if (item === ITEM_WOOD) return ASSETS.image.log.key;
+        if (item === ITEM_BONE) return ASSETS.image.bonesIcon.key;
         return null;
     }
 
@@ -1396,7 +1410,10 @@ export class Game extends Phaser.Scene {
         return ENCHANTMENT_SKILL_TREES[item]?.displayName || {
             [ITEM_CAMPFIRE]: 'Campfire',
             [ITEM_WOOD_CALTROPS]: 'Wood Caltrops',
+            [ITEM_WOOD_SHIELD]: 'Wood Shield',
+            [ITEM_BONE_SHIELD]: 'Bone Shield',
             [ITEM_WOOD]: 'Wood',
+            [ITEM_BONE]: 'Bone',
         }[item] || 'Item';
     }
 
@@ -1772,6 +1789,12 @@ export class Game extends Phaser.Scene {
             } else if (recipe.icon === 'caltrops') {
                 icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.spritesheet.topdownTileset.key, CALTROPS_FRAME)
                     .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
+            } else if (recipe.icon === 'woodShield') {
+                icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.image.woodShieldIcon.key)
+                    .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
+            } else if (recipe.icon === 'boneShield') {
+                icon = this.add.image(48, CRAFTING_ROW_HEIGHT * 0.5, ASSETS.image.boneShieldIcon.key)
+                    .setDisplaySize(CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE);
             } else {
                 icon = this.add.rectangle(48, CRAFTING_ROW_HEIGHT * 0.5, CRAFTING_ICON_SIZE, CRAFTING_ICON_SIZE, 0x1d1d1d, 0.85)
                     .setStrokeStyle(3, 0x050505, 0.9);
@@ -2019,6 +2042,7 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.player.axeRunAttack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.axeWhirlwind).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.bow).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.player.shieldSlam).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.player.die).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeIdle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodAxeRun).forEach(animation => this.createAnimation(animation));
@@ -2028,6 +2052,12 @@ export class Game extends Phaser.Scene {
         Object.values(ANIMATION.weapon.woodBowIdle).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodBowRun).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.weapon.woodBowAttack).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodShieldIdle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodShieldRun).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.woodShieldBash).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.boneShieldIdle).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.boneShieldRun).forEach(animation => this.createAnimation(animation));
+        Object.values(ANIMATION.weapon.boneShieldBash).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.run).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.attack).forEach(animation => this.createAnimation(animation));
         Object.values(ANIMATION.enemy1.damage).forEach(animation => this.createAnimation(animation));
@@ -5650,8 +5680,13 @@ export class Game extends Phaser.Scene {
 
     getLocalAxeRepeatMs() {
         const animationState = this.localSessionId ? this.playerAnimationState.get(this.localSessionId) : null;
+        if (this.isShieldItem(animationState?.activeItem || '')) return 710;
         const stacks = Math.max(0, animationState?.axeSwingSpeedUpgrades || 0);
         return (PLAYER_ATTACK_REPEAT_MS / (1 + 0.25 * stacks)) + PLAYER_ATTACK_REPEAT_BUFFER_MS;
+    }
+
+    isShieldItem(item) {
+        return item === ITEM_WOOD_SHIELD || item === ITEM_BONE_SHIELD;
     }
 
     playLocalAttackAnimation(pointer) {
@@ -5664,7 +5699,7 @@ export class Game extends Phaser.Scene {
         const origin = { x: animationState.x ?? sprite.x, y: animationState.y ?? (sprite.y - PLAYER_VISUAL_Y_OFFSET) };
         const direction = this.getAttackDirectionFromWorldPoint(worldPoint, origin, animationState.direction || DEFAULT_PLAYER_DIRECTION);
         const attackItem = animationState.activeItem || '';
-        if (attackItem !== ITEM_WOOD_AXE) return false;
+        if (attackItem !== ITEM_WOOD_AXE && !this.isShieldItem(attackItem)) return false;
         animationState.attackTargetX = worldPoint?.x ?? null;
         animationState.attackTargetY = worldPoint?.y ?? null;
         animationState.attackItem = attackItem;
@@ -5685,18 +5720,29 @@ export class Game extends Phaser.Scene {
     getPlayerAttackMode(item, moving = false) {
         if (item === ITEM_WOOD_AXE) return moving ? 'axeRunAttack' : 'axe';
         if (item === ITEM_WOOD_BOW) return 'bow';
+        if (this.isShieldItem(item)) return 'shieldSlam';
         return null;
     }
 
     getWeaponAnimationGroup(item, mode = 'idle') {
-        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW && !this.isShieldItem(item)) return null;
+        if (this.isShieldItem(item)) {
+            const shieldPrefix = item === ITEM_BONE_SHIELD ? 'boneShield' : 'woodShield';
+            const shieldSuffix = mode === 'attack' ? 'Bash' : mode === 'run' ? 'Run' : 'Idle';
+            return ANIMATION.weapon[`${shieldPrefix}${shieldSuffix}`];
+        }
         const suffix = mode === 'whirlwind' ? 'Whirlwind' : mode === 'runAttack' ? 'RunAttack' : mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ANIMATION.weapon[`${prefix}${suffix}`];
     }
 
     getWeaponTextureKey(item, mode = 'idle') {
-        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) return null;
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW && !this.isShieldItem(item)) return null;
+        if (this.isShieldItem(item)) {
+            const prefix = item === ITEM_BONE_SHIELD ? 'boneShield' : 'woodShield';
+            const suffix = mode === 'attack' ? 'Bash' : mode === 'run' ? 'Run' : 'Idle';
+            return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodShieldIdle.key;
+        }
         const suffix = mode === 'runAttack' ? 'RunAttack1' : mode === 'attack' ? 'Attack' : mode === 'run' ? 'Run' : 'Idle';
         const prefix = item === ITEM_WOOD_BOW ? 'woodBow' : 'woodAxe';
         return ASSETS.spritesheet[`${prefix}${suffix}`]?.key || ASSETS.spritesheet.woodAxeIdle.key;
@@ -5736,7 +5782,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.resetPlayerWeaponDisplaySize(sessionId);
-        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW) {
+        if (item !== ITEM_WOOD_AXE && item !== ITEM_WOOD_BOW && !this.isShieldItem(item)) {
             this.hidePlayerWeapon(sessionId);
             return;
         }
@@ -5793,7 +5839,7 @@ export class Game extends Phaser.Scene {
     playPlayerWeaponAnimation(sessionId, item, direction, { mode = 'attack', restart = false, preserveProgress = false } = {}) {
         const weapon = this.playerWeaponSprites.get(sessionId);
         const animationState = this.playerAnimationState.get(sessionId);
-        if (!weapon || !animationState || !weapon.visible) return false;
+        if (!weapon || !animationState) return false;
 
         const nextDirection = direction || animationState.direction || DEFAULT_PLAYER_DIRECTION;
         const animation = this.getWeaponAnimationGroup(item, mode)?.[nextDirection];

@@ -57,6 +57,7 @@ export default {
         axeRunAttack: createDirectionalAnimations('axe-run-attack', ASSETS.spritesheet.playerRunAttack1.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
         axeWhirlwind: createDirectionalAnimations('axe-whirlwind', ASSETS.spritesheet.playerAttack2.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: -1, frameStartOffset: 3, frameEndOffset: 3 }),
         bow: createDirectionalAnimations('bow', ASSETS.spritesheet.playerBow.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        shieldSlam: createDirectionalAnimations('shield-slam', ASSETS.spritesheet.playerShieldSlam.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
         die: createDirectionalAnimations('die', ASSETS.spritesheet.playerDie.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
     weapon: {
@@ -68,6 +69,12 @@ export default {
         woodBowIdle: createDirectionalAnimations('wood-bow-idle', ASSETS.spritesheet.woodBowIdle.key, PLAYER_DIRECTIONS),
         woodBowRun: createDirectionalAnimations('wood-bow-run', ASSETS.spritesheet.woodBowRun.key, PLAYER_DIRECTIONS),
         woodBowAttack: createDirectionalAnimations('wood-bow-attack', ASSETS.spritesheet.woodBowAttack.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        woodShieldIdle: createDirectionalAnimations('wood-shield-idle', ASSETS.spritesheet.woodShieldIdle.key, PLAYER_DIRECTIONS),
+        woodShieldRun: createDirectionalAnimations('wood-shield-run', ASSETS.spritesheet.woodShieldRun.key, PLAYER_DIRECTIONS),
+        woodShieldBash: createDirectionalAnimations('wood-shield-bash', ASSETS.spritesheet.woodShieldBash.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
+        boneShieldIdle: createDirectionalAnimations('bone-shield-idle', ASSETS.spritesheet.boneShieldIdle.key, PLAYER_DIRECTIONS),
+        boneShieldRun: createDirectionalAnimations('bone-shield-run', ASSETS.spritesheet.boneShieldRun.key, PLAYER_DIRECTIONS),
+        boneShieldBash: createDirectionalAnimations('bone-shield-bash', ASSETS.spritesheet.boneShieldBash.key, PLAYER_DIRECTIONS, { frameRate: 18, repeat: 0 }),
     },
     enemy1: {
         run: createDirectionalAnimations('enemy1-run', ASSETS.spritesheet.enemy1Run.key, ENEMY_DIRECTIONS),
