@@ -401,7 +401,7 @@ const ENCHANTMENT_SKILL_TREES = {
             { id: 'bow_primary_attack_speed', label: '+20% charge speed', field: 'bowChargeTimeUpgrades', maxRank: 4, column: 0, row: 0 },
             { id: 'bow_pierce', label: '+1 primary pierce', field: 'bowPierceUpgrades', prerequisite: 'bow_primary_attack_speed', maxRank: 10, column: 0, row: 1 },
             { id: 'bow_damage', label: '+1 primary damage', field: 'bowDamageUpgrades', prerequisite: 'bow_pierce', maxRank: 10, column: 0, row: 2 },
-            { id: 'bow_volley_cooldown', label: '-1 second volley cooldown', field: 'bowVolleyCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
+            { id: 'bow_volley_cooldown', label: '-25% volley cooldown', field: 'bowVolleyCooldownUpgrades', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 0 },
             { id: 'bow_volley_aoe', label: '+25% volley size', field: 'bowVolleyAoeUpgrades', prerequisite: 'bow_volley_cooldown', maxRank: 5, column: 1, row: 1 },
             { id: 'bow_volley_damage', label: '+1 volley damage', field: 'bowVolleyDamageUpgrades', prerequisite: 'bow_volley_aoe', maxRank: ENCHANTMENT_MAX_RANK, column: 1, row: 2 },
         ],

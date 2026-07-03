@@ -2906,7 +2906,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
     private getPlayerBowVolleyCooldownMs(player: PlayerState): number {
         const rank = clamp(Math.floor(player.bowVolleyCooldownUpgrades || 0), 0, BOW_VOLLEY_COOLDOWN_UPGRADE_MAX_RANK);
-        return Math.max(0, BOW_VOLLEY_COOLDOWN_MS - 1000 * rank);
+        return Math.max(0, BOW_VOLLEY_COOLDOWN_MS * (1 - 0.25 * rank));
     }
 
     private getPlayerBowVolleyRadius(player: PlayerState): number {
