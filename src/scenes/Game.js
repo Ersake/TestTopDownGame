@@ -32,6 +32,8 @@ const ENEMY_VISUAL_Y_OFFSET = 6;
 const TREE_HALF_SIZE = 96;
 const LOG_DISPLAY_SIZE = 48;
 const LOG_DEPTH = 95;
+const BONE_DROP_DISPLAY_SIZE = 32;
+const BONE_DROP_DEPTH = LOG_DEPTH;
 const PLAYER_HITBOX_HW = 11;
 const PLAYER_HITBOX_HH = 21;
 const PLAYER_HITBOX_Y_OFFSET = 10;
@@ -587,6 +589,7 @@ export class Game extends Phaser.Scene {
         this.casterChargeSounds = new Map();
         this.treeSprites         = new Map();
         this.logSprites          = new Map();
+        this.boneDropSprites     = new Map();
         this.campfireSprites     = new Map();
         this.caltropSprites      = new Map();
         this.enchantmentTableSprites = new Map();
@@ -3272,6 +3275,10 @@ export class Game extends Phaser.Scene {
             this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
         });
 
+        room.onMessage('bonePickup', () => {
+            this.playSfx(ASSETS.audio.grabItem.key, GRAB_ITEM_SOUND_VOLUME, { serverEvent: true });
+        });
+
         room.onMessage('craftResult', (result) => {
             if (!this.craftingUi) return;
             if (result?.accepted) {
@@ -4144,6 +4151,35 @@ export class Game extends Phaser.Scene {
             const pile = this.logSprites.get(id);
             if (pile) pile.sprites.forEach((sprite) => sprite.destroy());
             this.logSprites.delete(id);
+        });
+
+        const addBoneDrop = (bone, id) => {
+            const boneId = id || bone.id;
+            if (!boneId || this.boneDropSprites.has(boneId)) return;
+
+            const sprite = this.add.image(bone.x, bone.y, ASSETS.image.bonesIcon.key)
+                .setOrigin(0.5, 0.5)
+                .setDisplaySize(BONE_DROP_DISPLAY_SIZE, BONE_DROP_DISPLAY_SIZE)
+                .setDepth(BONE_DROP_DEPTH);
+            this.registerWorldObject(sprite);
+
+            this.boneDropSprites.set(boneId, { sprite, bone });
+
+            bone.onChange(() => {
+                const drop = this.boneDropSprites.get(boneId);
+                if (!drop) return;
+                drop.sprite.x = bone.x;
+                drop.sprite.y = bone.y;
+            });
+        };
+
+        state.boneDrops?.onAdd(addBoneDrop);
+        state.boneDrops?.forEach(addBoneDrop);
+
+        state.boneDrops?.onRemove((_bone, id) => {
+            const drop = this.boneDropSprites.get(id);
+            drop?.sprite.destroy();
+            this.boneDropSprites.delete(id);
         });
 
         const addCampfire = (campfire, id) => {
@@ -7615,6 +7651,9 @@ export class Game extends Phaser.Scene {
         this.logSprites.forEach(({ sprites }) => {
             sprites.forEach((sprite) => sprite.destroy());
         });
+        this.boneDropSprites.forEach(({ sprite }) => {
+            sprite.destroy();
+        });
         this.campfireSprites.forEach(({ sprite, radius, healBar }) => {
             sprite.destroy();
             radius?.destroy();
@@ -7722,6 +7761,7 @@ export class Game extends Phaser.Scene {
         this.enemyHealthBars.clear();
         this.treeSprites.clear();
         this.logSprites.clear();
+        this.boneDropSprites.clear();
         this.campfireSprites.clear();
         this.caltropSprites.clear();
         this.enchantmentTableSprites.clear();

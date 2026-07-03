@@ -7,6 +7,7 @@ import {
     EnemyBulletState,
     TreeState,
     LogState,
+    BoneDropState,
     CampfireState,
     CaltropState,
     EnchantmentTableState,
@@ -112,6 +113,10 @@ const BOW_VOLLEY_COOLDOWN_MS = 3000;
 const TREE_HEALTH = 4;
 const WOOD_PILE_AMOUNT = 5;
 const WOOD_PICKUP_RADIUS = 80;
+const BONE_DROP_CHANCE = 0.75;
+const BONE_DROP_AMOUNT = 1;
+const BONE_PICKUP_RADIUS = WOOD_PICKUP_RADIUS;
+const RESOURCE_PICKUP_CHECK_MS = 200;
 const BUILD_GRID_SIZE = BASE_TILE_SIZE * TILE_WORLD_SCALE;
 const BUILD_BLOCK_HALF_SIZE = BUILD_GRID_SIZE / 2;
 const BUILD_PATH_COLUMNS = Math.ceil(WORLD_WIDTH / BUILD_GRID_SIZE);
@@ -126,6 +131,7 @@ const REVIVE_HEALTH = 3;
 const ATTACK_HIT_RADIUS = 33;
 const SHIELD_BASH_RADIUS = 48;
 const SHIELD_BASH_FORWARD_OFFSET = 48;
+const SHIELD_BLOCK_RADIUS = 44 * 0.9;
 const AXE_WHIRLWIND_RADIUS = 56;
 const AXE_WHIRLWIND_TICK_MS = 500;
 const AXE_WHIRLWIND_MAX_DURATION_MS = 4000;
@@ -547,6 +553,7 @@ interface ServerPlayer {
     axeWhirlwindCooldownMs: number;
     shieldBlockCooldownMs: number;
     shieldRegenMs: number;
+    pickupCheckMs: number;
     revivingTargetId: string | null;
     invulnerableUntilMs: number;
     input: { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; interact: boolean };
@@ -933,10 +940,6 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             if (isInteracting && !wasInteracting) {
                 if (this.tryStartRevive(client.sessionId, client)) {
                     return;
-                }
-                const woodPickupAmount = this.tryPickupWood(client.sessionId);
-                if (woodPickupAmount > 0) {
-                    client.send("woodPickup", { amount: woodPickupAmount });
                 }
             }
         });
@@ -2876,6 +2879,11 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return SHIELD_REGEN_INTERVAL_MS / (1 + 0.10 * rank);
     }
 
+    private getPlayerShieldBlockRadius(player: PlayerState): number {
+        const rank = clamp(Math.floor(player.shieldSizeUpgrades || 0), 0, SHIELD_SIZE_UPGRADE_MAX_RANK);
+        return SHIELD_BLOCK_RADIUS * (1 + 0.25 * rank);
+    }
+
     private getPlayerAxeWhirlwindCooldownMs(player: PlayerState): number {
         const rank = clamp(Math.floor(player.axeWhirlwindCooldownUpgrades || 0), 0, UPGRADE_MAX_RANK);
         return Math.max(AXE_WHIRLWIND_COOLDOWN_MIN_MS, AXE_WHIRLWIND_COOLDOWN_MS - 2000 * rank);
@@ -3328,6 +3336,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             axeWhirlwindCooldownMs: 0,
             shieldBlockCooldownMs: 0,
             shieldRegenMs: 0,
+            pickupCheckMs: 0,
             revivingTargetId: null,
             invulnerableUntilMs: this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS,
             input: { left: false, right: false, up: false, down: false, fire: false, interact: false },
@@ -3380,6 +3389,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.activeAxeAttacks = [];
         this.clearNextWaveReadyState();
         this.state.logs.clear();
+        this.state.boneDrops.clear();
         this.state.campfires.clear();
         this.campfireOwners.clear();
         this.state.caltrops.clear();
@@ -3476,6 +3486,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             sp.axeWhirlwindCooldownMs = 0;
             sp.shieldBlockCooldownMs = 0;
             sp.shieldRegenMs = 0;
+            sp.pickupCheckMs = 0;
             sp.revivingTargetId = null;
             sp.invulnerableUntilMs = PLAYER_SPAWN_INVULNERABILITY_MS;
             sp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
@@ -4149,7 +4160,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!player) return;
 
         player.kills++;
-        this.addBoneToHotbar(player, 1);
+        this.maybeSpawnBoneDrop(enemy);
         if (enemy.enemyType === ENEMY_TYPE_BOSS1 || enemy.enemyType === ENEMY_TYPE_DARK_KNIGHT) {
             const experience = enemy.enemyType === ENEMY_TYPE_BOSS1 ? BOSS1_XP : 2;
             this.awardAllPlayersExperience(experience);
@@ -4227,6 +4238,49 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.state.logs.set(log.id, log);
     }
 
+    private maybeSpawnBoneDrop(enemy: EnemyState): void {
+        if (Math.random() >= BONE_DROP_CHANCE) return;
+
+        const bone = new BoneDropState();
+        bone.id = `bone-${nextId()}`;
+        bone.x = clamp(enemy.x, LOG_WORLD_PADDING, WORLD_WIDTH - LOG_WORLD_PADDING);
+        bone.y = clamp(enemy.y, LOG_WORLD_PADDING, WORLD_HEIGHT - LOG_WORLD_PADDING);
+        bone.amount = BONE_DROP_AMOUNT;
+        this.state.boneDrops.set(bone.id, bone);
+    }
+
+    private tryPickupBone(sessionId: string): number {
+        const sp = this.serverPlayers.get(sessionId);
+        const player = this.state.players.get(sessionId);
+        if (!sp || !sp.alive || !player || this.state.gameOver) return 0;
+
+        const pickupX = player.x;
+        const pickupY = player.y;
+        const pickupRadiusSq = BONE_PICKUP_RADIUS * BONE_PICKUP_RADIUS;
+        let closestBoneId: string | null = null;
+        let closestDistanceSq = Number.POSITIVE_INFINITY;
+
+        this.state.boneDrops.forEach((bone, id) => {
+            const dx = pickupX - bone.x;
+            const dy = pickupY - bone.y;
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq <= pickupRadiusSq && distanceSq < closestDistanceSq) {
+                closestDistanceSq = distanceSq;
+                closestBoneId = id;
+            }
+        });
+
+        if (!closestBoneId) return 0;
+
+        const bone = this.state.boneDrops.get(closestBoneId);
+        if (!bone) return 0;
+
+        const amount = Math.max(1, Math.floor(bone.amount || BONE_DROP_AMOUNT));
+        if (!this.addBoneToHotbar(player, amount)) return 0;
+        this.state.boneDrops.delete(closestBoneId);
+        return amount;
+    }
+
     private tryPickupWood(sessionId: string): number {
         const sp = this.serverPlayers.get(sessionId);
         const player = this.state.players.get(sessionId);
@@ -4259,6 +4313,26 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.wood = this.getTotalHeldWood(player);
         this.state.logs.delete(closestLogId);
         return amount;
+    }
+
+    private tryAutoPickupResources(sessionId: string, sp: ServerPlayer, dtMs: number): void {
+        if (this.state.logs.size === 0 && this.state.boneDrops.size === 0) return;
+
+        sp.pickupCheckMs = Math.max(0, sp.pickupCheckMs - dtMs);
+        if (sp.pickupCheckMs > 0) return;
+        sp.pickupCheckMs = RESOURCE_PICKUP_CHECK_MS;
+
+        const client = this.clients.find((candidate) => candidate.sessionId === sessionId);
+        const bonePickupAmount = this.tryPickupBone(sessionId);
+        if (bonePickupAmount > 0) {
+            client?.send("bonePickup", { amount: bonePickupAmount });
+            return;
+        }
+
+        const woodPickupAmount = this.tryPickupWood(sessionId);
+        if (woodPickupAmount > 0) {
+            client?.send("woodPickup", { amount: woodPickupAmount });
+        }
     }
 
     private tryRemoveDeployable(sessionId: string, data: unknown): boolean {
@@ -4724,6 +4798,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         targetSp.axeWhirlwindCooldownMs = 0;
         targetSp.shieldBlockCooldownMs = 0;
         targetSp.shieldRegenMs = 0;
+        targetSp.pickupCheckMs = 0;
         targetSp.invulnerableUntilMs = this.elapsedMs + PLAYER_SPAWN_INVULNERABILITY_MS;
         targetSp.input = { left: false, right: false, up: false, down: false, fire: false, interact: false };
         target.health = REVIVE_HEALTH;
@@ -4875,6 +4950,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         }
                     });
                 }
+
+                this.measurePlayerSubphase("playerResourcePickup", () => {
+                    this.tryAutoPickupResources(sid, sp, dtMs);
+                });
 
                 this.measurePlayerSubphase("playerFire", () => {
                     sp.fireCounter = Math.max(0, sp.fireCounter - dtMs);
@@ -7235,45 +7314,95 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.damageFlashBlinkMs = blinkMs;
     }
 
+    private findShieldAbsorberForPlayer(targetId: string, target: PlayerState): { id: string; sp: ServerPlayer; player: PlayerState } | null {
+        const ownSp = this.serverPlayers.get(targetId);
+        if (ownSp && this.canPlayerShieldAbsorb(target, ownSp)) {
+            return { id: targetId, sp: ownSp, player: target };
+        }
+
+        let closestAbsorber: { id: string; sp: ServerPlayer; player: PlayerState; distanceSq: number } | null = null;
+        const targetHitboxY = this.playerHitboxCenterY(target.y);
+        this.state.players.forEach((candidate, candidateId) => {
+            if (candidateId === targetId) return;
+            const candidateSp = this.serverPlayers.get(candidateId);
+            if (!candidateSp || !this.canPlayerShieldAbsorb(candidate, candidateSp)) return;
+
+            const radius = this.getPlayerShieldBlockRadius(candidate);
+            if (!circleOverlapsAabb(candidate.x, this.playerHitboxCenterY(candidate.y), radius, target.x, targetHitboxY, PLAYER_HW, PLAYER_HH)) return;
+
+            const dx = candidate.x - target.x;
+            const dy = this.playerHitboxCenterY(candidate.y) - targetHitboxY;
+            const distanceSq = dx * dx + dy * dy;
+            if (!closestAbsorber || distanceSq < closestAbsorber.distanceSq) {
+                closestAbsorber = { id: candidateId, sp: candidateSp, player: candidate, distanceSq };
+            }
+        });
+
+        return closestAbsorber;
+    }
+
+    private canPlayerShieldAbsorb(player: PlayerState, sp: ServerPlayer): boolean {
+        if (!sp.alive || player.isDead || !player.shieldBlocking || !this.isShieldItem(player.activeItem)) return false;
+        this.normalizeHotbar(player);
+        const shieldIndex = player.activeSlot - 1;
+        return shieldIndex >= 0
+            && shieldIndex < HOTBAR_SLOT_COUNT
+            && Math.max(0, Math.floor(player.hotbarShieldHp[shieldIndex] || 0)) > 0;
+    }
+
+    private absorbDamageWithShield(
+        absorberId: string,
+        absorberSp: ServerPlayer,
+        absorber: PlayerState,
+        damage: number,
+        attackerId: string,
+    ): number {
+        this.normalizeHotbar(absorber);
+        const shieldIndex = absorber.activeSlot - 1;
+        if (shieldIndex < 0 || shieldIndex >= HOTBAR_SLOT_COUNT) return damage;
+
+        const shieldHp = Math.max(0, Math.floor(absorber.hotbarShieldHp[shieldIndex] || 0));
+        if (shieldHp <= 0) {
+            absorber.shieldBlocking = false;
+            return damage;
+        }
+
+        const absorbed = Math.min(shieldHp, damage);
+        const nextShieldHp = shieldHp - absorbed;
+        absorber.hotbarShieldHp[shieldIndex] = nextShieldHp;
+        this.broadcast("shieldBlock", {
+            playerId: absorberId,
+            attackerId,
+            x: absorber.x,
+            y: absorber.y,
+            absorbed,
+            shieldHp: nextShieldHp,
+            shieldMaxHp: absorber.hotbarShieldMaxHp[shieldIndex] || 0,
+        });
+
+        if (nextShieldHp <= 0) {
+            absorber.shieldBlocking = false;
+            absorberSp.shieldBlockCooldownMs = SHIELD_BLOCK_BREAK_COOLDOWN_MS;
+            absorber.shieldBlockCooldownProgress = 1;
+            this.broadcast("shieldBreak", {
+                playerId: absorberId,
+                attackerId,
+                x: absorber.x,
+                y: absorber.y,
+            });
+        }
+
+        return damage - absorbed;
+    }
+
     private damagePlayer(sid: string, sp: ServerPlayer, player: PlayerState, damage: number, attackerId: string): PlayerHurtPayload | null {
         if (!sp.alive || player.isDead || damage <= 0) return null;
         if (this.elapsedMs < sp.invulnerableUntilMs) return null;
 
         let remainingDamage = Math.max(0, Math.floor(damage));
-        if (player.shieldBlocking && this.isShieldItem(player.activeItem)) {
-            this.normalizeHotbar(player);
-            const shieldIndex = player.activeSlot - 1;
-            const shieldHp = shieldIndex >= 0 && shieldIndex < HOTBAR_SLOT_COUNT
-                ? Math.max(0, Math.floor(player.hotbarShieldHp[shieldIndex] || 0))
-                : 0;
-            if (shieldHp > 0) {
-                const absorbed = Math.min(shieldHp, remainingDamage);
-                const nextShieldHp = shieldHp - absorbed;
-                player.hotbarShieldHp[shieldIndex] = nextShieldHp;
-                remainingDamage -= absorbed;
-                this.broadcast("shieldBlock", {
-                    playerId: sid,
-                    attackerId,
-                    x: player.x,
-                    y: player.y,
-                    absorbed,
-                    shieldHp: nextShieldHp,
-                    shieldMaxHp: player.hotbarShieldMaxHp[shieldIndex] || 0,
-                });
-                if (nextShieldHp <= 0) {
-                    player.shieldBlocking = false;
-                    sp.shieldBlockCooldownMs = SHIELD_BLOCK_BREAK_COOLDOWN_MS;
-                    player.shieldBlockCooldownProgress = 1;
-                    this.broadcast("shieldBreak", {
-                        playerId: sid,
-                        attackerId,
-                        x: player.x,
-                        y: player.y,
-                    });
-                }
-            } else {
-                player.shieldBlocking = false;
-            }
+        const absorber = this.findShieldAbsorberForPlayer(sid, player);
+        if (absorber) {
+            remainingDamage = this.absorbDamageWithShield(absorber.id, absorber.sp, absorber.player, remainingDamage, attackerId);
         }
 
         if (remainingDamage <= 0) return null;
