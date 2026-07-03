@@ -203,20 +203,19 @@ const ENEMY1_HEALTH = 5;
 const CASTER_HEALTH = 2;
 const DEFAULT_ENEMY_HEALTH = 3;
 const ENEMY1_ATTACK_RANGE = 20;
-const ENEMY1_PLAYER_ATTACK_RANGE = 72;
+const ENEMY1_PLAYER_ATTACK_RANGE = 62;
 const ENEMY1_ATTACK_TRIGGER_EPSILON = 6;
 const ENEMY1_MIN_CHASE_STEP = 1;
-const ENEMY1_WINDUP_MS = 175;
+const ENEMY1_WINDUP_MS = 100;
 const ENEMY1_ATTACK_MS = 850;
 const ENEMY_DEATH_REMOVE_MS = 850;
 const ENEMY_HIT_STUN_MS = 250;
 const DARK_KNIGHT_HIT_STUN_MULTIPLIER = 0.5;
 const ENEMY1_EDGE_OFFSET = 96;
-const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 450;
+const ENEMY1_DAMAGE_IMPACT_DELAY_MS = 250;
 const ENEMY1_ATTACK_DAMAGE = 1;
 const ENEMY1_ATTACK_HIT_OFFSET = 28;
-const ENEMY1_ATTACK_HIT_HW = 42;
-const ENEMY1_ATTACK_HIT_HH = 36;
+const ENEMY1_ATTACK_HIT_RADIUS = 32;
 const ENEMY_MELEE_HIT_HW = 34;
 const ENEMY_MELEE_HIT_HH = 44;
 const ENEMY_FOOT_RADIUS = 7;
@@ -604,6 +603,7 @@ interface ServerEnemy {
     lineOfSightKind: EnemyLineOfSightKind | null;
     caltropsSlowMs: number;
     caltropsCheckMs: number;
+    meleeAttackToken: number;
 }
 interface ServerBullet {
     vx: number;
@@ -4086,6 +4086,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     private applyEnemyHitStun(enemy: EnemyState, se: ServerEnemy): void {
+        se.meleeAttackToken++;
         se.mode = "stun";
         se.modeMs = this.getEnemyHitStunMs(enemy);
         enemy.action = "idle";
@@ -5365,6 +5366,16 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     ...Array(25).fill(2),
                     ...Array(20).fill(1),
                 ];
+            case 10:
+                return [
+                    ENEMY_TYPE_BOSS1,
+                    ENEMY_TYPE_BOSS1,
+                    ...Array(20).fill(1),
+                    ENEMY_TYPE_CASTER,
+                    ENEMY_TYPE_CASTER,
+                    ...Array(20).fill(2),
+                    ENEMY_TYPE_DARK_KNIGHT,
+                ];
             default:
                 return null;
         }
@@ -5501,6 +5512,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             lineOfSightKind: null,
             caltropsSlowMs: 0,
             caltropsCheckMs: rndInt(0, CALTROPS_CHECK_INTERVAL_MS),
+            meleeAttackToken: 0,
         });
     }
 
@@ -5592,9 +5604,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                         se.modeMs = ENEMY1_ATTACK_MS;
                         enemy.action = "attack";
                         enemy.attackSeq++;
+                        const attackToken = ++se.meleeAttackToken;
                         const attackVector = meleeReachVector || this.getEnemyMeleeAttackVector(attackOrigin, target, attackDirection);
                         setTimeout(() => {
-                            this.applyEnemyAttackImpact(id, attackOrigin, attackVector);
+                            this.applyEnemyAttackImpact(id, attackToken, attackOrigin, attackVector);
                         }, ENEMY1_DAMAGE_IMPACT_DELAY_MS);
                     }
                     return;
@@ -7042,8 +7055,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
     }
 
-    private applyEnemyAttackImpact(enemyId: string, attackOrigin: AttackOrigin, vector: AttackVector) {
+    private applyEnemyAttackImpact(enemyId: string, attackToken: number, attackOrigin: AttackOrigin, vector: AttackVector) {
         if (this.state.gameOver || !this.state.enemies.has(enemyId)) return;
+        const se = this.serverEnemies.get(enemyId);
+        if (!se || se.mode !== "attack" || se.meleeAttackToken !== attackToken) return;
 
         const hitX = attackOrigin.x + vector.x * ENEMY1_ATTACK_HIT_OFFSET;
         const hitY = attackOrigin.y + vector.y * ENEMY1_ATTACK_HIT_OFFSET;
@@ -7052,7 +7067,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const sp = this.serverPlayers.get(playerId);
             if (!sp || !sp.alive || player.isDead) return;
 
-            if (!overlaps(player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) return;
+            if (!circleOverlapsAabb(hitX, hitY, ENEMY1_ATTACK_HIT_RADIUS, player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH)) return;
             if (this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, player.x, this.playerHitboxCenterY(player.y), 1, true)) {
                 if (!this.findEnemyMeleeReachVector(attackOrigin, player)) return;
                 this.incrementEnemyCounter("meleeCornerReachHits");
@@ -7093,7 +7108,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const vector = { x: dx / distance, y: dy / distance };
             const hitX = attackOrigin.x + vector.x * ENEMY1_ATTACK_HIT_OFFSET;
             const hitY = attackOrigin.y + vector.y * ENEMY1_ATTACK_HIT_OFFSET;
-            if (!overlaps(player.x, playerHitboxY, PLAYER_HW, PLAYER_HH, hitX, hitY, ENEMY1_ATTACK_HIT_HW, ENEMY1_ATTACK_HIT_HH)) continue;
+            if (!circleOverlapsAabb(hitX, hitY, ENEMY1_ATTACK_HIT_RADIUS, player.x, playerHitboxY, PLAYER_HW, PLAYER_HH)) continue;
             if (this.segmentOverlapsLayer3Table(attackOrigin.x, attackOrigin.y, sample.x, sample.y, 1)) continue;
             if (!this.segmentOverlapsSolidMapTile(attackOrigin.x, attackOrigin.y, sample.x, sample.y, 1)) return vector;
         }
