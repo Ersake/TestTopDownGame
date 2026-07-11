@@ -2,6 +2,9 @@ import { Client } from "colyseus.js";
 
 const MAX_MAP_REPLACE_PAYLOAD_BYTES = 512 * 1024;
 const DEFAULT_SERVER_URL = "ws://localhost:2567";
+const PLAYER_KEY_STORAGE_KEY = 'testtopdown-player-key';
+const SELECTED_CHARACTER_STORAGE_KEY = 'testtopdown-selected-character-id';
+const CHARACTER_CACHE_STORAGE_KEY = 'testtopdown-character-cache';
 
 function normalizeServerUrl(url) {
     return String(url || '').trim();
@@ -33,6 +36,8 @@ class RoomClient {
 
     playerName = '';
 
+    selectedCharacterId = this._loadSelectedCharacterId();
+
     /** @type {Client | null} */
     _client = null;
 
@@ -45,12 +50,125 @@ class RoomClient {
         }
     }
 
+    _getApiBaseUrl() {
+        const serverUrl = this.getSelectedServer().url;
+        if (serverUrl.startsWith('wss://')) return `https://${serverUrl.slice(6)}`;
+        if (serverUrl.startsWith('ws://')) return `http://${serverUrl.slice(5)}`;
+        return serverUrl;
+    }
+
+    _loadSelectedCharacterId() {
+        try { return window.localStorage?.getItem(SELECTED_CHARACTER_STORAGE_KEY) || ''; } catch (_error) { return ''; }
+    }
+
+    refreshSelectedCharacterId() {
+        this.selectedCharacterId = this._loadSelectedCharacterId();
+        return this.selectedCharacterId;
+    }
+
+    _saveSelectedCharacterId(characterId) {
+        this.selectedCharacterId = characterId || '';
+        try {
+            if (this.selectedCharacterId) {
+                window.localStorage?.setItem(SELECTED_CHARACTER_STORAGE_KEY, this.selectedCharacterId);
+            } else {
+                window.localStorage?.removeItem(SELECTED_CHARACTER_STORAGE_KEY);
+            }
+        } catch (_error) {
+            // Character selection can still work for this session without storage.
+        }
+    }
+
+    getPlayerKey() {
+        try {
+            const existing = window.localStorage?.getItem(PLAYER_KEY_STORAGE_KEY);
+            if (existing) return existing;
+            const generated = window.crypto?.randomUUID
+                ? window.crypto.randomUUID()
+                : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+            const key = `player_${generated}`;
+            window.localStorage?.setItem(PLAYER_KEY_STORAGE_KEY, key);
+            return key;
+        } catch (_error) {
+            return `player_${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+        }
+    }
+
+    async _postApi(path, body) {
+        const response = await fetch(`${this._getApiBaseUrl()}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || `Request failed: ${response.status}`);
+        return payload;
+    }
+
+    async listCharacters() {
+        const payload = await this._postApi('/characters/list', { playerKey: this.getPlayerKey() });
+        const characters = Array.isArray(payload.characters) ? payload.characters : [];
+        this._saveCharacterCache(characters);
+        return characters;
+    }
+
+    async createCharacter(displayName = 'PLAYER') {
+        const payload = await this._postApi('/characters/create', {
+            playerKey: this.getPlayerKey(),
+            displayName,
+        });
+        if (!payload.character?.id) throw new Error('Character creation failed.');
+        this._saveSelectedCharacterId(payload.character.id);
+        return payload.character;
+    }
+
+    async deleteCharacter(characterId) {
+        await this._postApi('/characters/delete', {
+            playerKey: this.getPlayerKey(),
+            characterId,
+        });
+        if (this.selectedCharacterId === characterId) this._saveSelectedCharacterId('');
+        return true;
+    }
+
+    getCachedCharacters() {
+        try {
+            const cached = JSON.parse(window.localStorage?.getItem(CHARACTER_CACHE_STORAGE_KEY) || '[]');
+            return Array.isArray(cached) ? cached : [];
+        } catch (_error) {
+            return [];
+        }
+    }
+
+    _saveCharacterCache(characters) {
+        try {
+            window.localStorage?.setItem(CHARACTER_CACHE_STORAGE_KEY, JSON.stringify(Array.isArray(characters) ? characters : []));
+        } catch (_error) {
+            // Cache is only a menu fallback; live server state remains authoritative.
+        }
+    }
+
+    selectCharacter(characterId) {
+        this._saveSelectedCharacterId(characterId);
+    }
+
+    _roomOptions(options = {}) {
+        return {
+            displayName: this.playerName,
+            playerKey: this.getPlayerKey(),
+            characterId: this.selectedCharacterId,
+            ...options,
+        };
+    }
+
     /** @private Leave the current room if one is open. */
     async _leaveCurrentRoom() {
-        if (this.room) {
-            try { await this.room.leave(); } catch (e) { console.warn("[RoomClient] error leaving previous room:", e); }
-            this.room = null;
-            this.sessionId = null;
+        const room = this.room;
+        this.room = null;
+        this.sessionId = null;
+        this._lastInput = "";
+        if (room) {
+            try { await room.leave(); } catch (e) { console.warn("[RoomClient] error leaving previous room:", e); }
         }
     }
 
@@ -63,7 +181,7 @@ class RoomClient {
         await this._leaveCurrentRoom();
         this._ensureClient();
         try {
-            this.room = await this._client.create("shmup_room", { displayName: this.playerName, ...options });
+            this.room = await this._client.create("shmup_room", this._roomOptions(options));
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] created room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
@@ -82,7 +200,7 @@ class RoomClient {
         await this._leaveCurrentRoom();
         this._ensureClient();
         try {
-            this.room = await this._client.joinById(code.toUpperCase(), { displayName: this.playerName });
+            this.room = await this._client.joinById(code.toUpperCase(), this._roomOptions());
             this.sessionId = this.room.sessionId;
             console.log("[RoomClient] joined room:", this.room.id, "session:", this.sessionId);
         } catch (err) {
@@ -97,6 +215,7 @@ class RoomClient {
      * Call this when navigating away from the game (e.g., back to lobby).
      */
     async disconnect() {
+        this._client = null;
         await this._leaveCurrentRoom();
     }
 

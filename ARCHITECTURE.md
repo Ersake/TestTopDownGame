@@ -21,6 +21,7 @@ Node.js server (Colyseus)
   server/src/index.ts
   server/src/rooms/ShmupRoom.ts
   server/src/schema/GameState.ts
+  server/src/characters/CharacterStorage.ts
 ```
 
 The server is authoritative. Clients send player intent and render Colyseus schema patches. The server owns all durable game state and all gameplay decisions.
@@ -32,7 +33,7 @@ The server is authoritative. Clients send player intent and render Colyseus sche
 The Phaser client is responsible for:
 
 - Booting scenes and loading assets.
-- Presenting the lobby create/join room-code UI and active-room sidebar.
+- Presenting the image-backed main menu, character selector, create-room action, and active-room sidebar.
 - Sending input and attack intent to the server.
 - Mirroring Colyseus schema state with sprites, UI, camera, animations, and audio.
 - Playing one-shot presentation effects from server messages.
@@ -44,9 +45,9 @@ Important client files:
 |---|---|
 | `src/main.js` | Creates the Phaser game and registers scenes. |
 | `src/scenes/Preloader.js` | Loads all assets registered in `src/assets.js`, then starts `Lobby`. |
-| `src/scenes/Lobby.js` | Creates rooms, joins rooms by 4-letter room code, and lists joinable active rooms. |
+| `src/scenes/Lobby.js` | Presents main/submenu art, lists/selects saved characters, creates rooms, and joins listed active rooms. |
 | `src/scenes/Game.js` | Renders synced state, sends input, handles UI/audio presentation. |
-| `src/network/RoomClient.js` | Owns the Colyseus client and current room reference. |
+| `src/network/RoomClient.js` | Owns the Colyseus client, current room reference, browser player key, selected character ID, and character API calls. |
 | `src/assets.js` | Asset registry consumed by the preloader. |
 | `src/animation.js` | Animation registry consumed by `Game.js`. |
 
@@ -57,6 +58,7 @@ Important client files:
 The Colyseus server is responsible for:
 
 - Creating and disposing game rooms.
+- Creating, listing, loading, and saving server-owned character profiles.
 - Assigning process-local 4-letter room codes.
 - Owning player, enemy, bullet, tree, log, score, timer, wave counter, revive, and game-over state.
 - Validating and applying player input.
@@ -70,6 +72,7 @@ Important server files:
 | `server/src/index.ts` | Express/HTTP server, Colyseus server setup, room registration, dev monitor. |
 | `server/src/rooms/ShmupRoom.ts` | Authoritative simulation and room message handlers. |
 | `server/src/schema/GameState.ts` | Colyseus schema classes synced to clients. |
+| `server/src/characters/CharacterStorage.ts` | JSON character persistence keyed by a browser-owned player secret hash. |
 
 ---
 
@@ -78,18 +81,29 @@ Important server files:
 1. `src/main.js` launches Phaser with `Boot`, `Preloader`, `Lobby`, `Start`, `Game`, and `GameOver` registered.
 2. `Boot` immediately starts `Preloader`.
 3. `Preloader` loads assets from `src/assets.js` and starts `Lobby`.
-4. In `Lobby`, a player can:
-   - create a new `"shmup_room"` via `RoomClient.createRoom()`, or
-   - join an existing room by code via `RoomClient.joinRoom(code)`, or
-   - join a listed active room from the sidebar.
-5. The server assigns new rooms a 4-letter uppercase room ID.
-6. After a room is created or joined, the client starts `Game`.
-7. `Game` registers Colyseus state listeners, renders existing state, and starts sending input.
-8. On game over, pressing Space disconnects and returns to `Lobby`.
+4. `Lobby` first shows the `shmup2mainmenu.png` title screen with a Start action.
+5. The submenu uses `shmup2submenu1.png`, lists the last-played character on the left, shows a `NEW CHARACTER` slot when no saved character is selected, and lists active rooms on the right.
+6. Creating or joining a listed room first ensures a selected server-owned character exists. The browser stores only a `playerKey` secret and selected character ID in local storage.
+7. The server assigns new rooms a 4-letter uppercase room ID.
+8. After a room is created or joined, the client starts `Game`.
+9. `Game` registers Colyseus state listeners, renders existing state, and starts sending input.
+10. On game over, pressing Space disconnects and returns to `Lobby`.
 
 ---
 
 ## Network Contract
+
+### HTTP Character API
+
+The lobby uses Express endpoints before joining a Colyseus room:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /characters/list` | Lists characters owned by the browser's `playerKey`. |
+| `POST /characters/create` | Creates a new server-owned character for that `playerKey`, up to the five-character cap. |
+| `POST /characters/delete` | Deletes a character owned by that `playerKey` after the lobby confirmation flow. |
+
+The browser `playerKey` is a local secret stored in `localStorage`; the server stores only its SHA-256 hash in character JSON. Character files are saved under `server/characters/` by default, or `CHARACTER_STORAGE_DIR` when provided.
 
 ### Client to Server
 
@@ -118,7 +132,7 @@ Important server files:
 | `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
 | `"debugSetLevel"` | Escape-menu debug controls | Temporarily enabled for live testing. Sets the requesting player's level (1–99), resets current XP progress, and adjusts pending skill points and max health from server state. |
 
-The lobby sidebar uses `RoomClient.listPlayableRooms()`, which calls Colyseus `getAvailableRooms("shmup_room")` and filters room metadata to show only joinable normal game rooms with connected players. `ShmupRoom.ts` keeps listing metadata current during room create, join, leave, game-over, and reset events; the room tick does not update lobby listing metadata.
+The lobby sidebar uses `RoomClient.listPlayableRooms()`, which calls Colyseus `getAvailableRooms("shmup_room")` and filters room metadata to show only joinable normal game rooms with connected players. Room create/join options include the selected `characterId` and browser `playerKey`; `ShmupRoom.ts` loads the matching server-owned character before adding the player state. `ShmupRoom.ts` keeps listing metadata current during room create, join, leave, game-over, and reset events; the room tick does not update lobby listing metadata.
 
 The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, normalizes directions, and clamps target coordinates.
 
@@ -196,6 +210,10 @@ Durable game facts should usually be schema state, not transient messages.
 
 `PlayerState` includes identity, position, health, damage-flash presentation sequence/timing, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, bow Volley cooldown progress, axe whirlwind active/cooldown progress, shield blocking state, shield block cooldown progress, per-hotbar-slot shield HP/max HP arrays, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage. Bow upgrade counters include charge speed, primary pierce, primary damage, Volley cooldown, Volley AOE size, and Volley damage. Shield upgrade counters include primary attack speed, primary damage, max HP, recharge speed, and block-circle size.
 
+### Character Profiles
+
+Character profiles are durable server-owned JSON documents, not Colyseus schema. `CharacterStorage.ts` saves display name, level, total XP, XP threshold, pending skill points, outfit color, and upgrade ranks. Each browser-owned player key can create up to five characters. `ShmupRoom.ts` copies those values into `PlayerState` on join and saves them back on level gain, upgrade spend/refund, outfit color change, death, leave, and room dispose. Level reset/retry refreshes combat state and health but preserves character progression.
+
 ### Enemy State
 
 `EnemyState` includes position, enemy type, power, health, max health, facing direction, action, attack sequence, damage sequence, death state, and death sequence. Enemy type `5` is the first boss enemy.
@@ -249,13 +267,13 @@ Production games may load saved maps automatically, so performance checks should
 
 ## Development Map Editor
 
-Development builds expose a `CREATE MAP` action in the lobby. It creates a `shmup_room` with `mode: "map-editor"`; production servers deliberately create normal game rooms instead.
+Map-editor room support still exists server-side through `mode: "map-editor"`, but the current image-backed lobby does not expose a `CREATE MAP` action. Production servers deliberately create normal game rooms instead.
 
 Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no trees or enemies, and retain only player movement plus server-authoritative map-tile collision. A red 3840×2160 boundary marks the original game-world size; players and map tiles are authoritatively constrained inside it. The `mapChunks` schema field holds sparse 16×16 tile chunks as base64-encoded uint16 frame values. Clients send `placeMapTile` and `removeMapTile`; the room validates all coordinates, frame values, and size limits.
 
 `Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Selected Castle_1 upper vertical support frames use centered, 50%-wide top-half solid colliders, while the lower and corner supports use centered, 50%-wide full-height colliders. Other solid map frames use full-tile colliders. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
 
-Development lobby builds also expose a normal-game map selector that defaults to the saved `lvlone` map while keeping `DEFAULT` selectable. Selecting a saved map sends a `mapName` room option; the server loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
+Development lobby builds default normal game room creation to the saved `lvlone` map. Sending a saved `mapName` room option loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
 Enemy movement uses shared server-authoritative flow fields on the 40px build grid. For each alive player target, the room builds a reverse BFS direction field from the player's nearest walkable cell and reuses that field for all enemies targeting that player until the player changes grid cells or map topology changes. Flow-field rebuilds use numeric blocked-cell arrays, reuse build buffers, and are budgeted so at most one player field is rebuilt per tick; if the budget is spent, enemies can temporarily use a same-topology stale field or local fallback. Normal melee chase, caster repositioning, and Dark Knight walking read a direction from this shared field instead of running per-enemy direct-path checks or per-enemy A* paths. The navigation grid treats any solid map frame or layer-3 table cell as blocked, ignores partial visual collider shapes for routing, prevents diagonal corner cutting, and uses a cheap local fallback if an enemy is outside the field or temporarily blocked. Caster and Dark Knight line-of-sight checks are throttled per enemy for attack/rush decisions. Dark Knight rush remains direct collision-resolved movement. Caltrops are not route blockers; they only apply their server-side slow when enemies physically cross them. Map tile and layer-3 table topology changes invalidate enemy flow fields and collision caches.
 
@@ -289,6 +307,8 @@ npm run server:start
 ```
 
 The server listens on `process.env.PORT` or `2567`.
+
+Saved characters are written to `server/characters/` by default. Production hosting should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 

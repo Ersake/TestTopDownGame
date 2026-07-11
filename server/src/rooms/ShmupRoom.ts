@@ -16,6 +16,12 @@ import {
 } from "../schema/GameState";
 import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
 import { isProductionEnv } from "../env";
+import {
+    CharacterStorage,
+    CharacterUpgradeSnapshot,
+    EMPTY_CHARACTER_UPGRADES,
+    StoredCharacterDocument,
+} from "../characters/CharacterStorage";
 
 // ─── Physics constants (mirror the Phaser client values) ──────────────────────
 const PLAYER_MAX_VEL  = 200;   // px/s
@@ -816,6 +822,11 @@ interface ShmupRoomMetadata {
     activeMapName: string;
 }
 
+type PlayerCharacterBinding = {
+    ownerKey: string;
+    characterId: string;
+};
+
 export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     maxClients = 8;
 
@@ -852,6 +863,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private enemyTargetCache = new Map<string, Omit<EnemyTarget, "id" | "player" | "distanceSq"> | null>();
     private enemyFlowBuildQueue = new Int32Array(BUILD_PATH_CELL_COUNT);
     private readonly mapStorage = new MapStorage();
+    private readonly characterStorage = new CharacterStorage();
+    private playerCharacterBindings = new Map<string, PlayerCharacterBinding>();
     private activeTickMetrics: TickMetrics | null = null;
     private recordingEnemyMetrics = false;
     private enemyPathBuildsThisTick = 0;
@@ -2273,6 +2286,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!player || !Number.isInteger(outfitColor) || outfitColor < 0 || outfitColor >= OUTFIT_COLOR_COUNT) return;
 
         player.outfitColor = outfitColor;
+        this.saveCharacterForPlayer(sessionId, player);
     }
 
     private selectUpgrade(client: Client, data: unknown) {
@@ -2353,6 +2367,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         }
 
         player.pendingUpgradeChoices = Math.max(0, player.pendingUpgradeChoices - 1);
+        this.saveCharacterForPlayer(sessionId, player);
         client.send("upgradePicked", { upgradeId, item, slot });
     }
 
@@ -2378,6 +2393,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.pendingUpgradeChoices = Math.max(0, Math.floor(player.pendingUpgradeChoices || 0)) + refundedPoints;
         if (this.isShieldItem(item)) this.refreshAllShieldSlotMaxHp(player, 0);
 
+        this.saveCharacterForPlayer(sessionId, player);
         client.send("upgradeTreeRefunded", { item, slot, refundedPoints });
     }
 
@@ -3310,7 +3326,101 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return { x: vector.x / length, y: vector.y / length };
     }
 
-    onJoin(client: Client, options: { displayName?: unknown } = {}) {
+    private getPlayerUpgradeSnapshot(player: PlayerState): CharacterUpgradeSnapshot {
+        return {
+            axeSwingSpeedUpgrades: Math.max(0, Math.floor(player.axeSwingSpeedUpgrades || 0)),
+            axePrimaryDamageUpgrades: Math.max(0, Math.floor(player.axePrimaryDamageUpgrades || 0)),
+            axeWhirlwindCooldownUpgrades: Math.max(0, Math.floor(player.axeWhirlwindCooldownUpgrades || 0)),
+            axeWhirlwindAoeUpgrades: Math.max(0, Math.floor(player.axeWhirlwindAoeUpgrades || 0)),
+            axeWhirlwindDamageUpgrades: Math.max(0, Math.floor(player.axeWhirlwindDamageUpgrades || 0)),
+            bowDamageUpgrades: Math.max(0, Math.floor(player.bowDamageUpgrades || 0)),
+            bowPierceUpgrades: Math.max(0, Math.floor(player.bowPierceUpgrades || 0)),
+            bowChargeTimeUpgrades: Math.max(0, Math.floor(player.bowChargeTimeUpgrades || 0)),
+            bowVolleyCooldownUpgrades: Math.max(0, Math.floor(player.bowVolleyCooldownUpgrades || 0)),
+            bowVolleyAoeUpgrades: Math.max(0, Math.floor(player.bowVolleyAoeUpgrades || 0)),
+            bowVolleyDamageUpgrades: Math.max(0, Math.floor(player.bowVolleyDamageUpgrades || 0)),
+            shieldPrimaryAttackSpeedUpgrades: Math.max(0, Math.floor(player.shieldPrimaryAttackSpeedUpgrades || 0)),
+            shieldPrimaryDamageUpgrades: Math.max(0, Math.floor(player.shieldPrimaryDamageUpgrades || 0)),
+            shieldMaxHpUpgrades: Math.max(0, Math.floor(player.shieldMaxHpUpgrades || 0)),
+            shieldRechargeUpgrades: Math.max(0, Math.floor(player.shieldRechargeUpgrades || 0)),
+            shieldSizeUpgrades: Math.max(0, Math.floor(player.shieldSizeUpgrades || 0)),
+            woodGatherUpgrades: Math.max(0, Math.floor(player.woodGatherUpgrades || 0)),
+        };
+    }
+
+    private applyPlayerUpgradeSnapshot(player: PlayerState, upgrades: Partial<CharacterUpgradeSnapshot> = EMPTY_CHARACTER_UPGRADES): void {
+        player.axeSwingSpeedUpgrades = Math.max(0, Math.floor(upgrades.axeSwingSpeedUpgrades || 0));
+        player.axePrimaryDamageUpgrades = Math.max(0, Math.floor(upgrades.axePrimaryDamageUpgrades || 0));
+        player.axeWhirlwindCooldownUpgrades = Math.max(0, Math.floor(upgrades.axeWhirlwindCooldownUpgrades || 0));
+        player.axeWhirlwindAoeUpgrades = Math.max(0, Math.floor(upgrades.axeWhirlwindAoeUpgrades || 0));
+        player.axeWhirlwindDamageUpgrades = Math.max(0, Math.floor(upgrades.axeWhirlwindDamageUpgrades || 0));
+        player.bowDamageUpgrades = Math.max(0, Math.floor(upgrades.bowDamageUpgrades || 0));
+        player.bowPierceUpgrades = Math.max(0, Math.floor(upgrades.bowPierceUpgrades || 0));
+        player.bowChargeTimeUpgrades = Math.max(0, Math.floor(upgrades.bowChargeTimeUpgrades || 0));
+        player.bowVolleyCooldownUpgrades = Math.max(0, Math.floor(upgrades.bowVolleyCooldownUpgrades || 0));
+        player.bowVolleyAoeUpgrades = Math.max(0, Math.floor(upgrades.bowVolleyAoeUpgrades || 0));
+        player.bowVolleyDamageUpgrades = Math.max(0, Math.floor(upgrades.bowVolleyDamageUpgrades || 0));
+        player.shieldPrimaryAttackSpeedUpgrades = Math.max(0, Math.floor(upgrades.shieldPrimaryAttackSpeedUpgrades || 0));
+        player.shieldPrimaryDamageUpgrades = Math.max(0, Math.floor(upgrades.shieldPrimaryDamageUpgrades || 0));
+        player.shieldMaxHpUpgrades = Math.max(0, Math.floor(upgrades.shieldMaxHpUpgrades || 0));
+        player.shieldRechargeUpgrades = Math.max(0, Math.floor(upgrades.shieldRechargeUpgrades || 0));
+        player.shieldSizeUpgrades = Math.max(0, Math.floor(upgrades.shieldSizeUpgrades || 0));
+        player.woodGatherUpgrades = Math.max(0, Math.floor(upgrades.woodGatherUpgrades || 0));
+    }
+
+    private applyCharacterToPlayer(player: PlayerState, character: StoredCharacterDocument): void {
+        player.displayName = sanitizeDisplayName(character.displayName);
+        player.level = Math.max(1, Math.floor(character.level || 1));
+        player.experience = Math.max(0, Math.floor(character.experience || 0));
+        player.experienceToNext = Math.max(1, Math.floor(character.experienceToNext || this.getExperienceToNextLevel(player.level)));
+        player.pendingUpgradeChoices = Math.max(0, Math.floor(character.pendingUpgradeChoices || 0));
+        player.outfitColor = Math.max(0, Math.min(OUTFIT_COLOR_COUNT - 1, Math.floor(character.outfitColor || 0)));
+        this.applyPlayerUpgradeSnapshot(player, character.upgrades);
+        player.maxHealth = PLAYER_MAX_HEALTH + Math.max(0, player.level - 1);
+        player.health = player.maxHealth;
+    }
+
+    private async loadCharacterForJoin(client: Client, options: { playerKey?: unknown; characterId?: unknown }): Promise<StoredCharacterDocument | null> {
+        const playerKey = typeof options.playerKey === "string" ? options.playerKey : "";
+        const characterId = typeof options.characterId === "string" ? options.characterId : "";
+        const character = await this.characterStorage.loadOwned(playerKey, characterId);
+        if (!character) return null;
+
+        const now = new Date().toISOString();
+        character.lastPlayedAt = now;
+        character.updatedAt = now;
+        await this.characterStorage.save(character);
+        this.playerCharacterBindings.set(client.sessionId, { ownerKey: playerKey, characterId: character.id });
+        return character;
+    }
+
+    private saveCharacterForPlayer(sessionId: string, player: PlayerState): void {
+        const binding = this.playerCharacterBindings.get(sessionId);
+        if (!binding) return;
+
+        void (async () => {
+            try {
+                const character = await this.characterStorage.loadOwned(binding.ownerKey, binding.characterId);
+                if (!character) return;
+
+                const now = new Date().toISOString();
+                character.displayName = sanitizeDisplayName(player.displayName);
+                character.level = Math.max(1, Math.floor(player.level || 1));
+                character.experience = Math.max(0, Math.floor(player.experience || 0));
+                character.experienceToNext = Math.max(1, Math.floor(player.experienceToNext || this.getExperienceToNextLevel(character.level)));
+                character.pendingUpgradeChoices = Math.max(0, Math.floor(player.pendingUpgradeChoices || 0));
+                character.outfitColor = Math.max(0, Math.min(OUTFIT_COLOR_COUNT - 1, Math.floor(player.outfitColor || 0)));
+                character.upgrades = this.getPlayerUpgradeSnapshot(player);
+                character.updatedAt = now;
+                character.lastPlayedAt = now;
+                await this.characterStorage.save(character);
+            } catch (error) {
+                console.warn(`[ShmupRoom ${this.roomId}] unable to save character for ${sessionId}:`, error);
+            }
+        })();
+    }
+
+    async onJoin(client: Client, options: { displayName?: unknown; playerKey?: unknown; characterId?: unknown } = {}) {
         const ps = new PlayerState();
         ps.sessionId = client.sessionId;
         ps.displayName = sanitizeDisplayName(options.displayName);
@@ -3330,6 +3440,12 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         ps.facingDirection = "N";
         ps.attackDirection = "N";
         this.initializeHotbar(ps);
+        try {
+            const character = await this.loadCharacterForJoin(client, options);
+            if (character) this.applyCharacterToPlayer(ps, character);
+        } catch (error) {
+            console.warn(`[ShmupRoom ${this.roomId}] unable to load character for ${client.sessionId}:`, error);
+        }
         ps.attackSeq = 0;
         ps.axeAttackHitboxActive = false;
         ps.dashing = false;
@@ -3442,13 +3558,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const spawn = this.findNearestOpenPlayerPosition(this.playableWorldWidth() / 2, this.playableWorldHeight() / 2);
             player.x = spawn.x;
             player.y = spawn.y;
-            player.maxHealth = PLAYER_MAX_HEALTH;
-            player.health = PLAYER_MAX_HEALTH;
+            player.maxHealth = PLAYER_MAX_HEALTH + Math.max(0, Math.floor(player.level || 1) - 1);
+            player.health = player.maxHealth;
             this.triggerPlayerDamageFlash(player, PLAYER_SPAWN_INVULNERABILITY_MS, PLAYER_INVULNERABILITY_FLASH_BLINK_MS);
             player.kills = 0;
-            player.level = 1;
-            player.experience = 0;
-            player.experienceToNext = FIRST_LEVEL_UP_XP;
             player.isDead = false;
             player.reviveProgress = 0;
             player.facingDirection = "N";
@@ -3468,30 +3581,6 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             player.bowVolleyCooldownProgress = 0;
             player.shieldBlocking = false;
             player.shieldBlockCooldownProgress = 0;
-            player.pendingUpgradeChoices = 0;
-            player.axeSwingSpeedUpgrades = 0;
-            player.axePrimaryDamageUpgrades = 0;
-            player.axeTreeDamageUpgrades = 0;
-            player.axeEnemyDamageUpgrades = 0;
-            player.axeWoodGainUpgrades = 0;
-            player.axeCampfireMaxUpgrades = 0;
-            player.axeWhirlwindCooldownUpgrades = 0;
-            player.axeWhirlwindAoeUpgrades = 0;
-            player.axeWhirlwindDamageUpgrades = 0;
-            player.bowDamageUpgrades = 0;
-            player.bowPierceUpgrades = 0;
-            player.bowChargeTimeUpgrades = 0;
-            player.bowVolleyCooldownUpgrades = 0;
-            player.bowVolleyAoeUpgrades = 0;
-            player.bowVolleyDamageUpgrades = 0;
-            player.shieldPrimaryAttackSpeedUpgrades = 0;
-            player.shieldPrimaryDamageUpgrades = 0;
-            player.shieldMaxHpUpgrades = 0;
-            player.shieldRechargeUpgrades = 0;
-            player.shieldSizeUpgrades = 0;
-            player.woodGatherUpgrades = 0;
-            player.campfireUpgrades = 0;
-            player.pendingCampfireCharges = 0;
 
             const sp = this.serverPlayers.get(sid);
             if (!sp) return;
@@ -3549,10 +3638,13 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     onLeave(client: Client) {
+        const leavingPlayer = this.state.players.get(client.sessionId);
+        if (leavingPlayer) this.saveCharacterForPlayer(client.sessionId, leavingPlayer);
         this.cancelRevive(client.sessionId);
         this.cancelRevivesTargeting(client.sessionId);
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
+        this.playerCharacterBindings.delete(client.sessionId);
         this.pvpEnabledPlayers.delete(client.sessionId);
         this.nextWaveReadyPlayerIds.delete(client.sessionId);
         this.gameOverRetryReadyPlayerIds.delete(client.sessionId);
@@ -3575,6 +3667,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     }
 
     onDispose() {
+        this.state.players.forEach((player, sessionId) => this.saveCharacterForPlayer(sessionId, player));
         this.logRoomEvent("room disposed", {
             players: this.state.players.size,
             elapsedSeconds: this.state.elapsedSeconds,
@@ -4368,6 +4461,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                 y: player.y,
             });
         }
+        this.saveCharacterForPlayer(playerId, player);
     }
 
     private getExperienceToNextLevel(level: number): number {
@@ -7671,6 +7765,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         player.axeWhirlwindHitSeq = 0;
         player.axeWhirlwindProgress = 0;
         this.cancelRevive(sid);
+        this.saveCharacterForPlayer(sid, player);
         this.checkAllDead();
     }
 

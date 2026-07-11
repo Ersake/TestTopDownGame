@@ -1,293 +1,584 @@
+import ASSETS from '../assets.js';
 import RoomClient from '../network/RoomClient.js';
 
-const ROOM_CODE_DISPLAY_MS = 2000; // ms to show the created room code before entering the game
+const ROOM_CODE_DISPLAY_MS = 2000;
 const ACTIVE_ROOM_POLL_MS = 2000;
-const ACTIVE_ROOM_ROW_LIMIT = 5;
-const PLAYER_NAME_STORAGE_KEY = 'testtopdown-player-name';
-const PLAYER_NAME_MAX_LENGTH = 12;
+const ACTIVE_ROOM_ROW_LIMIT = 4;
 const IS_DEVELOPMENT_BUILD = import.meta.env.DEV;
 const DEV_GAME_MAP_OPTIONS = ['lvlone', 'DEFAULT'];
+const OUTFIT_TINTS = [0x7954b8, 0x2477a6, 0xba4343, 0x3fcd46, null];
+const CHARACTER_NAME_MAX_LENGTH = 12;
+const MAX_CHARACTER_COUNT = 5;
+const CHARACTER_LIST_RETRY_DELAYS_MS = [150, 350, 700];
+const LOBBY_BACKGROUND_DEPTH = -10;
+const LOBBY_UI_DEPTH = 10;
 
-/**
- * Lobby scene — lets players create a new room or join an existing one
- * by entering a 4-letter alpha room code.
- */
 export class Lobby extends Phaser.Scene {
     constructor() {
         super('Lobby');
     }
 
     create() {
-        this._state = 'idle'; // 'idle' | 'busy'
-        this._codeInput = '';
-        this._nameInput = this._loadPlayerName();
-        this._nameDraft = this._nameInput;
-        this._isEditingName = false;
-        this._selectedGameMapIndex = 0;
+        this._state = 'idle';
+        this._screen = 'main';
+        this._characters = [];
+        this._selectedCharacterIndex = 0;
+        this._newCharacterNameDraft = '';
+        this._confirmingDelete = false;
         this._activeRoomRows = [];
         this._activeRoomsRequestId = 0;
         this._isRefreshingActiveRooms = false;
-        RoomClient.setPlayerName(this._nameInput);
+        this._activeRoomsPoll = null;
+        this._ui = [];
+        this._loadCharactersRequestId = 0;
+        this._keyHandler = (event) => this._onKey(event);
+        RoomClient.refreshSelectedCharacterId();
 
-        const cx = this.scale.width  * 0.5;
-        const cy = this.scale.height * 0.5;
+        this._showMainMenu();
+        this.input.keyboard.on('keydown', this._keyHandler);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            this._loadCharactersRequestId++;
+            this._activeRoomsRequestId++;
+            this._activeRoomsPoll?.remove(false);
+            this._activeRoomsPoll = null;
+            if (this._keyHandler) this.input.keyboard.off('keydown', this._keyHandler);
+            this._keyHandler = null;
+        });
+    }
 
-        // ── Background ──────────────────────────────────────────────────────
-        this.add.rectangle(cx, cy, this.scale.width, this.scale.height, 0x000000);
-
-        // ── Title ───────────────────────────────────────────────────────────
-        this.add.text(cx, 100, 'SHMUP', {
-            fontFamily: 'Arial Black', fontSize: 80, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 10,
-        }).setOrigin(0.5);
-
-        this._nameBtn = this.add.text(cx, 180, '', {
-            fontFamily: 'Arial Black', fontSize: 26, color: '#ffdd66',
-            stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-        this._nameBtn.on('pointerover', () => this._nameBtn.setColor('#fff2aa'));
-        this._nameBtn.on('pointerout', () => this._nameBtn.setColor('#ffdd66'));
-        this._nameBtn.on('pointerdown', () => this._beginNameEdit());
-        this._updateNameDisplay();
-
-        const serverOptions = RoomClient.getServerOptions();
-        if (serverOptions.length > 1) {
-            this._serverBtn = this.add.text(cx, 222, '', {
-                fontFamily: 'Arial Black', fontSize: 22, color: '#66ddff',
-                stroke: '#000000', strokeThickness: 5,
-            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-            this._serverBtn.on('pointerover', () => this._serverBtn.setColor('#aeeeff'));
-            this._serverBtn.on('pointerout', () => this._serverBtn.setColor('#66ddff'));
-            this._serverBtn.on('pointerdown', () => this._toggleServerSelection());
-            this._updateServerDisplay();
+    _onKey(event) {
+        if (this._state !== 'idle') return;
+        if (this._confirmingDelete) {
+            const key = String(event.key || '').toUpperCase();
+            if (key === 'Y') void this._confirmDeleteCharacter();
+            if (key === 'N' || key === 'ESCAPE') this._cancelDeleteCharacter();
+            return;
         }
-
-        // ── Create Room button ───────────────────────────────────────────────
-        this._createBtn = this.add.text(cx, 270, '[ CREATE ROOM ]', {
-            fontFamily: 'Arial Black', fontSize: 38, color: '#00ff88',
-            stroke: '#000000', strokeThickness: 8,
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-
-        this._createBtn.on('pointerover',  () => this._createBtn.setColor('#88ffcc'));
-        this._createBtn.on('pointerout',   () => this._createBtn.setColor('#00ff88'));
-        this._createBtn.on('pointerdown',  () => this._onCreateRoom());
-
-        if (IS_DEVELOPMENT_BUILD) {
-            this._createMapBtn = this.add.text(this.scale.width - 22, 22, 'CREATE MAP', {
-                fontFamily: 'Arial Black', fontSize: 20, color: '#ffffff',
-                backgroundColor: '#168a35', padding: { left: 14, right: 14, top: 8, bottom: 8 },
-                stroke: '#063b14', strokeThickness: 3,
-            }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
-            this._createMapBtn.on('pointerover', () => this._createMapBtn.setBackgroundColor('#21aa45'));
-            this._createMapBtn.on('pointerout', () => this._createMapBtn.setBackgroundColor('#168a35'));
-            this._createMapBtn.on('pointerdown', () => this._onCreateMap());
-
-            this._gameMapBtn = this.add.text(this.scale.width - 22, 72, '', {
-                fontFamily: 'Arial Black', fontSize: 17, color: '#ffffff',
-                backgroundColor: '#344f99', padding: { left: 12, right: 12, top: 7, bottom: 7 },
-                stroke: '#111d48', strokeThickness: 3,
-            }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
-            this._gameMapBtn.on('pointerover', () => this._gameMapBtn.setBackgroundColor('#4566c0'));
-            this._gameMapBtn.on('pointerout', () => this._gameMapBtn.setBackgroundColor('#344f99'));
-            this._gameMapBtn.on('pointerdown', () => this._toggleGameMapSelection());
-            this._updateGameMapDisplay();
+        if (this._screen === 'submenu' && !this._selectedCharacter()) {
+            if (this._onNewCharacterNameKey(event)) return;
         }
+        if (event.key === 'Enter' || event.key === ' ') {
+            if (this._screen === 'main') {
+                this._showSubMenu();
+            } else {
+                void this._onCreateRoom();
+            }
+        } else if (this._screen === 'submenu' && event.key === 'ArrowLeft') {
+            this._selectPreviousCharacter();
+        } else if (this._screen === 'submenu' && event.key === 'ArrowRight') {
+            this._selectNextCharacter();
+        }
+    }
 
-        // ── Divider ─────────────────────────────────────────────────────────
-        this.add.text(cx, 330, '— OR —', {
-            fontFamily: 'Arial Black', fontSize: 24, color: '#888888',
-        }).setOrigin(0.5);
+    _clearMenu() {
+        this._loadCharactersRequestId++;
+        this._activeRoomsPoll?.remove(false);
+        this._activeRoomsPoll = null;
+        this._activeRoomRows.forEach((row) => row.destroy());
+        this._activeRoomRows = [];
+        this._ui.forEach((item) => item?.destroy());
+        this._ui = [];
+        this._isRefreshingActiveRooms = false;
+        this._activeRoomsPanel = null;
+        this._activeRoomsStatusText = null;
+        this._createBtn = null;
+        this._statusText = null;
+        this._serverBtn = null;
+        this._characterNameText = null;
+        this._characterLevelText = null;
+        this._characterSprite = null;
+        this._nameBox = null;
+        this._nameBoxText = null;
+        this._deleteButton = null;
+        this._deleteConfirmText = null;
+        this._deleteYesButton = null;
+        this._deleteNoButton = null;
+        this._leftArrow = null;
+        this._rightArrow = null;
+    }
 
-        // ── Join section ────────────────────────────────────────────────────
-        this.add.text(cx, 400, 'ENTER ROOM CODE', {
-            fontFamily: 'Arial Black', fontSize: 26, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 6,
-        }).setOrigin(0.5);
+    _add(item) {
+        item?.setDepth?.(LOBBY_UI_DEPTH);
+        this._ui.push(item);
+        return item;
+    }
 
-        // 4-letter code display
-        this._codeText = this.add.text(cx, 465, '_ _ _ _', {
-            fontFamily: 'Arial Black', fontSize: 54, color: '#ffff00',
-            stroke: '#000000', strokeThickness: 8,
-        }).setOrigin(0.5);
+    _addBackground(assetKey) {
+        return this._add(this.add.image(this.scale.width * 0.5, this.scale.height * 0.5, assetKey)
+            .setDisplaySize(this.scale.width, this.scale.height)
+            .setDepth(LOBBY_BACKGROUND_DEPTH));
+    }
 
-        this.add.text(cx, 515, '(type letters)', {
-            fontFamily: 'Arial', fontSize: 18, color: '#666666',
-        }).setOrigin(0.5);
+    _showMainMenu() {
+        this._clearMenu();
+        this._screen = 'main';
+        this._state = 'idle';
+        this._addBackground(ASSETS.image.shmup2MainMenu.key);
 
-        // ── Join button ─────────────────────────────────────────────────────
-        this._joinBtn = this.add.text(cx, 580, '[ JOIN ROOM ]', {
-            fontFamily: 'Arial Black', fontSize: 38, color: '#4488ff',
-            stroke: '#000000', strokeThickness: 8,
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+        const start = this._add(this.add.text(this.scale.width * 0.5, this.scale.height * 0.58, 'START', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.07),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 8,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        start.on('pointerover', () => start.setColor('#fff4bc'));
+        start.on('pointerout', () => start.setColor('#ffffff'));
+        start.on('pointerdown', () => this._showSubMenu());
+    }
 
-        this._joinBtn.on('pointerover',  () => this._joinBtn.setColor('#88aaff'));
-        this._joinBtn.on('pointerout',   () => this._joinBtn.setColor('#4488ff'));
-        this._joinBtn.on('pointerdown',  () => this._onJoinRoom());
+    async _showSubMenu() {
+        if (this._state !== 'idle') return;
+        this._clearMenu();
+        this._screen = 'submenu';
+        this._state = 'busy';
+        this._addBackground(ASSETS.image.shmup2SubMenu.key);
 
-        // ── Status / error text ──────────────────────────────────────────────
-        this._statusText = this.add.text(cx, 660, '', {
-            fontFamily: 'Arial Black', fontSize: 22, color: '#ff4444',
-            stroke: '#000000', strokeThickness: 6, align: 'center',
-        }).setOrigin(0.5);
-
+        this._createCharacterPanel();
+        this._createRoomButton();
+        this._createServerDisplay();
         this._createActiveRoomsSidebar();
+        this._setStatus('Loading characters...', '#ffffff');
+
+        await this._loadCharacters();
+        this._state = 'idle';
         this._refreshActiveRooms(true);
         this._activeRoomsPoll = this.time.addEvent({
             delay: ACTIVE_ROOM_POLL_MS,
             loop: true,
             callback: () => this._refreshActiveRooms(),
         });
-
-        // ── Keyboard input ───────────────────────────────────────────────────
-        this.input.keyboard.on('keydown', (event) => this._onKey(event));
     }
 
-    // ── Keyboard handler ─────────────────────────────────────────────────────
-    _onKey(event) {
-        if (this._state !== 'idle') return;
+    _createCharacterPanel() {
+        const leftX = this.scale.width * 0.31;
+        this._characterNameText = this._add(this.add.text(leftX, this.scale.height * 0.20, '', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.07),
+            color: '#fff4bc',
+            stroke: '#000000',
+            strokeThickness: 7,
+            align: 'center',
+        }).setOrigin(0.5));
+        this._characterLevelText = this._add(this.add.text(leftX, this.scale.height * 0.31, '', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.05),
+            color: '#fff4bc',
+            stroke: '#000000',
+            strokeThickness: 6,
+            align: 'center',
+        }).setOrigin(0.5));
+        this._characterSprite = this._add(this.add.sprite(leftX, this.scale.height * 0.56, ASSETS.spritesheet.playerIdle.key, 0)
+            .setDisplaySize(this.scale.height * 0.30, this.scale.height * 0.30));
+        this._nameBox = this._add(this.add.rectangle(leftX, this.scale.height * 0.70, this.scale.width * 0.27, this.scale.height * 0.07, 0x000000, 0.86)
+            .setStrokeStyle(3, 0xffffff, 1)
+            .setInteractive({ useHandCursor: true }));
+        this._nameBoxText = this._add(this.add.text(leftX, this.scale.height * 0.70, '', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.032),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4,
+            align: 'center',
+            fixedWidth: this.scale.width * 0.25,
+        }).setOrigin(0.5));
+        this._nameBox.on('pointerdown', () => this._setStatus('Type a character name', '#ffffff'));
+        this._deleteButton = this._add(this.add.text(this.scale.width * 0.15, this.scale.height * 0.69, 'delete', {
+            fontFamily: 'Arial',
+            fontSize: Math.round(this.scale.height * 0.032),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        this._deleteButton.on('pointerover', () => this._deleteButton.setColor('#ffb4a8'));
+        this._deleteButton.on('pointerout', () => this._deleteButton.setColor('#ffffff'));
+        this._deleteButton.on('pointerdown', () => this._beginDeleteCharacter());
 
-        if (this._isEditingName) {
-            this._onNameKey(event);
-            return;
-        }
+        this._deleteConfirmText = this._add(this.add.text(leftX, this.scale.height * 0.69, 'DELETE?', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.032),
+            color: '#ffb4a8',
+            stroke: '#000000',
+            strokeThickness: 4,
+        }).setOrigin(0.5));
+        this._deleteYesButton = this._add(this.add.text(leftX - this.scale.width * 0.055, this.scale.height * 0.74, 'YES', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.030),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        this._deleteNoButton = this._add(this.add.text(leftX + this.scale.width * 0.055, this.scale.height * 0.74, 'NO', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.030),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        this._deleteYesButton.on('pointerover', () => this._deleteYesButton.setColor('#ffb4a8'));
+        this._deleteYesButton.on('pointerout', () => this._deleteYesButton.setColor('#ffffff'));
+        this._deleteYesButton.on('pointerdown', () => this._confirmDeleteCharacter());
+        this._deleteNoButton.on('pointerover', () => this._deleteNoButton.setColor('#fff4bc'));
+        this._deleteNoButton.on('pointerout', () => this._deleteNoButton.setColor('#ffffff'));
+        this._deleteNoButton.on('pointerdown', () => this._cancelDeleteCharacter());
 
-        const key = event.key.toUpperCase();
-        if (/^[A-Z]$/.test(key) && this._codeInput.length < 4) {
-            this._codeInput += key;
-            this._updateCodeDisplay();
-        } else if (event.key === 'Backspace' && this._codeInput.length > 0) {
-            this._codeInput = this._codeInput.slice(0, -1);
-            this._updateCodeDisplay();
-        } else if (event.key === 'Enter' && this._codeInput.length === 4) {
-            this._onJoinRoom();
-        }
+        this._leftArrow = this._add(this.add.text(this.scale.width * 0.08, this.scale.height * 0.23, '<', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.11),
+            color: '#fff4bc',
+            stroke: '#000000',
+            strokeThickness: 7,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        this._rightArrow = this._add(this.add.text(this.scale.width * 0.55, this.scale.height * 0.23, '>', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.11),
+            color: '#fff4bc',
+            stroke: '#000000',
+            strokeThickness: 7,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        this._leftArrow.on('pointerdown', () => this._selectPreviousCharacter());
+        this._rightArrow.on('pointerdown', () => this._selectNextCharacter());
+
+        this._renderSelectedCharacter();
     }
 
-    _onNameKey(event) {
-        const key = event.key;
-        if (/^[a-zA-Z]$/.test(key) && this._nameDraft.length < PLAYER_NAME_MAX_LENGTH) {
-            this._nameDraft += key.toUpperCase();
-        } else if (key === ' ' && this._nameDraft.length > 0 && !this._nameDraft.endsWith(' ') && this._nameDraft.length < PLAYER_NAME_MAX_LENGTH) {
-            this._nameDraft += ' ';
-        } else if (key === 'Backspace') {
-            this._nameDraft = this._nameDraft.slice(0, -1);
-        } else if (key === 'Enter') {
-            this._confirmNameEdit();
-            return;
-        } else if (key === 'Escape') {
-            this._nameDraft = this._nameInput;
-            this._isEditingName = false;
-            this._updateNameDisplay();
-            return;
-        }
-        this._updateNameDisplay();
+    _createRoomButton() {
+        const button = this._add(this.add.text(this.scale.width * 0.48, this.scale.height * 0.82, 'CREATE ROOM', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.052),
+            color: '#777777',
+            stroke: '#000000',
+            strokeThickness: 7,
+            align: 'center',
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        button.on('pointerover', () => {
+            if (this._canCreateRoom()) button.setColor('#fff4bc');
+        });
+        button.on('pointerout', () => this._updateCreateRoomButtonState());
+        button.on('pointerdown', () => this._onCreateRoom());
+        this._createBtn = button;
+
+        this._statusText = this._add(this.add.text(this.scale.width * 0.48, this.scale.height * 0.91, '', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.028),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 5,
+            align: 'center',
+            wordWrap: { width: this.scale.width * 0.48 },
+        }).setOrigin(0.5));
     }
 
-    _beginNameEdit() {
-        if (this._state !== 'idle') return;
-        this._nameDraft = this._nameInput;
-        this._isEditingName = true;
-        this._updateNameDisplay();
-    }
-
-    _confirmNameEdit() {
-        const name = this._normalizePlayerName(this._nameDraft);
-        if (!name) {
-            this._setStatus('Enter a name using letters and spaces.', '#ff4444');
-            return false;
-        }
-
-        this._nameInput = name;
-        this._nameDraft = name;
-        this._isEditingName = false;
-        RoomClient.setPlayerName(name);
-        try { window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name); } catch (_error) { /* storage is optional */ }
-        this._setStatus('', '#ff4444');
-        this._updateNameDisplay();
-        return true;
-    }
-
-    _loadPlayerName() {
-        try { return this._normalizePlayerName(window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) || ''); } catch (_error) { return ''; }
-    }
-
-    _normalizePlayerName(value) {
-        return String(value)
-            .toUpperCase()
-            .replace(/[^A-Z ]/g, '')
-            .replace(/ +/g, ' ')
-            .trim()
-            .slice(0, PLAYER_NAME_MAX_LENGTH)
-            .trim();
-    }
-
-    _updateNameDisplay() {
-        const name = this._isEditingName ? this._nameDraft : this._nameInput;
-        if (this._isEditingName) {
-            this._nameBtn.setText(`[ ${name || '_'} ]`);
-        } else if (name) {
-            this._nameBtn.setText(`[ ${name} ]`);
-        } else {
-            this._nameBtn.setText('[ ENTER NAME ]');
-        }
-    }
-
-    _hasPlayerName() {
-        return this._nameInput.length > 0;
-    }
-
-    _updateCodeDisplay() {
-        const chars = this._codeInput.padEnd(4, '_').split('').join(' ');
-        this._codeText.setText(chars);
-    }
-
-    _selectedGameMapName() {
-        return DEV_GAME_MAP_OPTIONS[this._selectedGameMapIndex] || 'DEFAULT';
-    }
-
-    _toggleGameMapSelection() {
-        if (this._state !== 'idle') return;
-        this._selectedGameMapIndex = (this._selectedGameMapIndex + 1) % DEV_GAME_MAP_OPTIONS.length;
-        this._updateGameMapDisplay();
-    }
-
-    _updateGameMapDisplay() {
-        this._gameMapBtn?.setText(`GAME MAP: ${this._selectedGameMapName()}`);
-    }
-
-    _toggleServerSelection() {
-        if (this._state !== 'idle') return;
-        RoomClient.selectNextServer();
+    _createServerDisplay() {
+        const serverOptions = RoomClient.getServerOptions();
+        const serverBtn = this._add(this.add.text(this.scale.width * 0.48, this.scale.height * 0.10, '', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.033),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 5,
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+        serverBtn.on('pointerdown', () => {
+            if (this._state !== 'idle') return;
+            if (serverOptions.length <= 1) return;
+            RoomClient.selectNextServer();
+            this._updateServerDisplay();
+            this._refreshActiveRooms(true);
+            void this._loadCharacters();
+        });
+        this._serverBtn = serverBtn;
         this._updateServerDisplay();
-        this._refreshActiveRooms(true);
     }
 
     _updateServerDisplay() {
-        const selectedServer = RoomClient.getSelectedServer();
-        this._serverBtn?.setText(`[ SERVER: ${selectedServer.label} ]`);
+        this._serverBtn?.setText(`SERVER: ${RoomClient.getSelectedServer().label}`);
+    }
+
+    async _listCharactersWithReturnRetry() {
+        let characters = await RoomClient.listCharacters();
+        const expectedCharacterId = RoomClient.selectedCharacterId;
+        if (characters.length > 0 || !expectedCharacterId) return characters;
+
+        for (const delayMs of CHARACTER_LIST_RETRY_DELAYS_MS) {
+            await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+            characters = await RoomClient.listCharacters();
+            if (characters.length > 0 || !this.scene.isActive('Lobby')) break;
+        }
+        return characters;
+    }
+
+    async _loadCharacters() {
+        const requestId = ++this._loadCharactersRequestId;
+        try {
+            this._characters = await this._listCharactersWithReturnRetry();
+            if (requestId !== this._loadCharactersRequestId || !this.scene.isActive('Lobby')) return;
+            if (this._characters.length === 0 && RoomClient.selectedCharacterId) {
+                const cachedCharacters = RoomClient.getCachedCharacters();
+                if (cachedCharacters.some((character) => character?.id === RoomClient.selectedCharacterId)) {
+                    this._characters = cachedCharacters;
+                }
+            }
+            const selectedId = RoomClient.selectedCharacterId;
+            const selectedIndex = this._characters.findIndex((character) => character.id === selectedId);
+            this._selectedCharacterIndex = selectedIndex >= 0 ? selectedIndex : 0;
+            if (this._characters[this._selectedCharacterIndex]) {
+                RoomClient.selectCharacter(this._characters[this._selectedCharacterIndex].id);
+            } else {
+                RoomClient.selectCharacter('');
+            }
+            this._confirmingDelete = false;
+            this._renderSelectedCharacter();
+            this._setStatus('', '#ffffff');
+        } catch (error) {
+            if (requestId !== this._loadCharactersRequestId || !this.scene.isActive('Lobby')) return;
+            const cachedCharacters = RoomClient.getCachedCharacters();
+            this._characters = cachedCharacters;
+            const selectedId = RoomClient.selectedCharacterId;
+            const selectedIndex = this._characters.findIndex((character) => character.id === selectedId);
+            this._selectedCharacterIndex = selectedIndex >= 0 ? selectedIndex : 0;
+            if (this._characters[this._selectedCharacterIndex]) {
+                RoomClient.selectCharacter(this._characters[this._selectedCharacterIndex].id);
+            }
+            this._renderSelectedCharacter();
+            this._setStatus(this._characters.length > 0 ? '' : (error?.message || 'Character list unavailable'), '#ffb4a8');
+        }
+    }
+
+    _carouselSize() {
+        if (this._characters.length >= MAX_CHARACTER_COUNT) return this._characters.length;
+        return this._characters.length > 0 ? this._characters.length + 1 : 1;
+    }
+
+    _selectedCharacter() {
+        return this._characters[this._selectedCharacterIndex] || null;
+    }
+
+    _normalizeCharacterName(value) {
+        return String(value || '')
+            .toUpperCase()
+            .replace(/[^A-Z ]/g, '')
+            .replace(/ +/g, ' ')
+            .trimStart()
+            .slice(0, CHARACTER_NAME_MAX_LENGTH);
+    }
+
+    _committedNewCharacterName() {
+        return this._normalizeCharacterName(this._newCharacterNameDraft).trim();
+    }
+
+    _onNewCharacterNameKey(event) {
+        const key = event.key;
+        if (/^[a-zA-Z]$/.test(key) && this._newCharacterNameDraft.length < CHARACTER_NAME_MAX_LENGTH) {
+            this._newCharacterNameDraft = this._normalizeCharacterName(`${this._newCharacterNameDraft}${key}`);
+        } else if (key === ' ' && this._newCharacterNameDraft.trim().length > 0 && !this._newCharacterNameDraft.endsWith(' ') && this._newCharacterNameDraft.length < CHARACTER_NAME_MAX_LENGTH) {
+            this._newCharacterNameDraft = this._normalizeCharacterName(`${this._newCharacterNameDraft} `);
+        } else if (key === 'Backspace') {
+            this._newCharacterNameDraft = this._newCharacterNameDraft.slice(0, -1);
+        } else if (key === 'Escape') {
+            this._newCharacterNameDraft = '';
+        } else if (key !== 'Enter') {
+            return false;
+        }
+
+        this._renderSelectedCharacter();
+        return key !== 'Enter';
+    }
+
+    _selectPreviousCharacter() {
+        if (this._state !== 'idle') return;
+        if (this._characters.length <= 0) return;
+        this._selectedCharacterIndex = (this._selectedCharacterIndex - 1 + this._carouselSize()) % this._carouselSize();
+        this._syncSelectedCharacter();
+    }
+
+    _selectNextCharacter() {
+        if (this._state !== 'idle') return;
+        if (this._characters.length <= 0) return;
+        this._selectedCharacterIndex = (this._selectedCharacterIndex + 1) % this._carouselSize();
+        this._syncSelectedCharacter();
+    }
+
+    _syncSelectedCharacter() {
+        const character = this._selectedCharacter();
+        RoomClient.selectCharacter(character?.id || '');
+        this._confirmingDelete = false;
+        this._renderSelectedCharacter();
+        this._setStatus('', '#ffffff');
+    }
+
+    _renderSelectedCharacter() {
+        if (!this._characterNameText || !this._characterLevelText || !this._characterSprite) return;
+        const character = this._selectedCharacter();
+        const isNewCharacter = !character;
+        this._characterNameText.setText(isNewCharacter ? 'NEW CHARACTER' : character.displayName || 'PLAYER');
+        this._characterLevelText.setText(isNewCharacter ? '' : `LEVEL ${Math.max(1, character.level || 1)}`);
+        this._leftArrow?.setVisible(this._characters.length > 0);
+        this._rightArrow?.setVisible(this._characters.length > 0);
+        this._nameBox?.setVisible(isNewCharacter);
+        this._nameBoxText?.setVisible(isNewCharacter);
+        this._deleteButton?.setVisible(!isNewCharacter && !this._confirmingDelete);
+        this._deleteConfirmText?.setVisible(!isNewCharacter && this._confirmingDelete);
+        this._deleteYesButton?.setVisible(!isNewCharacter && this._confirmingDelete);
+        this._deleteNoButton?.setVisible(!isNewCharacter && this._confirmingDelete);
+        if (isNewCharacter && this._nameBoxText) {
+            this._nameBoxText.setText(this._newCharacterNameDraft || '');
+        }
+
+        const tint = isNewCharacter ? null : OUTFIT_TINTS[character.outfitColor || 0];
+        if (tint == null) {
+            this._characterSprite.clearTint();
+        } else {
+            this._characterSprite.setTint(tint);
+        }
+        this._characterSprite.setAlpha(isNewCharacter ? 0.55 : 1);
+        this._updateCreateRoomButtonState();
+    }
+
+    _beginDeleteCharacter() {
+        if (this._state !== 'idle') return;
+        if (!this._selectedCharacter()) return;
+        this._confirmingDelete = true;
+        this._setStatus('', '#ffffff');
+        this._renderSelectedCharacter();
+    }
+
+    _cancelDeleteCharacter() {
+        this._confirmingDelete = false;
+        this._renderSelectedCharacter();
+    }
+
+    async _confirmDeleteCharacter() {
+        if (this._state !== 'idle') return;
+        const character = this._selectedCharacter();
+        if (!character) return;
+
+        this._state = 'busy';
+        this._setStatus('Deleting character...', '#ffffff');
+        try {
+            await RoomClient.deleteCharacter(character.id);
+            this._characters = await RoomClient.listCharacters();
+            this._selectedCharacterIndex = Math.min(this._selectedCharacterIndex, Math.max(0, this._characters.length - 1));
+            const nextCharacter = this._selectedCharacter();
+            RoomClient.selectCharacter(nextCharacter?.id || '');
+            this._confirmingDelete = false;
+            this._state = 'idle';
+            this._renderSelectedCharacter();
+            this._setStatus('', '#ffffff');
+        } catch (error) {
+            this._state = 'idle';
+            this._confirmingDelete = false;
+            this._renderSelectedCharacter();
+            this._setStatus(error?.message || 'Failed to delete character.', '#ffb4a8');
+        }
+    }
+
+    _canCreateRoom() {
+        return !this._confirmingDelete && (!!this._selectedCharacter() || this._committedNewCharacterName().length > 0);
+    }
+
+    _updateCreateRoomButtonState() {
+        if (!this._createBtn) return;
+        this._createBtn.setColor(this._canCreateRoom() ? '#ffffff' : '#777777');
+    }
+
+    async _ensureSelectedCharacter() {
+        const existing = this._selectedCharacter();
+        if (existing) {
+            RoomClient.selectCharacter(existing.id);
+            return existing;
+        }
+
+        this._setStatus('Creating character...', '#ffffff');
+        const name = this._committedNewCharacterName();
+        if (!name) throw new Error('Enter a character name first.');
+        const character = await RoomClient.createCharacter(name);
+        this._characters = await RoomClient.listCharacters();
+        const createdIndex = this._characters.findIndex((item) => item.id === character.id);
+        this._selectedCharacterIndex = createdIndex >= 0 ? createdIndex : 0;
+        this._newCharacterNameDraft = '';
+        this._renderSelectedCharacter();
+        return character;
+    }
+
+    _selectedGameMapName() {
+        return DEV_GAME_MAP_OPTIONS[0] || 'DEFAULT';
+    }
+
+    async _onCreateRoom() {
+        if (this._state !== 'idle') return;
+        if (!this._canCreateRoom()) {
+            this._setStatus(this._characters.length >= MAX_CHARACTER_COUNT ? 'Delete a character to make a new one.' : 'Enter a character name first.', '#ffb4a8');
+            return;
+        }
+        this._state = 'busy';
+        this._setStatus('Creating room...', '#ffffff');
+
+        try {
+            await this._ensureSelectedCharacter();
+            const options = {};
+            if (IS_DEVELOPMENT_BUILD) {
+                const selectedMap = this._selectedGameMapName();
+                if (selectedMap !== 'DEFAULT') options.mapName = selectedMap;
+            }
+            await RoomClient.createRoom(options);
+            const code = RoomClient.room.id;
+            this._setStatus(`Room created: ${code}`, '#fff4bc');
+            this.time.delayedCall(ROOM_CODE_DISPLAY_MS, () => this.scene.start('Game'));
+        } catch (error) {
+            this._setStatus(error?.message || 'Failed to create room. Is the server running?', '#ffb4a8');
+            this._state = 'idle';
+            this._updateCreateRoomButtonState();
+            this._refreshActiveRooms(true);
+        }
+    }
+
+    async _onJoinListedRoom(roomId) {
+        if (this._state !== 'idle') return;
+        if (!this._canCreateRoom()) {
+            this._setStatus(this._characters.length >= MAX_CHARACTER_COUNT ? 'Delete a character to make a new one.' : 'Enter a character name first.', '#ffb4a8');
+            return;
+        }
+        this._state = 'busy';
+        this._setStatus(`Joining room ${roomId}...`, '#ffffff');
+
+        try {
+            await this._ensureSelectedCharacter();
+            await RoomClient.joinRoom(roomId);
+            this.scene.start('Game');
+        } catch (_error) {
+            this._setStatus(`Room "${roomId}" is no longer available.`, '#ffb4a8');
+            this._state = 'idle';
+            this._updateCreateRoomButtonState();
+            this._refreshActiveRooms(true);
+        }
     }
 
     _createActiveRoomsSidebar() {
-        const width = 260;
-        const x = this.scale.width - width - 22;
-        const y = 140;
-        this._activeRoomsPanel = this.add.container(x, y);
-        this._activeRoomsPanel.add(this.add.rectangle(0, 0, width, 452, 0x07110c, 0.94)
-            .setOrigin(0, 0)
-            .setStrokeStyle(2, 0x1d5f3a, 1));
-        this._activeRoomsPanel.add(this.add.text(18, 18, 'ACTIVE ROOMS', {
-            fontFamily: 'Arial Black', fontSize: 21, color: '#9dffbf',
-            stroke: '#000000', strokeThickness: 5,
-        }));
-        this._activeRoomsStatusText = this.add.text(18, 64, 'Loading...', {
-            fontFamily: 'Arial Black', fontSize: 16, color: '#b8c8bd',
-            stroke: '#000000', strokeThickness: 4,
-            wordWrap: { width: width - 36 },
-        });
+        const width = Math.round(this.scale.width * 0.29);
+        const x = this.scale.width * 0.63;
+        const y = this.scale.height * 0.20;
+        this._activeRoomsPanel = this._add(this.add.container(x, y));
+        this._activeRoomsPanel.add(this.add.text(width * 0.5, 0, 'ACTIVE ROOMS', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.04),
+            color: '#fff4bc',
+            stroke: '#000000',
+            strokeThickness: 5,
+        }).setOrigin(0.5, 0));
+        this._activeRoomsStatusText = this.add.text(0, this.scale.height * 0.09, 'Loading...', {
+            fontFamily: 'Arial Black',
+            fontSize: Math.round(this.scale.height * 0.025),
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4,
+            wordWrap: { width },
+            align: 'center',
+        }).setOrigin(0, 0);
         this._activeRoomsPanel.add(this._activeRoomsStatusText);
     }
 
     async _refreshActiveRooms(force = false) {
+        if (this._screen !== 'submenu') return;
         if (this._isRefreshingActiveRooms && !force) return;
         if (!this.scene.isActive('Lobby')) return;
 
@@ -303,54 +594,56 @@ export class Lobby extends Phaser.Scene {
             if (requestId !== this._activeRoomsRequestId || !this.scene.isActive('Lobby')) return;
             this._renderActiveRooms([], 'Room list unavailable');
         } finally {
-            if (requestId === this._activeRoomsRequestId) {
-                this._isRefreshingActiveRooms = false;
-            }
+            if (requestId === this._activeRoomsRequestId) this._isRefreshingActiveRooms = false;
         }
     }
 
     _renderActiveRooms(rooms, statusText = '') {
         this._activeRoomRows.forEach((item) => item.destroy());
         this._activeRoomRows = [];
+        if (!this._activeRoomsPanel || !this._activeRoomsStatusText) return;
 
+        const width = Math.round(this.scale.width * 0.29);
         const visibleRooms = rooms.slice(0, ACTIVE_ROOM_ROW_LIMIT);
         if (visibleRooms.length === 0) {
-            this._activeRoomsStatusText.setText(statusText || 'No active rooms').setColor('#b8c8bd');
+            this._activeRoomsStatusText.setText(statusText || 'No active rooms').setColor('#ffffff');
             return;
         }
 
-        this._activeRoomsStatusText.setText('').setColor('#b8c8bd');
+        this._activeRoomsStatusText.setText('').setColor('#ffffff');
         visibleRooms.forEach((room, index) => {
-            const rowY = 60 + index * 72;
-            const row = this.add.container(16, rowY);
-            row.add(this.add.rectangle(0, 0, 228, 58, 0x10261a, 0.98)
+            const rowY = this.scale.height * 0.075 + index * this.scale.height * 0.13;
+            const row = this.add.container(0, rowY);
+            row.add(this.add.rectangle(0, 0, width, this.scale.height * 0.105, 0x120707, 0.65)
                 .setOrigin(0, 0)
-                .setStrokeStyle(1, 0x2b7f4f, 1));
-            row.add(this.add.text(12, 8, room.roomId, {
-                fontFamily: 'Arial Black', fontSize: 23, color: '#ffffff',
-                stroke: '#000000', strokeThickness: 5,
+                .setStrokeStyle(1, 0xfff4bc, 0.5));
+            row.add(this.add.text(width * 0.06, this.scale.height * 0.015, room.roomId, {
+                fontFamily: 'Arial Black',
+                fontSize: Math.round(this.scale.height * 0.036),
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 5,
             }));
-            const displayMapName = room.mapName.length > 10 ? `${room.mapName.slice(0, 10)}...` : room.mapName;
+            const displayMapName = room.mapName.length > 8 ? `${room.mapName.slice(0, 8)}...` : room.mapName;
             const mapLabel = displayMapName ? ` - ${displayMapName}` : '';
-            row.add(this.add.text(12, 34, `${room.clients}/${room.maxClients} PLAYERS${mapLabel}`, {
-                fontFamily: 'Arial Black', fontSize: 12, color: '#a9bdb0',
-                stroke: '#000000', strokeThickness: 3,
+            row.add(this.add.text(width * 0.06, this.scale.height * 0.062, `${room.clients}/${room.maxClients} PLAYERS${mapLabel}`, {
+                fontFamily: 'Arial Black',
+                fontSize: Math.round(this.scale.height * 0.018),
+                color: '#fff4bc',
+                stroke: '#000000',
+                strokeThickness: 3,
             }));
 
-            const joinBg = this.add.rectangle(160, 12, 56, 34, 0x168a35, 1)
-                .setOrigin(0, 0)
-                .setStrokeStyle(1, 0x7dff9f, 1)
-                .setInteractive({ useHandCursor: true });
-            const joinText = this.add.text(188, 29, 'JOIN', {
-                fontFamily: 'Arial Black', fontSize: 14, color: '#ffffff',
-                stroke: '#063b14', strokeThickness: 3,
-            }).setOrigin(0.5);
-            joinBg.on('pointerover', () => joinBg.setFillStyle(0x21aa45, 1));
-            joinBg.on('pointerout', () => joinBg.setFillStyle(0x168a35, 1));
-            joinBg.on('pointerdown', () => this._onJoinListedRoom(room.roomId));
-            joinText.setInteractive({ useHandCursor: true });
+            const joinText = this.add.text(width * 0.80, this.scale.height * 0.052, 'JOIN', {
+                fontFamily: 'Arial Black',
+                fontSize: Math.round(this.scale.height * 0.025),
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 4,
+            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+            joinText.on('pointerover', () => joinText.setColor('#fff4bc'));
+            joinText.on('pointerout', () => joinText.setColor('#ffffff'));
             joinText.on('pointerdown', () => this._onJoinListedRoom(room.roomId));
-            row.add(joinBg);
             row.add(joinText);
 
             this._activeRoomsPanel.add(row);
@@ -358,107 +651,7 @@ export class Lobby extends Phaser.Scene {
         });
     }
 
-    // ── Create Room ──────────────────────────────────────────────────────────
-    async _onCreateRoom() {
-        if (this._state !== 'idle') return;
-        if (this._isEditingName && !this._confirmNameEdit()) return;
-        if (!this._hasPlayerName()) {
-            this._setStatus('Enter a player name first.', '#ff4444');
-            return;
-        }
-        this._state = 'busy';
-        this._setStatus('Creating room…', '#ffffff');
-
-        try {
-            const options = {};
-            if (IS_DEVELOPMENT_BUILD) {
-                const selectedMap = this._selectedGameMapName();
-                if (selectedMap !== 'DEFAULT') options.mapName = selectedMap;
-            }
-            await RoomClient.createRoom(options);
-            const code = RoomClient.room.id;
-            this._setStatus(`Room created: ${code}\nShare this code with friends!`, '#00ff88');
-            // Brief pause so the player can see and share the code
-            this.time.delayedCall(ROOM_CODE_DISPLAY_MS, () => this.scene.start('Game'));
-        } catch (e) {
-            this._setStatus(e?.message || 'Failed to create room. Is the server running?', '#ff4444');
-            this._state = 'idle';
-            this._refreshActiveRooms(true);
-        }
-    }
-
-    async _onCreateMap() {
-        if (this._state !== 'idle') return;
-        if (this._isEditingName && !this._confirmNameEdit()) return;
-        if (!this._hasPlayerName()) {
-            this._setStatus('Enter a player name first.', '#ff4444');
-            return;
-        }
-        this._state = 'busy';
-        this._setStatus('Creating map editor…', '#ffffff');
-
-        try {
-            const room = await RoomClient.createRoom({ mode: 'map-editor' });
-            await new Promise((resolve) => window.setTimeout(resolve, 300));
-            if (room.state?.mode !== 'map-editor') {
-                await RoomClient.disconnect();
-                throw new Error('Map editor is unavailable on this server. Restart the development server.');
-            }
-            this.scene.start('Game');
-        } catch (error) {
-            this._setStatus(error?.message || 'Failed to create map editor. Is the server running?', '#ff4444');
-            this._state = 'idle';
-            this._refreshActiveRooms(true);
-        }
-    }
-
-    // ── Join Room ────────────────────────────────────────────────────────────
-    async _onJoinRoom() {
-        if (this._state !== 'idle') return;
-        if (this._isEditingName && !this._confirmNameEdit()) return;
-        if (!this._hasPlayerName()) {
-            this._setStatus('Enter a player name first.', '#ff4444');
-            return;
-        }
-        if (this._codeInput.length !== 4) {
-            this._setStatus('Enter a 4-letter room code first.', '#ff4444');
-            return;
-        }
-        this._state = 'busy';
-        this._setStatus(`Joining room ${this._codeInput}…`, '#ffffff');
-
-        try {
-            await RoomClient.joinRoom(this._codeInput);
-            this.scene.start('Game');
-        } catch (e) {
-            this._setStatus(`Room "${this._codeInput}" not found. Check the code.`, '#ff4444');
-            this._state = 'idle';
-            this._refreshActiveRooms(true);
-        }
-    }
-
-    async _onJoinListedRoom(roomId) {
-        if (this._state !== 'idle') return;
-        if (this._isEditingName && !this._confirmNameEdit()) return;
-        if (!this._hasPlayerName()) {
-            this._setStatus('Enter a player name first.', '#ff4444');
-            return;
-        }
-
-        this._state = 'busy';
-        this._setStatus(`Joining room ${roomId}...`, '#ffffff');
-
-        try {
-            await RoomClient.joinRoom(roomId);
-            this.scene.start('Game');
-        } catch (_error) {
-            this._setStatus(`Room "${roomId}" is no longer available.`, '#ff4444');
-            this._state = 'idle';
-            this._refreshActiveRooms(true);
-        }
-    }
-
     _setStatus(msg, color) {
-        this._statusText.setText(msg).setColor(color);
+        this._statusText?.setText(msg).setColor(color);
     }
 }

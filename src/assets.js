@@ -214,6 +214,14 @@ export default {
             key: 'topdown-tileset-palette',
             args: ['assets/Topdowntileset.png']
         },
+        shmup2MainMenu: {
+            key: 'shmup2-main-menu',
+            args: ['assets/shmup2mainmenu.png']
+        },
+        shmup2SubMenu: {
+            key: 'shmup2-submenu',
+            args: ['assets/shmup2submenu1.png']
+        },
     },
     'spritesheet': {
         bossBomb: {

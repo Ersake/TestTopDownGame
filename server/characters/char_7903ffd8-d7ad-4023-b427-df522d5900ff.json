@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "char_7903ffd8-d7ad-4023-b427-df522d5900ff",
+  "ownerKeyHash": "9cae846d22307a222495f409b372dea4baff578b0e1611ff07ffee1d19bce00b",
+  "displayName": "OBAMA",
+  "level": 3,
+  "experience": 45,
+  "experienceToNext": 61,
+  "pendingUpgradeChoices": 0,
+  "outfitColor": 4,
+  "upgrades": {
+    "axeSwingSpeedUpgrades": 0,
+    "axePrimaryDamageUpgrades": 0,
+    "axeWhirlwindCooldownUpgrades": 0,
+    "axeWhirlwindAoeUpgrades": 0,
+    "axeWhirlwindDamageUpgrades": 0,
+    "bowDamageUpgrades": 0,
+    "bowPierceUpgrades": 0,
+    "bowChargeTimeUpgrades": 1,
+    "bowVolleyCooldownUpgrades": 0,
+    "bowVolleyAoeUpgrades": 0,
+    "bowVolleyDamageUpgrades": 0,
+    "shieldPrimaryAttackSpeedUpgrades": 0,
+    "shieldPrimaryDamageUpgrades": 0,
+    "shieldMaxHpUpgrades": 1,
+    "shieldRechargeUpgrades": 0,
+    "shieldSizeUpgrades": 0,
+    "woodGatherUpgrades": 0
+  },
+  "createdAt": "2026-07-11T23:15:57.756Z",
+  "updatedAt": "2026-07-11T23:32:36.573Z",
+  "lastPlayedAt": "2026-07-11T23:32:36.573Z"
+}
