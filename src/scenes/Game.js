@@ -665,6 +665,7 @@ export class Game extends Phaser.Scene {
         this.nextHeldAttackAt = 0;
         this.lastEscapeToggleAt = 0;
         this.isQuittingToLobby = false;
+        this.quitTransitionCover = null;
         this.cameraZoom = CAMERA_MIN_ZOOM;
         this.showHitboxes = false;
         this.hitboxGraphics = null;
@@ -4744,9 +4745,19 @@ export class Game extends Phaser.Scene {
         RoomClient.sendRetryGame();
     }
 
+    showQuitTransitionCover() {
+        this.quitTransitionCover?.destroy();
+        this.quitTransitionCover = this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 1)
+            .setOrigin(0)
+            .setScrollFactor(0)
+            .setDepth(UI_DEPTH + 10000);
+        this.children.bringToTop(this.quitTransitionCover);
+    }
+
     async quitToLobby() {
         if (this.isQuittingToLobby) return;
         this.isQuittingToLobby = true;
+        this.showQuitTransitionCover();
 
         this.gameOverText.setVisible(false);
         this.retryButton.setVisible(false);
