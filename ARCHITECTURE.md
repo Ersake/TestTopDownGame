@@ -102,6 +102,7 @@ Important server files:
 | `"bowVolleyStart"`, `"bowVolleyAim"`, `"bowVolleyRelease"`, `"bowVolleyCancel"` | Bow Volley input helpers | Starts, updates, releases, or cancels server-owned bow secondary targeting. Volley reuses synced bow charge state and auto-releases after full charge. |
 | `"axeWhirlwind"` | `RoomClient.sendAxeWhirlwind()` | Starts or stops the server-owned axe whirlwind state; the server owns max duration and cooldown. |
 | `"shieldBlockStart"`, `"shieldBlockStop"` | Shield input helpers | Starts or stops held shield blocking for an equipped shield. The server validates shield item, slot HP, cooldown, death, and game-over state. |
+| `"setPvpEnabled"` | PvP toggle | Sets the requesting player's private server-owned PvP flag. The server ignores any claimed player ID and only updates the sending client. |
 | `"readyForNextWave"` | `RoomClient.sendReadyForNextWave()` | Marks the player ready when they press R during the server-owned wave countdown; if all connected players are ready, the next wave starts early. |
 | `"retryGame"` | `RoomClient.sendRetryGame()` | Marks the player ready to retry during game over; one-player rooms restart immediately, multiplayer rooms restart when all connected players are ready. |
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
@@ -133,6 +134,8 @@ The server treats client data as untrusted. `ShmupRoom.ts` coerces booleans, nor
 | `"playerHurt"` | One-shot player hurt presentation. |
 | `"shieldBlock"` | One-shot shield absorption presentation. Clients throttle per-player block audio so rapid hits do not stack sounds. |
 | `"shieldBreak"` | One-shot shield break presentation when shield HP reaches zero. |
+| `"pvpStatus"` | Authoritative PvP toggle acknowledgement sent to the requesting client. |
+| `"pvpStatusChanged"` | Lightweight broadcast that a player's private PvP flag changed; clients do not use it for gameplay authority. |
 | `"bowVolleyTelegraph"` | One-shot shared red Volley warning circle presentation before impact. |
 | `"bowVolleyImpact"` | One-shot Volley impact/removal presentation. |
 | `"bossBombTelegraph"` | One-shot shared boss bomb warning circle presentation before impact. |
@@ -233,6 +236,7 @@ Current server-owned systems include:
 - Player bullets and enemy bullets.
 - AABB/capsule/circle-style collision helpers for current gameplay interactions.
 - Player health, a narrow/tall shifted player damage hitbox, 150ms server-owned post-hit invulnerability, 2-second join/revive invulnerability, death, revive progress, revive completion, and game-over checks. Game over stops client radio playback; the Retry button sends a server-owned retry ready signal, immediately resetting one-player rooms and resetting multiplayer rooms once all connected players are ready.
+- Player-vs-player damage is opt-in per player. The client shows a local top-right PvP toggle, but the room owns the actual flag and only allows player-owned attacks to damage another player when both the attacker and target have PvP enabled. Enemy damage behavior is unchanged.
 - Team score, player kills, and elapsed round time.
 
 ### Performance Sensitivity

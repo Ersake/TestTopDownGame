@@ -179,7 +179,12 @@ const CAMPFIRE_HEAL_BAR_BACKGROUND_COLOR = 0x2b1608;
 const CAMPFIRE_HEAL_BAR_FILL_COLOR = 0xff941f;
 const UI_DEPTH = 1000;
 const BUFF_LIST_X_OFFSET = 20;
-const BUFF_LIST_Y = 96;
+const BUFF_LIST_Y = 136;
+const PVP_TOGGLE_X_OFFSET = 20;
+const PVP_TOGGLE_Y = 98;
+const PVP_TOGGLE_OFF_COLOR = '#20d04f';
+const PVP_TOGGLE_ON_COLOR = '#e03333';
+const PVP_TOGGLE_STROKE_COLOR = '#000000';
 const BASE_WORLD_WIDTH = 3840;
 const BASE_WORLD_HEIGHT = 2160;
 const DEFAULT_WORLD_WIDTH = BASE_WORLD_WIDTH * TILE_WORLD_SCALE;
@@ -559,6 +564,8 @@ export class Game extends Phaser.Scene {
         this.localExperienceState = null;
         this.localPendingUpgradeChoices = 0;
         this.localActiveSlot = 1;
+        this.localPvpEnabled = false;
+        this.pvpToggleButton = null;
         this.hotbarSlots = [];
         this.hotbarSlotItems = [ITEM_WOOD_AXE, ITEM_WOOD_BOW, ITEM_HAMMER, '', '', '', '', '', ''];
         this.hotbarSlotCounts = [0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -788,6 +795,13 @@ export class Game extends Phaser.Scene {
             stroke: '#000000', strokeThickness: 6,
         }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0);
 
+        this.pvpToggleButton = this.add.text(this.scale.width - PVP_TOGGLE_X_OFFSET, PVP_TOGGLE_Y, 'PVP OFF', {
+            fontFamily: 'Arial Black', fontSize: 20, color: PVP_TOGGLE_OFF_COLOR,
+            stroke: PVP_TOGGLE_STROKE_COLOR, strokeThickness: 6, align: 'right',
+        }).setOrigin(1, 0).setDepth(UI_DEPTH).setScrollFactor(0)
+            .setInteractive({ useHandCursor: true });
+        this.pvpToggleButton.on('pointerdown', () => this.togglePvp());
+
         this.buffListText = this.add.text(this.scale.width - BUFF_LIST_X_OFFSET, BUFF_LIST_Y, '', {
             fontFamily: 'Arial Black', fontSize: 16, color: '#ffe27a',
             stroke: '#000000', strokeThickness: 5, align: 'right',
@@ -893,6 +907,7 @@ export class Game extends Phaser.Scene {
             this.waveText,
             this.killsText,
             this.playerCountText,
+            this.pvpToggleButton,
             this.buffListText,
             this.skillPointText,
             this.gameOverText,
@@ -3249,6 +3264,11 @@ export class Game extends Phaser.Scene {
             RoomClient.sendListMaps();
         }
 
+        room.onMessage('pvpStatus', (status) => {
+            if (status?.playerId && !this.isLocalSession(status.playerId)) return;
+            this.updatePvpToggleButton(!!status?.enabled);
+        });
+
         room.onMessage('treeHit', (hit) => {
             if (!hit || !this.shouldPlayTreeHitAudio(hit.attackerId)) return;
             this.playSfx(ASSETS.audio.woodHit.key, WOOD_HIT_SOUND_VOLUME, {
@@ -4659,6 +4679,21 @@ export class Game extends Phaser.Scene {
 
         this.nextWaveCountdownText.setText(`Next wave in ${countdown}`);
         this.nextWaveReadyText.setText(`${readyPlayers}/${totalPlayers}`);
+    }
+
+    togglePvp() {
+        const room = RoomClient.room;
+        if (!room || this.isMapEditor) return;
+        room.send('setPvpEnabled', { enabled: !this.localPvpEnabled });
+    }
+
+    updatePvpToggleButton(enabled = this.localPvpEnabled) {
+        if (!this.pvpToggleButton) return;
+        this.localPvpEnabled = !!enabled;
+        this.pvpToggleButton
+            .setText(this.localPvpEnabled ? 'PVP ON' : 'PVP OFF')
+            .setColor(this.localPvpEnabled ? PVP_TOGGLE_ON_COLOR : PVP_TOGGLE_OFF_COLOR)
+            .setVisible(!this.isMapEditor);
     }
 
     showTreeReplenishMessage() {

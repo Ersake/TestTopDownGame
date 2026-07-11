@@ -620,6 +620,7 @@ interface ServerBullet {
     damage: number;
     pierceRemaining: number;
     hitEnemyIds: Set<string>;
+    hitPlayerIds: Set<string>;
 }
 interface ServerEnemyBullet {
     vx: number;
@@ -651,6 +652,7 @@ interface ActiveAxeAttack {
     targetY: unknown;
     remainingMs: number;
     hitEnemyIds: Set<string>;
+    hitPlayerIds: Set<string>;
 }
 interface TreeHitPayload {
     treeId: string;
@@ -672,6 +674,10 @@ interface PlayerHurtPayload {
     x: number;
     y: number;
     health: number;
+}
+interface PvpStatusPayload {
+    playerId: string;
+    enabled: boolean;
 }
 interface PendingEnemySpawn {
     enemyType: number;
@@ -818,6 +824,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private serverPlayerBullets = new Map<string, ServerBullet>();
     private serverEnemyBullets  = new Map<string, ServerEnemyBullet>();
     private serverTreeHealth    = new Map<string, number>();
+    private pvpEnabledPlayers   = new Set<string>();
     private campfireOwners      = new Map<string, string>();
     private activeAxeAttacks: ActiveAxeAttack[] = [];
     private elapsedMs           = 0;
@@ -868,6 +875,36 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             .map(([key, value]) => `${key}=${value}`)
             .join(", ");
         console.log(`[ShmupRoom ${this.roomId}] ${event}${details ? `: ${details}` : ""}`);
+    }
+
+    private setPlayerPvpEnabled(client: Client, data: unknown): void {
+        if (!this.state.players.has(client.sessionId)) return;
+        const enabled = !!(data as { enabled?: unknown })?.enabled;
+        if (enabled) {
+            this.pvpEnabledPlayers.add(client.sessionId);
+        } else {
+            this.pvpEnabledPlayers.delete(client.sessionId);
+        }
+
+        const payload = { playerId: client.sessionId, enabled } satisfies PvpStatusPayload;
+        client.send("pvpStatus", payload);
+        this.broadcast("pvpStatusChanged", payload, { except: client });
+    }
+
+    private canPlayerDamagePlayer(attackerId: string, targetId: string): boolean {
+        if (attackerId === targetId) return false;
+        if (!this.pvpEnabledPlayers.has(attackerId) || !this.pvpEnabledPlayers.has(targetId)) return false;
+
+        const attacker = this.state.players.get(attackerId);
+        const attackerSp = this.serverPlayers.get(attackerId);
+        const target = this.state.players.get(targetId);
+        const targetSp = this.serverPlayers.get(targetId);
+        return !!attacker
+            && !!attackerSp?.alive
+            && !attacker.isDead
+            && !!target
+            && !!targetSp?.alive
+            && !target.isDead;
     }
 
     private updateRoomListingMetadata(): void {
@@ -1020,6 +1057,10 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         this.onMessage("shieldBlockStop", (client) => {
             this.setShieldBlocking(client.sessionId, false);
+        });
+
+        this.onMessage("setPvpEnabled", (client, data) => {
+            this.setPlayerPvpEnabled(client, data);
         });
 
         this.onMessage("equipSlot", (client, data) => {
@@ -3366,6 +3407,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             gameStarted: this.state.gameStarted,
             gameOver: this.state.gameOver,
         });
+        client.send("pvpStatus", { playerId: client.sessionId, enabled: false } satisfies PvpStatusPayload);
     }
 
     // ─── Reset game state (called when a player rejoins after game over) ──────
@@ -3511,6 +3553,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         this.cancelRevivesTargeting(client.sessionId);
         this.state.players.delete(client.sessionId);
         this.serverPlayers.delete(client.sessionId);
+        this.pvpEnabledPlayers.delete(client.sessionId);
         this.nextWaveReadyPlayerIds.delete(client.sessionId);
         this.gameOverRetryReadyPlayerIds.delete(client.sessionId);
         if (this.nextEnemyWaveStartMs !== null) {
@@ -3709,6 +3752,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             targetY,
             remainingMs: AXE_ATTACK_LINGER_MS,
             hitEnemyIds: new Set<string>(),
+            hitPlayerIds: new Set<string>(),
         };
         player.axeAttackHitboxActive = true;
         this.applyLingeringAxeEnemyAttackImpact(attack);
@@ -3721,6 +3765,17 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         if (!sp || !sp.alive || !player || player.isDead || this.state.gameOver) return false;
 
         const attackOrigin = { x: player.x, y: player.y };
+        const playerHits = this.damagePlayersFromAttack(
+            attackOrigin,
+            attack.attackerId,
+            attack.direction,
+            attack.targetX,
+            attack.targetY,
+            this.getPlayerAxePrimaryDamage(player),
+            attack.hitPlayerIds,
+        );
+        playerHits.forEach((hurt) => this.broadcast("playerHurt", hurt));
+
         const enemyHits = this.damageEnemiesFromAttack(
             attackOrigin,
             attack.attackerId,
@@ -3805,6 +3860,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
 
         const enemyHits = this.damageEnemiesFromAxeWhirlwind(player.x, player.y, attackerId);
         enemyHits.forEach((enemyHit) => this.broadcast("enemyHit", enemyHit));
+
+        const playerHits = this.damagePlayersFromAxeWhirlwind(player.x, player.y, attackerId);
+        playerHits.forEach((hurt) => this.broadcast("playerHurt", hurt));
     }
 
     private isShieldItem(item: string): boolean {
@@ -3840,6 +3898,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, this.getPlayerShieldBashDamage(player));
             if (enemyHit) this.broadcast("enemyHit", enemyHit);
         });
+
+        const playerHits = this.damagePlayersInCircle(
+            attackerId,
+            hitX,
+            hitY,
+            SHIELD_BASH_RADIUS,
+            this.getPlayerShieldBashDamage(player),
+        );
+        playerHits.forEach((hurt) => this.broadcast("playerHurt", hurt));
     }
 
     private damageTreesFromAxeWhirlwind(x: number, y: number, attackerId: string): TreeHitPayload[] {
@@ -4028,6 +4095,102 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         return hitPayloads;
     }
 
+    private damagePlayersFromAttack(
+        attackOrigin: AttackOrigin,
+        attackerId: string,
+        direction: string,
+        targetX: unknown,
+        targetY: unknown,
+        damage: number,
+        hitPlayerIdsForAttack: Set<string> = new Set<string>(),
+    ): PlayerHurtPayload[] {
+        const hitPlayerIds = this.findPlayerHitsByAttack(attackerId, attackOrigin, direction, targetX, targetY);
+        const hitPayloads: PlayerHurtPayload[] = [];
+
+        hitPlayerIds.forEach((targetId) => {
+            if (hitPlayerIdsForAttack.has(targetId)) return;
+            const hurt = this.damagePlayerFromPlayer(attackerId, targetId, damage);
+            if (!hurt) return;
+            hitPlayerIdsForAttack.add(targetId);
+            hitPayloads.push(hurt);
+        });
+
+        return hitPayloads;
+    }
+
+    private findPlayerHitsByAttack(
+        attackerId: string,
+        attackOrigin: AttackOrigin,
+        direction: string,
+        targetX: unknown,
+        targetY: unknown,
+    ): string[] {
+        const vector = this.getAttackVector(attackOrigin, direction, targetX, targetY);
+        const originX = attackOrigin.x;
+        const originY = attackOrigin.y + ATTACK_HIT_ORIGIN_Y_OFFSET;
+        const attackStartX = originX + vector.x * ATTACK_HIT_START_OFFSET;
+        const attackStartY = originY + vector.y * ATTACK_HIT_START_OFFSET;
+        const attackEndX = originX + vector.x * ATTACK_HIT_END_OFFSET;
+        const attackEndY = originY + vector.y * ATTACK_HIT_END_OFFSET;
+        const hitPlayerIds: string[] = [];
+
+        this.state.players.forEach((target, targetId) => {
+            if (!this.canPlayerDamagePlayer(attackerId, targetId)) return;
+            if (!capsuleOverlapsAabb(
+                attackStartX,
+                attackStartY,
+                attackEndX,
+                attackEndY,
+                ATTACK_HIT_RADIUS,
+                target.x,
+                this.playerHitboxCenterY(target.y),
+                PLAYER_HW,
+                PLAYER_HH,
+            )) return;
+
+            hitPlayerIds.push(targetId);
+        });
+
+        return hitPlayerIds;
+    }
+
+    private damagePlayersFromAxeWhirlwind(x: number, y: number, attackerId: string): PlayerHurtPayload[] {
+        const attacker = this.state.players.get(attackerId);
+        const radius = attacker ? this.getPlayerAxeWhirlwindRadius(attacker) : AXE_WHIRLWIND_RADIUS;
+        const damage = attacker ? this.getPlayerAxeWhirlwindDamage(attacker) : AXE_WHIRLWIND_DAMAGE;
+        return this.damagePlayersInCircle(attackerId, x, y, radius, damage);
+    }
+
+    private damagePlayersInCircle(attackerId: string, x: number, y: number, radius: number, damage: number): PlayerHurtPayload[] {
+        const hitPayloads: PlayerHurtPayload[] = [];
+
+        this.state.players.forEach((target, targetId) => {
+            if (!this.canPlayerDamagePlayer(attackerId, targetId)) return;
+            if (!circleOverlapsAabb(
+                x,
+                y,
+                radius,
+                target.x,
+                this.playerHitboxCenterY(target.y),
+                PLAYER_HW,
+                PLAYER_HH,
+            )) return;
+
+            const hurt = this.damagePlayerFromPlayer(attackerId, targetId, damage);
+            if (hurt) hitPayloads.push(hurt);
+        });
+
+        return hitPayloads;
+    }
+
+    private damagePlayerFromPlayer(attackerId: string, targetId: string, damage: number): PlayerHurtPayload | null {
+        if (!this.canPlayerDamagePlayer(attackerId, targetId)) return null;
+        const target = this.state.players.get(targetId);
+        const targetSp = this.serverPlayers.get(targetId);
+        if (!target || !targetSp) return null;
+        return this.damagePlayer(targetId, targetSp, target, damage, attackerId);
+    }
+
     private damageEnemyFromBowAttack(enemyId: string, attackerId: string, damage: number = 1): EnemyHitPayload | null {
         const enemy = this.state.enemies.get(enemyId);
         if (!enemy) {
@@ -4087,6 +4250,9 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             const enemyHit = this.damageEnemyFromBowAttack(enemyId, attackerId, damage);
             if (enemyHit) this.broadcast("enemyHit", enemyHit);
         });
+
+        const playerHits = this.damagePlayersInCircle(attackerId, x, y, radius, damage);
+        playerHits.forEach((hurt) => this.broadcast("playerHurt", hurt));
     }
 
     private shouldPreserveDarkKnightAttackCooldown(enemy: EnemyState): boolean {
@@ -5071,6 +5237,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             damage: power,
             pierceRemaining: 1,
             hitEnemyIds: new Set<string>(),
+            hitPlayerIds: new Set<string>(),
         });
     }
 
@@ -5101,6 +5268,7 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
             damage,
             pierceRemaining: pierce,
             hitEnemyIds: new Set<string>(),
+            hitPlayerIds: new Set<string>(),
         });
     }
 
@@ -5126,6 +5294,15 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     sb.hitEnemyIds.add(enemyId);
                     const enemyHit = this.damageEnemyFromBowAttack(enemyId, b.ownerId, sb.damage);
                     if (enemyHit) this.broadcast("enemyHit", enemyHit);
+                    sb.pierceRemaining--;
+                    if (sb.pierceRemaining <= 0) dead.push(id);
+                    return;
+                }
+                const playerId = this.findPlayerHitByArrowSegment(b.ownerId, prevX, prevY, b.x, b.y, sb.hitPlayerIds);
+                if (playerId) {
+                    sb.hitPlayerIds.add(playerId);
+                    const hurt = this.damagePlayerFromPlayer(b.ownerId, playerId, sb.damage);
+                    if (hurt) this.broadcast("playerHurt", hurt);
                     sb.pierceRemaining--;
                     if (sb.pierceRemaining <= 0) dead.push(id);
                     return;
@@ -5159,6 +5336,37 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
         });
 
         return closestEnemyId;
+    }
+
+    private findPlayerHitByArrowSegment(
+        attackerId: string,
+        fromX: number,
+        fromY: number,
+        toX: number,
+        toY: number,
+        ignoredPlayerIds: Set<string>,
+    ): string | null {
+        let closestPlayerId: string | null = null;
+        let closestT = Number.POSITIVE_INFINITY;
+
+        this.state.players.forEach((target, targetId) => {
+            if (ignoredPlayerIds.has(targetId) || !this.canPlayerDamagePlayer(attackerId, targetId)) return;
+            const t = segmentAabbIntersectionT(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                target.x,
+                this.playerHitboxCenterY(target.y),
+                PLAYER_HW,
+                PLAYER_HH,
+            );
+            if (t === null || t >= closestT) return;
+            closestT = t;
+            closestPlayerId = targetId;
+        });
+
+        return closestPlayerId;
     }
 
     // ─── Enemies ──────────────────────────────────────────────────────────────
@@ -7277,6 +7485,16 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
                     deadBullets.push(bid);
                     enemy.health -= bullet.power;
                     if (enemy.health <= 0) deadEnemies.push(eid);
+                }
+            });
+            if (deadBullets.includes(bid)) return;
+            this.state.players.forEach((player, playerId) => {
+                if (deadBullets.includes(bid)) return;
+                if (!this.canPlayerDamagePlayer(bullet.ownerId, playerId)) return;
+                if (overlaps(bullet.x, bullet.y, PB_HW, PB_HH, player.x, this.playerHitboxCenterY(player.y), PLAYER_HW, PLAYER_HH)) {
+                    deadBullets.push(bid);
+                    const hurt = this.damagePlayerFromPlayer(bullet.ownerId, playerId, bullet.power || 1);
+                    if (hurt) this.broadcast("playerHurt", hurt);
                 }
             });
         });
