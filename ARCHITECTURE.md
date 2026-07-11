@@ -289,7 +289,7 @@ GitHub Pages deployment is handled by `.github/workflows/deploy.yml`:
 
 1. Install root client dependencies.
 2. Build with `npm run client:build`.
-3. Pass `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2` from repository secrets for the lobby server selector.
+3. Pass `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2` from repository secrets for the lobby server selector. If the HTTP character API is not served from the same origin as the WebSocket URL, also pass `VITE_SERVER_API_URL_1` and `VITE_SERVER_API_URL_2`.
 4. Upload `docs/` as a Pages artifact.
 5. Deploy to GitHub Pages.
 
@@ -308,7 +308,7 @@ npm run server:start
 
 The server listens on `process.env.PORT` or `2567`.
 
-Saved characters are written to `server/characters/` by default. Production hosting should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`.
+Saved characters are written to `server/characters/` by default. Production hosting should deploy the current server build so `/characters/list`, `/characters/create`, and `/characters/delete` exist, and should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 
@@ -325,4 +325,4 @@ Live lag testing currently exposes the Escape-menu round jump controls in produc
 - `GameState.ts` contains only synced schema data.
 - Private room maps contain server-only simulation details.
 - Client asset loading flows through `src/assets.js` and `Preloader`.
-- Production clients must use `wss://` for `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2`; `VITE_SERVER_URL` remains a backward-compatible fallback for server 1.
+- Production clients must use `wss://` for `VITE_SERVER_URL_1` and `VITE_SERVER_URL_2`; `VITE_SERVER_URL` remains a backward-compatible fallback for server 1. `RoomClient.js` derives the character API origin from the selected WebSocket URL origin by default, or from `VITE_SERVER_API_URL_1` / `VITE_SERVER_API_URL_2` when those are set.

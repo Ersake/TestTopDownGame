@@ -10,16 +10,50 @@ function normalizeServerUrl(url) {
     return String(url || '').trim();
 }
 
+function normalizeHttpUrl(url) {
+    return String(url || '').trim().replace(/\/+$/, '');
+}
+
+function deriveApiBaseUrl(serverUrl) {
+    const normalized = normalizeServerUrl(serverUrl);
+    if (!normalized) return '';
+
+    try {
+        const parsed = new URL(normalized);
+        parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : parsed.protocol === 'ws:' ? 'http:' : parsed.protocol;
+        parsed.pathname = '';
+        parsed.search = '';
+        parsed.hash = '';
+        return normalizeHttpUrl(parsed.toString());
+    } catch (_error) {
+        if (normalized.startsWith('wss://')) return normalizeHttpUrl(`https://${normalized.slice(6).split('/')[0]}`);
+        if (normalized.startsWith('ws://')) return normalizeHttpUrl(`http://${normalized.slice(5).split('/')[0]}`);
+        return normalizeHttpUrl(normalized);
+    }
+}
+
+function makeServerOption(label, url, apiUrl = '') {
+    const normalizedUrl = normalizeServerUrl(url);
+    if (!normalizedUrl) return null;
+    return {
+        label,
+        url: normalizedUrl,
+        apiUrl: normalizeHttpUrl(apiUrl) || deriveApiBaseUrl(normalizedUrl),
+    };
+}
+
 const SERVER_OPTIONS = [
-    {
-        label: 'SERVER 1',
-        url: normalizeServerUrl(import.meta.env.VITE_SERVER_URL_1 || import.meta.env.VITE_SERVER_URL || DEFAULT_SERVER_URL),
-    },
-    {
-        label: 'SERVER 2',
-        url: normalizeServerUrl(import.meta.env.VITE_SERVER_URL_2),
-    },
-].filter((server) => server.url);
+    makeServerOption(
+        'SERVER 1',
+        import.meta.env.VITE_SERVER_URL_1 || import.meta.env.VITE_SERVER_URL || DEFAULT_SERVER_URL,
+        import.meta.env.VITE_SERVER_API_URL_1 || import.meta.env.VITE_SERVER_API_URL,
+    ),
+    makeServerOption(
+        'SERVER 2',
+        import.meta.env.VITE_SERVER_URL_2,
+        import.meta.env.VITE_SERVER_API_URL_2,
+    ),
+].filter(Boolean);
 
 /**
  * RoomClient
@@ -51,10 +85,7 @@ class RoomClient {
     }
 
     _getApiBaseUrl() {
-        const serverUrl = this.getSelectedServer().url;
-        if (serverUrl.startsWith('wss://')) return `https://${serverUrl.slice(6)}`;
-        if (serverUrl.startsWith('ws://')) return `http://${serverUrl.slice(5)}`;
-        return serverUrl;
+        return this.getSelectedServer().apiUrl;
     }
 
     _loadSelectedCharacterId() {
@@ -101,7 +132,12 @@ class RoomClient {
             body: JSON.stringify(body),
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.error || `Request failed: ${response.status}`);
+        if (!response.ok) {
+            if (response.status === 404 && path.startsWith('/characters/')) {
+                throw new Error(`${this.getSelectedServer().label} needs the updated character server.`);
+            }
+            throw new Error(payload?.error || `Request failed: ${response.status}`);
+        }
         return payload;
     }
 

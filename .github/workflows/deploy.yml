@@ -39,10 +39,14 @@ jobs:
         # VITE_SERVER_URL_1 and VITE_SERVER_URL_2 should be set in repo
         # Settings → Secrets and variables → Actions as repository secrets.
         # Example value: wss://your-shmup-server.onrender.com
+        # Optional VITE_SERVER_API_URL_1/_2 override the HTTP character API
+        # origin when it differs from the WebSocket origin.
         run: npm run client:build
         env:
           VITE_SERVER_URL_1: ${{ secrets.VITE_SERVER_URL_1 }}
           VITE_SERVER_URL_2: ${{ secrets.VITE_SERVER_URL_2 }}
+          VITE_SERVER_API_URL_1: ${{ secrets.VITE_SERVER_API_URL_1 }}
+          VITE_SERVER_API_URL_2: ${{ secrets.VITE_SERVER_API_URL_2 }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
