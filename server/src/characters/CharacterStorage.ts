@@ -128,10 +128,20 @@ function normalizeDocument(value: unknown): StoredCharacterDocument | null {
 }
 
 export class CharacterStorage {
+    private readonly saveQueues = new Map<string, Promise<void>>();
+
     constructor(private readonly directory = path.resolve(process.env.CHARACTER_STORAGE_DIR || path.join(process.cwd(), "characters"))) {}
 
     private filePath(id: string): string {
         return path.join(this.directory, `${id}.json`);
+    }
+
+    private async writeDocument(document: StoredCharacterDocument, payload: string): Promise<void> {
+        await fs.mkdir(this.directory, { recursive: true });
+        const target = this.filePath(document.id);
+        const temporary = path.join(this.directory, `.${document.id}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+        await fs.writeFile(temporary, payload, "utf8");
+        await fs.rename(temporary, target);
     }
 
     async create(ownerKey: unknown, displayName: unknown): Promise<StoredCharacterDocument> {
@@ -219,10 +229,18 @@ export class CharacterStorage {
     }
 
     async save(document: StoredCharacterDocument): Promise<void> {
-        await fs.mkdir(this.directory, { recursive: true });
-        const target = this.filePath(document.id);
-        const temporary = path.join(this.directory, `.${document.id}.${process.pid}.${Date.now()}.tmp`);
-        await fs.writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, "utf8");
-        await fs.rename(temporary, target);
+        const payload = `${JSON.stringify(document, null, 2)}\n`;
+        const previousSave = this.saveQueues.get(document.id) || Promise.resolve();
+        const nextSave = previousSave
+            .catch(() => undefined)
+            .then(() => this.writeDocument(document, payload));
+        this.saveQueues.set(document.id, nextSave);
+        try {
+            await nextSave;
+        } finally {
+            if (this.saveQueues.get(document.id) === nextSave) {
+                this.saveQueues.delete(document.id);
+            }
+        }
     }
 }

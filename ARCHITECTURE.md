@@ -308,7 +308,7 @@ npm run server:start
 
 The server listens on `process.env.PORT` or `2567`.
 
-Saved characters are written to `server/characters/` by default. Production hosting should deploy the current server build so `/characters/list`, `/characters/create`, and `/characters/delete` exist, and should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`.
+Saved characters are written to `server/characters/` by default. Production hosting should deploy the current server build so `/characters/list`, `/characters/create`, and `/characters/delete` exist, and should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`. On Render, mount a persistent disk and point these variables at that disk, for example `CHARACTER_STORAGE_DIR=/var/data/characters` and `MAP_STORAGE_DIR=/var/data/maps`; paths under `/opt/render/project/src` are not durable across deploys/restarts.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 

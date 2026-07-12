@@ -291,6 +291,15 @@ The server reads `process.env.PORT` and defaults to `2567` locally.
 
 Use `NODE_ENV=production` in production so the Colyseus monitor is not exposed.
 
+For saved characters and maps on Render, mount a persistent disk and set:
+
+```text
+CHARACTER_STORAGE_DIR=/var/data/characters
+MAP_STORAGE_DIR=/var/data/maps
+```
+
+Do not rely on paths under `/opt/render/project/src` for durable saves; that filesystem can be replaced on deploy/restart.
+
 ---
 
 ## Best Practices
