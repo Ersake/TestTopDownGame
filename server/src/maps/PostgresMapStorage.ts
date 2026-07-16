@@ -1,14 +1,16 @@
 import { ensureStorageSchema, getPostgresPool } from "../db/Postgres";
-import { MapStorageBackend, StoredMapDocument, normalizeMapName } from "./MapStorage";
+import { MapStorage, MapStorageBackend, StoredMapDocument, normalizeMapName } from "./MapStorage";
 
 export class PostgresMapStorage implements MapStorageBackend {
+    private readonly fallbackStorage = new MapStorage();
+
     async exists(name: string): Promise<boolean> {
         await ensureStorageSchema();
         const result = await getPostgresPool().query<{ exists: boolean }>(
             "SELECT EXISTS (SELECT 1 FROM game_maps WHERE name = $1) AS exists",
             [name],
         );
-        return result.rows[0]?.exists === true;
+        return result.rows[0]?.exists === true || await this.fallbackStorage.exists(name);
     }
 
     async list(): Promise<string[]> {
@@ -16,9 +18,11 @@ export class PostgresMapStorage implements MapStorageBackend {
         const result = await getPostgresPool().query<{ name: string }>(
             "SELECT name FROM game_maps ORDER BY name ASC",
         );
-        return result.rows
+        const databaseNames = result.rows
             .map((row) => row.name)
             .filter((name) => normalizeMapName(name) === name);
+        const fallbackNames = await this.fallbackStorage.list();
+        return [...new Set([...databaseNames, ...fallbackNames])].sort();
     }
 
     async load(name: string): Promise<unknown> {
@@ -27,8 +31,11 @@ export class PostgresMapStorage implements MapStorageBackend {
             "SELECT document FROM game_maps WHERE name = $1",
             [name],
         );
-        if (!result.rows[0]) throw new Error("Map not found.");
-        return result.rows[0].document;
+        if (result.rows[0]) return result.rows[0].document;
+
+        const fallbackDocument = await this.fallbackStorage.load(name) as StoredMapDocument;
+        await this.save(fallbackDocument);
+        return fallbackDocument;
     }
 
     async save(document: StoredMapDocument): Promise<void> {
