@@ -14,11 +14,11 @@ import {
     CraftingTableState,
     MapChunkState,
 } from "../schema/GameState";
-import { MapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
+import { createMapStorage, normalizeMapName, StoredMapDocument } from "../maps/MapStorage";
 import { isProductionEnv } from "../env";
 import {
-    CharacterStorage,
     CharacterUpgradeSnapshot,
+    createCharacterStorage,
     EMPTY_CHARACTER_UPGRADES,
     StoredCharacterDocument,
 } from "../characters/CharacterStorage";
@@ -862,8 +862,8 @@ export class ShmupRoom extends Room<GameRoomState, ShmupRoomMetadata> {
     private enemyFlowFields = new Map<string, EnemyFlowField>();
     private enemyTargetCache = new Map<string, Omit<EnemyTarget, "id" | "player" | "distanceSq"> | null>();
     private enemyFlowBuildQueue = new Int32Array(BUILD_PATH_CELL_COUNT);
-    private readonly mapStorage = new MapStorage();
-    private readonly characterStorage = new CharacterStorage();
+    private readonly mapStorage = createMapStorage();
+    private readonly characterStorage = createCharacterStorage();
     private playerCharacterBindings = new Map<string, PlayerCharacterBinding>();
     private activeTickMetrics: TickMetrics | null = null;
     private recordingEnemyMetrics = false;

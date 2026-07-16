@@ -103,7 +103,7 @@ The lobby uses Express endpoints before joining a Colyseus room:
 | `POST /characters/create` | Creates a new server-owned character for that `playerKey`, up to the five-character cap. |
 | `POST /characters/delete` | Deletes a character owned by that `playerKey` after the lobby confirmation flow. |
 
-The browser `playerKey` is a local secret stored in `localStorage`; the server stores only its SHA-256 hash in character JSON. Character files are saved under `server/characters/` by default, or `CHARACTER_STORAGE_DIR` when provided.
+The browser `playerKey` is a local secret stored in `localStorage`; the server stores only its SHA-256 hash. Character saves use Neon/Postgres when `DATABASE_URL` or `NEON_DATABASE_URL` is set, storing documents in the `game_characters` table. Without a database URL, character files are saved under `server/characters/` by default, or `CHARACTER_STORAGE_DIR` when provided.
 
 ### Client to Server
 
@@ -212,7 +212,7 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Character Profiles
 
-Character profiles are durable server-owned JSON documents, not Colyseus schema. `CharacterStorage.ts` saves display name, level, total XP, XP threshold, pending skill points, outfit color, and upgrade ranks. Each browser-owned player key can create up to five characters. `ShmupRoom.ts` copies those values into `PlayerState` on join and saves them back on level gain, upgrade spend/refund, outfit color change, death, leave, and room dispose. Level reset/retry refreshes combat state and health but preserves character progression.
+Character profiles are durable server-owned JSON documents, not Colyseus schema. `CharacterStorage.ts` selects a file backend or Postgres backend, then saves display name, level, total XP, XP threshold, pending skill points, outfit color, and upgrade ranks. Each browser-owned player key can create up to five characters. `ShmupRoom.ts` copies those values into `PlayerState` on join and saves them back on level gain, upgrade spend/refund, outfit color change, death, leave, and room dispose. Level reset/retry refreshes combat state and health but preserves character progression.
 
 ### Enemy State
 
@@ -271,7 +271,7 @@ Map-editor room support still exists server-side through `mode: "map-editor"`, b
 
 Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no trees or enemies, and retain only player movement plus server-authoritative map-tile collision. A red 3840×2160 boundary marks the original game-world size; players and map tiles are authoritatively constrained inside it. The `mapChunks` schema field holds sparse 16×16 tile chunks as base64-encoded uint16 frame values. Clients send `placeMapTile` and `removeMapTile`; the room validates all coordinates, frame values, and size limits.
 
-`Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Selected Castle_1 upper vertical support frames use centered, 50%-wide top-half solid colliders, while the lower and corner supports use centered, 50%-wide full-height colliders. Other solid map frames use full-tile colliders. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves are atomic and only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism. Production hosting must mount persistent storage at `MAP_STORAGE_DIR` to preserve saved maps across deploys.
+`Game.js` renders synced chunks as a tilemap and presents the complete 32×32 `Topdowntileset.png` palette. Castle, Tree, and Water source regions are solid. Selected Castle_1 upper vertical support frames use centered, 50%-wide top-half solid colliders, while the lower and corner supports use centered, 50%-wide full-height colliders. Other solid map frames use full-tile colliders. Floor, Grass, and Garden tiles are walkable. Explicit `saveMap`, `loadMap`, and `listMaps` messages operate on server-owned versioned JSON documents. They use Neon/Postgres table `game_maps` when `DATABASE_URL` or `NEON_DATABASE_URL` is set, otherwise JSON files in `server/maps/` by default (or `MAP_STORAGE_DIR`). Saves only write after the editor's SAVE DRAFT action. `replaceMap` remains a bounded legacy browser-draft import path; it is not the normal persistence mechanism.
 
 Development lobby builds default normal game room creation to the saved `lvlone` map. Sending a saved `mapName` room option loads the saved chunks into a regular game room, crops editor-sized maps to the original 3840×2160 world, syncs `activeMapName`, keeps normal gameplay systems enabled, and uses solid map tiles for player collision while tree generation avoids those solid tiles. The client renders `mapChunks` in both editor and regular rooms; saved-map regular rooms skip procedural grass noise and show a small dev HUD map label.
 
@@ -308,7 +308,7 @@ npm run server:start
 
 The server listens on `process.env.PORT` or `2567`.
 
-Saved characters are written to `server/characters/` by default. Production hosting should deploy the current server build so `/characters/list`, `/characters/create`, and `/characters/delete` exist, and should provide persistent storage through `CHARACTER_STORAGE_DIR`; saved maps still use `MAP_STORAGE_DIR`. On Render, mount a persistent disk and point these variables at that disk, for example `CHARACTER_STORAGE_DIR=/var/data/characters` and `MAP_STORAGE_DIR=/var/data/maps`; paths under `/opt/render/project/src` are not durable across deploys/restarts.
+Saved characters and maps use Neon/Postgres when the deployed server has `DATABASE_URL` or `NEON_DATABASE_URL` set. The server creates `game_characters` and `game_maps` automatically on first use, and `POSTGRES_POOL_MAX` can cap database connections. Without a database URL, saved characters are written to `server/characters/` by default and saved maps to `server/maps/`; production file storage should use persistent disks via `CHARACTER_STORAGE_DIR` and `MAP_STORAGE_DIR`. Paths under `/opt/render/project/src` are not durable across deploys/restarts.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 

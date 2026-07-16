@@ -17,7 +17,14 @@ export function normalizeMapName(value: unknown): string | null {
     return /^[a-z0-9][a-z0-9_-]{0,47}$/.test(normalized) ? normalized : null;
 }
 
-export class MapStorage {
+export interface MapStorageBackend {
+    exists(name: string): Promise<boolean>;
+    list(): Promise<string[]>;
+    load(name: string): Promise<unknown>;
+    save(document: StoredMapDocument): Promise<void>;
+}
+
+export class MapStorage implements MapStorageBackend {
     constructor(private readonly directory = path.resolve(process.env.MAP_STORAGE_DIR || path.join(process.cwd(), "maps"))) {}
 
     private filePath(name: string): string {
@@ -59,4 +66,12 @@ export class MapStorage {
         await fs.writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, "utf8");
         await fs.rename(temporary, target);
     }
+}
+
+export function createMapStorage(): MapStorageBackend {
+    if (process.env.DATABASE_URL || process.env.NEON_DATABASE_URL) {
+        const { PostgresMapStorage } = require("./PostgresMapStorage") as typeof import("./PostgresMapStorage");
+        return new PostgresMapStorage();
+    }
+    return new MapStorage();
 }

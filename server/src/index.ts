@@ -5,7 +5,7 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { monitor } from "@colyseus/monitor";
 import { ShmupRoom } from "./rooms/ShmupRoom";
 import { isProductionEnv } from "./env";
-import { CharacterStorage, toCharacterSummary } from "./characters/CharacterStorage";
+import { createCharacterStorage, toCharacterSummary } from "./characters/CharacterStorage";
 
 const PORT = Number(process.env.PORT) || 2567;
 
@@ -19,7 +19,7 @@ app.use((_req, res, next) => {
 app.options("*", (_req, res) => res.sendStatus(204));
 app.use(express.json());
 
-const characterStorage = new CharacterStorage();
+const characterStorage = createCharacterStorage();
 
 app.post("/characters/list", async (req, res) => {
     try {

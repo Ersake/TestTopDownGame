@@ -97,7 +97,15 @@ function numberOrDefault(value: unknown, fallback: number): number {
     return Number.isFinite(value) ? Math.floor(Number(value)) : fallback;
 }
 
-function normalizeDocument(value: unknown): StoredCharacterDocument | null {
+export interface CharacterStorageBackend {
+    create(ownerKey: unknown, displayName: unknown): Promise<StoredCharacterDocument>;
+    listForOwner(ownerKey: unknown): Promise<StoredCharacterDocument[]>;
+    loadOwned(ownerKey: unknown, id: unknown): Promise<StoredCharacterDocument | null>;
+    deleteOwned(ownerKey: unknown, id: unknown): Promise<boolean>;
+    save(document: StoredCharacterDocument): Promise<void>;
+}
+
+export function normalizeStoredCharacterDocument(value: unknown): StoredCharacterDocument | null {
     const input = value as Partial<StoredCharacterDocument> | null;
     if (!input || typeof input !== "object") return null;
     const id = normalizeCharacterId(input.id);
@@ -127,7 +135,7 @@ function normalizeDocument(value: unknown): StoredCharacterDocument | null {
     };
 }
 
-export class CharacterStorage {
+export class CharacterStorage implements CharacterStorageBackend {
     private readonly saveQueues = new Map<string, Promise<void>>();
 
     constructor(private readonly directory = path.resolve(process.env.CHARACTER_STORAGE_DIR || path.join(process.cwd(), "characters"))) {}
@@ -189,7 +197,7 @@ export class CharacterStorage {
             if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
             try {
                 const content = await fs.readFile(path.join(this.directory, entry.name), "utf8");
-                const document = normalizeDocument(JSON.parse(content));
+                const document = normalizeStoredCharacterDocument(JSON.parse(content));
                 if (document?.ownerKeyHash === ownerKeyHash) documents.push(document);
             } catch (_error) {
                 // Ignore malformed character files so one bad save does not break the menu.
@@ -206,7 +214,7 @@ export class CharacterStorage {
 
         try {
             const content = await fs.readFile(this.filePath(characterId), "utf8");
-            const document = normalizeDocument(JSON.parse(content));
+            const document = normalizeStoredCharacterDocument(JSON.parse(content));
             if (!document || document.ownerKeyHash !== ownerKeyHash) return null;
             return document;
         } catch (error: unknown) {
@@ -243,4 +251,12 @@ export class CharacterStorage {
             }
         }
     }
+}
+
+export function createCharacterStorage(): CharacterStorageBackend {
+    if (process.env.DATABASE_URL || process.env.NEON_DATABASE_URL) {
+        const { PostgresCharacterStorage } = require("./PostgresCharacterStorage") as typeof import("./PostgresCharacterStorage");
+        return new PostgresCharacterStorage();
+    }
+    return new CharacterStorage();
 }
