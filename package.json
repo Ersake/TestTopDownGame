@@ -8,8 +8,12 @@
     "client:build": "vite build && npm run copy:static",
     "copy:static": "node -e \"const fs=require('fs'); fs.mkdirSync('docs/assets',{recursive:true}); fs.copyFileSync('phaser.js','docs/phaser.js'); for (const file of fs.readdirSync('assets')) fs.copyFileSync('assets/'+file,'docs/assets/'+file);\"",
     "client:preview": "vite preview",
+    "docs:check": "node scripts/check-docs.mjs",
     "server:dev": "npm run server:dev --prefix server",
-    "server:start": "npm run server:start --prefix server"
+    "server:start": "npm run server:start --prefix server",
+    "server:typecheck": "npm run server:typecheck --prefix server",
+    "server:test": "npm run server:test --prefix server",
+    "verify": "npm run docs:check && npm run server:typecheck && npm run server:test && npm run client:build"
   },
   "dependencies": {
     "colyseus.js": "^0.15.0"

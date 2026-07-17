@@ -6,6 +6,10 @@ server/node_modules/
 docs/
 server/dist/
 
+# runtime output
+*.log
+server/characters/*.json
+
 # env (contains secrets — never commit)
 .env
 

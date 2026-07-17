@@ -22,6 +22,8 @@ Node.js server (Colyseus)
   server/src/rooms/ShmupRoom.ts
   server/src/schema/GameState.ts
   server/src/characters/CharacterStorage.ts
+  server/src/maps/MapStorage.ts
+  server/src/db/Postgres.ts
 ```
 
 The server is authoritative. Clients send player intent and render Colyseus schema patches. The server owns all durable game state and all gameplay decisions.
@@ -72,7 +74,11 @@ Important server files:
 | `server/src/index.ts` | Express/HTTP server, Colyseus server setup, room registration, dev monitor. |
 | `server/src/rooms/ShmupRoom.ts` | Authoritative simulation and room message handlers. |
 | `server/src/schema/GameState.ts` | Colyseus schema classes synced to clients. |
-| `server/src/characters/CharacterStorage.ts` | JSON character persistence keyed by a browser-owned player secret hash. |
+| `server/src/characters/CharacterStorage.ts` | Character storage contract and local JSON fallback keyed by a browser-owned player secret hash. |
+| `server/src/characters/PostgresCharacterStorage.ts` | Neon/Postgres character persistence used when a database URL is configured. |
+| `server/src/maps/MapStorage.ts` | Saved-map storage contract and local JSON fallback. |
+| `server/src/maps/PostgresMapStorage.ts` | Neon/Postgres map persistence used when a database URL is configured. |
+| `server/src/db/Postgres.ts` | Shared Postgres connection pool and schema setup. |
 
 ---
 
@@ -85,9 +91,10 @@ Important server files:
 5. The submenu uses `shmup2submenu1.png`, lists the last-played character on the left, shows a `NEW CHARACTER` slot when no saved character is selected, and lists active rooms on the right.
 6. Creating or joining a listed room first ensures a selected server-owned character exists. The browser stores only a `playerKey` secret and selected character ID in local storage.
 7. The server assigns new rooms a 4-letter uppercase room ID.
-8. After a room is created or joined, the client starts `Game`.
+8. The lobby creates a room or joins one through the active-room list, then starts `Game`.
 9. `Game` registers Colyseus state listeners, renders existing state, and starts sending input.
-10. On game over, pressing Space disconnects and returns to `Lobby`.
+10. Before waves, players can signal readiness and the server starts early when all connected players are ready.
+11. On game over, Retry enters the server-owned retry-ready flow and Quit disconnects and returns to `Lobby`.
 
 ---
 
@@ -122,11 +129,14 @@ The browser `playerKey` is a local secret stored in `localStorage`; the server s
 | `"equipSlot"` | `RoomClient.sendEquipSlot()` | Requests active hotbar slot changes. |
 | `"swapHotbarSlots"` | `RoomClient.sendSwapHotbarSlots()` | Requests a server-validated hotbar slot reorder. |
 | `"placeCampfire"`, `"placeCaltrops"`, `"removeDeployable"` | Placement helpers | Requests server-authoritative deployable placement or hammer removal. |
+| `"removeWoodBlock"` | Hammer removal helper | Requests removal of a server-owned authored wood-block tile after validation. |
 | `"craftItem"` | `RoomClient.sendCraftItem()` | Requests crafting by recipe ID. |
 | `"selectUpgrade"` | `RoomClient.sendSelectUpgrade()` | Requests an enchantment-table skill spend with `{ upgradeId, item, slot }`; the server validates skill points, table range, item tree, hotbar slot contents, prerequisites, and max ranks. |
 | `"refundUpgradeTree"` | `RoomClient.sendRefundUpgradeTree()` | Requests a refund for all points spent in the currently viewed item tree; the server validates table range and hotbar slot contents, then refunds only that tree. |
 | `"setOutfitColor"` | `RoomClient.sendSetOutfitColor()` | Requests player presentation color changes. |
 | `"placeMapTile"`, `"removeMapTile"` | Map-editor tools | Requests server-validated tile edits in `"map-editor"` rooms. |
+| `"placeEnchantmentTable"`, `"removeEnchantmentTable"` | Map-editor tools | Requests server-validated enchantment-table edits in map-editor rooms. |
+| `"placeCraftingTable"`, `"removeCraftingTable"` | Map-editor tools | Requests server-validated crafting-table edits in map-editor rooms. |
 | `"replaceMap"` | Legacy map import path | Bounded browser-draft import for map-editor rooms; not normal persistence. |
 | `"saveMap"`, `"loadMap"`, `"listMaps"` | Map-editor storage controls | Saves, loads, or lists server-owned map drafts. |
 | `"debugSetRound"` | Escape-menu debug controls | Temporarily enabled for live lag testing. Starts a later wave (2–99) for the room. Wave 1 is the initial wave. |
@@ -190,6 +200,8 @@ Durable game facts should usually be schema state, not transient messages.
 | `boneDrops` | `MapSchema<BoneDropState>` | Dropped bone pickups. |
 | `campfires` | `MapSchema<CampfireState>` | Player-placed healing deployables. |
 | `caltrops` | `MapSchema<CaltropState>` | Player-placed slowing/damage deployables. |
+| `enchantmentTables` | `MapSchema<EnchantmentTableState>` | Server-owned enchantment-table positions created from authored map data. |
+| `craftingTables` | `MapSchema<CraftingTableState>` | Server-owned crafting-table positions created from authored map data. |
 | `mapChunks` | `MapSchema<MapChunkState>` | Sparse server-owned map tile chunks rendered by editor and saved-map game rooms. |
 | `worldWidth`, `worldHeight` | `int32` | Server-owned world bounds. |
 | `elapsedSeconds` | `int32` | Shared round timer. |
@@ -208,11 +220,11 @@ Durable game facts should usually be schema state, not transient messages.
 
 ### Player State
 
-`PlayerState` includes identity, position, health, damage-flash presentation sequence/timing, kills, level/experience, wood, death/revive state, facing and attack direction, active hotbar item, attack state, dash active/cooldown progress, bow/axe state, bow Volley cooldown progress, axe whirlwind active/cooldown progress, shield blocking state, shield block cooldown progress, per-hotbar-slot shield HP/max HP arrays, pending upgrade choices displayed as skill points, upgrade counters, outfit color, and hotbar inventory. Axe upgrade counters include primary attack speed, primary damage, whirlwind cooldown, whirlwind AOE size, and whirlwind damage. Bow upgrade counters include charge speed, primary pierce, primary damage, Volley cooldown, Volley AOE size, and Volley damage. Shield upgrade counters include primary attack speed, primary damage, max HP, recharge speed, and block-circle size.
+`PlayerState` includes identity, position, health, damage presentation, kills, level/experience, resources, death/revive state, facing and attack direction, hotbar inventory, attack/dash/bow/axe/shield presentation state, cooldown progress, shield HP, pending skill points, upgrade counters, and outfit color. Refer to `GameState.ts` for the exact current field set rather than duplicating schema declarations here.
 
 ### Character Profiles
 
-Character profiles are durable server-owned JSON documents, not Colyseus schema. `CharacterStorage.ts` selects a file backend or Postgres backend, then saves display name, level, total XP, XP threshold, pending skill points, outfit color, and upgrade ranks. Each browser-owned player key can create up to five characters. `ShmupRoom.ts` copies those values into `PlayerState` on join and saves them back on level gain, upgrade spend/refund, outfit color change, death, leave, and room dispose. Level reset/retry refreshes combat state and health but preserves character progression.
+Character profiles are durable server-owned documents, not Colyseus schema. `CharacterStorage.ts` selects the local file backend or the Neon/Postgres backend, then saves display name, level, total XP, XP threshold, pending skill points, outfit color, and durable upgrade ranks. Each browser-owned player key can create up to five characters. `ShmupRoom.ts` copies those values into `PlayerState` on join and saves them back at progression and lifecycle checkpoints. Level reset/retry refreshes combat state and health but preserves character progression.
 
 ### Enemy State
 
@@ -261,13 +273,15 @@ Current server-owned systems include:
 
 The room tick runs on the server and directly affects every connected player. Changes to enemy AI, pathfinding, map collision, projectile collision, spawning, schema update frequency, and production logging must be treated as lag-sensitive. Per-entity and per-tile work should be bounded, cached, spatially indexed, rate-limited, or otherwise budgeted before it is added to the 50ms simulation loop.
 
-Production games may load saved maps automatically, so performance checks should consider authored solid tiles and layer-3 objects, not only empty local rooms. Enemy pathfinding uses direct-path checks as a fast path, bounded A* as a fallback, and cache invalidation on map topology changes; changes in this area should preserve those limits.
+Production games may load saved maps automatically, so performance checks should consider authored solid tiles and layer-3 objects, not only empty local rooms. Enemy navigation uses shared, budgeted reverse-BFS flow fields with cache invalidation on map topology changes and cheap local fallback movement when a field is unavailable. Changes in this area should preserve those limits and avoid restoring per-enemy path searches.
 
 ---
 
 ## Development Map Editor
 
 Map-editor room support still exists server-side through `mode: "map-editor"`, but the current image-backed lobby does not expose a `CREATE MAP` action. Production servers deliberately create normal game rooms instead.
+
+Manual map-editor verification therefore requires a valid development entry point that actually creates a `mode: "map-editor"` room. If no such entry point is available for a change, report the editor check as not run rather than claiming the lobby path was tested.
 
 Editor rooms use a 7680×4320 canvas (480×270 native 16px cells), generate no trees or enemies, and retain only player movement plus server-authoritative map-tile collision. A red 3840×2160 boundary marks the original game-world size; players and map tiles are authoritatively constrained inside it. The `mapChunks` schema field holds sparse 16×16 tile chunks as base64-encoded uint16 frame values. Clients send `placeMapTile` and `removeMapTile`; the room validates all coordinates, frame values, and size limits.
 
@@ -295,9 +309,9 @@ GitHub Pages deployment is handled by `.github/workflows/deploy.yml`:
 
 `docs/` is ignored because it is generated output.
 
-### Server
+### Server: Render
 
-The server is a Node.js service from the `server/` directory.
+Render is the production Node.js/Colyseus server provider. Deploy the `server/` directory as the service root.
 
 Production build/start:
 
@@ -306,9 +320,13 @@ npm run server:build
 npm run server:start
 ```
 
-The server listens on `process.env.PORT` or `2567`.
+The server listens on Render-provided `process.env.PORT` or `2567` locally. Set `NODE_ENV=production` so the Colyseus monitor stays disabled.
 
-Saved characters and maps use Neon/Postgres when the deployed server has `DATABASE_URL` or `NEON_DATABASE_URL` set. The server creates `game_characters` and `game_maps` automatically on first use, and `POSTGRES_POOL_MAX` can cap database connections. Without a database URL, saved characters are written to `server/characters/` by default and saved maps to `server/maps/`; production file storage should use persistent disks via `CHARACTER_STORAGE_DIR` and `MAP_STORAGE_DIR`. Paths under `/opt/render/project/src` are not durable across deploys/restarts.
+### SQL and Persistence: Neon
+
+Neon Postgres is the production SQL and durable persistence provider. Configure the Render service with `DATABASE_URL` or `NEON_DATABASE_URL`; the server creates `game_characters` and `game_maps` automatically on first use, and `POSTGRES_POOL_MAX` caps the shared database pool.
+
+Without a database URL, local development writes characters to `server/characters/` and maps to `server/maps/`, or to `CHARACTER_STORAGE_DIR` and `MAP_STORAGE_DIR` when provided. Do not use Render paths under `/opt/render/project/src` as durable production storage because the filesystem can be replaced during deploys or restarts.
 
 The Colyseus monitor is available only when `NODE_ENV !== "production"`.
 

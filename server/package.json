@@ -5,7 +5,9 @@
   "scripts": {
     "server:dev": "cross-env NODE_ENV=development node --watch -r ts-node/register src/index.ts",
     "server:build": "tsc",
-    "server:start": "node dist/index.js"
+    "server:start": "node dist/index.js",
+    "server:typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "server:test": "node --test -r ts-node/register tests/*.test.ts"
   },
   "dependencies": {
     "@colyseus/core": "^0.15.0",
